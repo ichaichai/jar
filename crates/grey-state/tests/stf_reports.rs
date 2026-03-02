@@ -521,7 +521,7 @@ macro_rules! report_test {
         #[test]
         fn $name() {
             run_reports_test(&format!(
-                "../../test-vectors/stf/reports/tiny/{}",
+                "../../res/testvectors/stf/reports/tiny/{}",
                 $file
             ));
         }

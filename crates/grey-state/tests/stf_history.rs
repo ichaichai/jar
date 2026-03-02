@@ -142,20 +142,20 @@ fn run_history_test(path: &str) {
 
 #[test]
 fn test_stf_history_1() {
-    run_history_test("../../test-vectors/stf/history/tiny/progress_blocks_history-1.json");
+    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-1.json");
 }
 
 #[test]
 fn test_stf_history_2() {
-    run_history_test("../../test-vectors/stf/history/tiny/progress_blocks_history-2.json");
+    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-2.json");
 }
 
 #[test]
 fn test_stf_history_3() {
-    run_history_test("../../test-vectors/stf/history/tiny/progress_blocks_history-3.json");
+    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-3.json");
 }
 
 #[test]
 fn test_stf_history_4() {
-    run_history_test("../../test-vectors/stf/history/tiny/progress_blocks_history-4.json");
+    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-4.json");
 }

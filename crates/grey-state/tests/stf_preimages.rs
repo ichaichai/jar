@@ -168,7 +168,7 @@ macro_rules! preimage_test {
         #[test]
         fn $name() {
             run_preimages_test(&format!(
-                "../../test-vectors/stf/preimages/full/{}",
+                "../../res/testvectors/stf/preimages/full/{}",
                 $file
             ));
         }

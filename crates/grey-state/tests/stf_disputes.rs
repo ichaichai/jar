@@ -243,7 +243,7 @@ macro_rules! dispute_test {
         #[test]
         fn $name() {
             run_disputes_test(&format!(
-                "../../test-vectors/stf/disputes/tiny/{}",
+                "../../res/testvectors/stf/disputes/tiny/{}",
                 $file
             ));
         }

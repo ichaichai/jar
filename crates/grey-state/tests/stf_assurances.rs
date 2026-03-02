@@ -225,66 +225,66 @@ fn run_assurances_test(path: &str) {
 
 #[test]
 fn test_assurances_no_assurances() {
-    run_assurances_test("../../test-vectors/stf/assurances/tiny/no_assurances-1.json");
+    run_assurances_test("../../res/testvectors/stf/assurances/tiny/no_assurances-1.json");
 }
 
 #[test]
 fn test_assurances_some() {
-    run_assurances_test("../../test-vectors/stf/assurances/tiny/some_assurances-1.json");
+    run_assurances_test("../../res/testvectors/stf/assurances/tiny/some_assurances-1.json");
 }
 
 #[test]
 fn test_assurances_stale_report() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/no_assurances_with_stale_report-1.json",
+        "../../res/testvectors/stf/assurances/tiny/no_assurances_with_stale_report-1.json",
     );
 }
 
 #[test]
 fn test_assurances_for_stale() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurances_for_stale_report-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurances_for_stale_report-1.json",
     );
 }
 
 #[test]
 fn test_assurances_bad_signature() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurances_with_bad_signature-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurances_with_bad_signature-1.json",
     );
 }
 
 #[test]
 fn test_assurances_bad_validator_index() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurances_with_bad_validator_index-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurances_with_bad_validator_index-1.json",
     );
 }
 
 #[test]
 fn test_assurances_not_engaged_core() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurance_for_not_engaged_core-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurance_for_not_engaged_core-1.json",
     );
 }
 
 #[test]
 fn test_assurances_bad_attestation_parent() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurance_with_bad_attestation_parent-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurance_with_bad_attestation_parent-1.json",
     );
 }
 
 #[test]
 fn test_assurances_not_sorted_1() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurers_not_sorted_or_unique-1.json",
+        "../../res/testvectors/stf/assurances/tiny/assurers_not_sorted_or_unique-1.json",
     );
 }
 
 #[test]
 fn test_assurances_not_sorted_2() {
     run_assurances_test(
-        "../../test-vectors/stf/assurances/tiny/assurers_not_sorted_or_unique-2.json",
+        "../../res/testvectors/stf/assurances/tiny/assurers_not_sorted_or_unique-2.json",
     );
 }

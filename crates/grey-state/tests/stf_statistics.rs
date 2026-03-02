@@ -288,15 +288,15 @@ fn run_statistics_test(path: &str) {
 
 #[test]
 fn test_stf_statistics_empty_extrinsic() {
-    run_statistics_test("../../test-vectors/stf/statistics/tiny/stats_with_empty_extrinsic-1.json");
+    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_empty_extrinsic-1.json");
 }
 
 #[test]
 fn test_stf_statistics_some_extrinsic() {
-    run_statistics_test("../../test-vectors/stf/statistics/tiny/stats_with_some_extrinsic-1.json");
+    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_some_extrinsic-1.json");
 }
 
 #[test]
 fn test_stf_statistics_epoch_change() {
-    run_statistics_test("../../test-vectors/stf/statistics/tiny/stats_with_epoch_change-1.json");
+    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_epoch_change-1.json");
 }

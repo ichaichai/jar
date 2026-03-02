@@ -429,89 +429,89 @@ macro_rules! safrole_test {
 // Non-ticket tests (no Ring VRF needed)
 safrole_test!(
     test_safrole_no_tickets_1,
-    "../../test-vectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-1.json"
+    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-1.json"
 );
 safrole_test!(
     test_safrole_no_tickets_2,
-    "../../test-vectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-2.json"
+    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-2.json"
 );
 safrole_test!(
     test_safrole_no_tickets_3,
-    "../../test-vectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-3.json"
+    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-3.json"
 );
 safrole_test!(
     test_safrole_no_tickets_4,
-    "../../test-vectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-4.json"
+    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-4.json"
 );
 safrole_test!(
     test_safrole_padding_1,
-    "../../test-vectors/stf/safrole/tiny/enact-epoch-change-with-padding-1.json"
+    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-padding-1.json"
 );
 safrole_test!(
     test_safrole_skip_epochs_1,
-    "../../test-vectors/stf/safrole/tiny/skip-epochs-1.json"
+    "../../res/testvectors/stf/safrole/tiny/skip-epochs-1.json"
 );
 safrole_test!(
     test_safrole_skip_epoch_tail_1,
-    "../../test-vectors/stf/safrole/tiny/skip-epoch-tail-1.json"
+    "../../res/testvectors/stf/safrole/tiny/skip-epoch-tail-1.json"
 );
 
 // Ticket tests that fail before VRF (no Ring VRF needed)
 safrole_test!(
     test_safrole_bad_ticket_attempt,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-1.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-1.json"
 );
 safrole_test!(
     test_safrole_unexpected_ticket,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-7.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-7.json"
 );
 safrole_test!(
     test_safrole_no_tickets_in_sealing_phase,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-8.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-8.json"
 );
 
 // Ticket tests (with real Bandersnatch Ring VRF verification)
 safrole_test!(
     test_safrole_tickets_ok_1,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-2.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-2.json"
 );
 safrole_test!(
     test_safrole_tickets_duplicate,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-3.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-3.json"
 );
 safrole_test!(
     test_safrole_tickets_bad_order,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-4.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-4.json"
 );
 safrole_test!(
     test_safrole_tickets_bad_proof,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-5.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-5.json"
 );
 safrole_test!(
     test_safrole_tickets_ok_2,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-6.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-6.json"
 );
 safrole_test!(
     test_safrole_tickets_epoch_mark,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-no-mark-9.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-9.json"
 );
 safrole_test!(
     test_safrole_with_mark_1,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-with-mark-1.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-1.json"
 );
 safrole_test!(
     test_safrole_with_mark_2,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-with-mark-2.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-2.json"
 );
 safrole_test!(
     test_safrole_with_mark_3,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-with-mark-3.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-3.json"
 );
 safrole_test!(
     test_safrole_with_mark_4,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-with-mark-4.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-4.json"
 );
 safrole_test!(
     test_safrole_with_mark_5,
-    "../../test-vectors/stf/safrole/tiny/publish-tickets-with-mark-5.json"
+    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-5.json"
 );

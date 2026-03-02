@@ -102,7 +102,7 @@ mod tests {
             output: Vec<usize>,
         }
 
-        let data = include_str!("../../../test-vectors/shuffle/shuffle_tests.json");
+        let data = include_str!("../../../res/testvectors/shuffle/shuffle_tests.json");
         let cases: Vec<ShuffleTestCase> =
             serde_json::from_str(data).expect("failed to parse shuffle test vectors");
 

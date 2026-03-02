@@ -99,20 +99,20 @@ fn run_authorizations_test(path: &str) {
 #[test]
 fn test_stf_authorizations_1() {
     run_authorizations_test(
-        "../../test-vectors/stf/authorizations/tiny/progress_authorizations-1.json",
+        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-1.json",
     );
 }
 
 #[test]
 fn test_stf_authorizations_2() {
     run_authorizations_test(
-        "../../test-vectors/stf/authorizations/tiny/progress_authorizations-2.json",
+        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-2.json",
     );
 }
 
 #[test]
 fn test_stf_authorizations_3() {
     run_authorizations_test(
-        "../../test-vectors/stf/authorizations/tiny/progress_authorizations-3.json",
+        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-3.json",
     );
 }

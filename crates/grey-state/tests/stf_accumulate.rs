@@ -430,7 +430,7 @@ fn run_accumulate_test(path: &str) {
     }
 }
 
-const TV: &str = "../../test-vectors/stf/accumulate/tiny";
+const TV: &str = "../../res/testvectors/stf/accumulate/tiny";
 
 #[traced_test]
 #[test]
