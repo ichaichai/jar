@@ -175,15 +175,16 @@ impl Pvm {
             }
         };
 
-        // Basic block gas metering: charge the entire block's cost at entry.
-        // Only charge when PC is at a basic block start (ϖ).
-        if pc < self.basic_block_starts.len() && self.basic_block_starts[pc] {
-            let block_cost = self.block_gas_costs[pc];
-            if self.gas < block_cost {
-                return Some(ExitReason::OutOfGas);
-            }
-            self.gas -= block_cost;
+        // Per-instruction gas metering (v0.7.2: ϱ' = ϱ - ϱ_Δ where ϱ_Δ = 1).
+        // ecalli costs 0 gas as an instruction — the host-call gas cost g
+        // (charged by the host-call handler) is the total cost of the operation.
+        // This matches polkavm 0.30.0 behavior where ecalli's cost is absorbed
+        // into the host-call gas accounting.
+        let gas_cost: u64 = if opcode == Opcode::Ecalli { 0 } else { 1 };
+        if self.gas < gas_cost {
+            return Some(ExitReason::OutOfGas);
         }
+        self.gas -= gas_cost;
 
         // Compute skip length ℓ (eq A.20)
         let skip = self.skip(pc);
@@ -194,6 +195,11 @@ impl Pvm {
         // Decode arguments
         let category = opcode.category();
         let args = args::decode_args(&self.code, pc, skip, category);
+
+        // Per-instruction trace (PVM_TRACE_INST=1)
+        if std::env::var("PVM_TRACE_INST").is_ok() {
+            eprintln!("[inst] pc={pc} op={opcode:?} gas={}", self.gas);
+        }
 
         // Execute instruction
         self.execute(opcode, args, next_pc)
@@ -541,24 +547,31 @@ impl Pvm {
             }
             Opcode::Sbrk => {
                 if let Args::TwoReg { rd, ra } = args {
-                    // Simplified sbrk: returns heap_base, extends by φA bytes
+                    // sbrk: grow heap by φ_A bytes, return new heap top.
+                    //
+                    // Matches polkavm behavior: returns heap_base + new_heap_size
+                    // (the new heap top after allocation). Returns 0 on failure.
                     let size = self.registers[ra];
+                    let size_u32 = if size <= u32::MAX as u64 { size as u32 } else { 0xFFFF_FFFF };
                     let base = self.heap_base;
-                    // Allocate new pages as read-write
-                    let new_end = base as u64 + size;
-                    if new_end <= u32::MAX as u64 {
-                        let ps = grey_types::constants::PVM_PAGE_SIZE;
-                        let start_page = base / ps;
-                        let end_page = ((new_end as u32).saturating_sub(1)) / ps;
-                        for p in start_page..=end_page {
-                            if !self.memory.is_writable(p * ps, 1) {
-                                self.memory.map_page(p, crate::memory::PageAccess::ReadWrite);
+                    let new_end = base as u64 + size_u32 as u64;
+                    if size_u32 as u64 == size && new_end <= u32::MAX as u64 {
+                        let new_end_u32 = new_end as u32;
+                        // Map pages as read-write for the new allocation
+                        if size_u32 > 0 {
+                            let ps = grey_types::constants::PVM_PAGE_SIZE;
+                            let start_page = base / ps;
+                            let end_page = (new_end_u32.saturating_sub(1)) / ps;
+                            for p in start_page..=end_page {
+                                if !self.memory.is_writable(p * ps, 1) {
+                                    self.memory.map_page(p, crate::memory::PageAccess::ReadWrite);
+                                }
                             }
                         }
-                        self.registers[rd] = base as u64;
-                        self.heap_base = new_end as u32;
+                        self.registers[rd] = new_end_u32 as u64;
+                        self.heap_base = new_end_u32;
                     } else {
-                        self.registers[rd] = u64::MAX;
+                        self.registers[rd] = 0;
                     }
                     self.pc = next_pc;
                 }
@@ -1371,13 +1384,40 @@ impl Pvm {
     /// Returns (exit_reason, gas_used).
     pub fn run(&mut self) -> (ExitReason, Gas) {
         let initial_gas = self.gas;
+        let trace = std::env::var("PVM_TRACE").is_ok();
+        let mut block_start_pc = self.pc;
+        let mut block_start_gas = self.gas;
         loop {
             match self.step() {
                 Some(exit) => {
+                    if trace {
+                        let block_cost = block_start_gas - self.gas;
+                        eprintln!(
+                            "[pvm-block] pc={block_start_pc} cost={block_cost} exit={exit:?} gas={}",
+                            self.gas
+                        );
+                    }
                     let gas_used = initial_gas - self.gas;
                     return (exit, gas_used);
                 }
-                None => continue,
+                None => {
+                    let pc = self.pc as usize;
+                    if pc < self.basic_block_starts.len()
+                        && self.basic_block_starts[pc]
+                        && self.pc != block_start_pc
+                    {
+                        if trace {
+                            let block_cost = block_start_gas - self.gas;
+                            eprintln!(
+                                "[pvm-block] pc={block_start_pc} cost={block_cost} next_pc={}",
+                                self.pc
+                            );
+                        }
+                        block_start_pc = self.pc;
+                        block_start_gas = self.gas;
+                    }
+                    continue;
+                }
             }
         }
     }

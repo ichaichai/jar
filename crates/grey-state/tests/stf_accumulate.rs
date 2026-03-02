@@ -381,13 +381,10 @@ fn run_accumulate_test(path: &str) {
             got_stats.accumulate_count, exp_stats.accumulate_count,
             "statistics[{got_id}].accumulate_count mismatch in {path}"
         );
-        let gas_delta = (got_stats.accumulate_gas_used as i64) - (exp_stats.accumulate_gas_used as i64);
-        if gas_delta != 0 {
-            tracing::warn!(
-                "statistics[{got_id}].accumulate_gas_used mismatch in {path}: got {} expected {} (delta={})",
-                got_stats.accumulate_gas_used, exp_stats.accumulate_gas_used, gas_delta
-            );
-        }
+        assert_eq!(
+            got_stats.accumulate_gas_used, exp_stats.accumulate_gas_used,
+            "statistics[{got_id}].accumulate_gas_used mismatch in {path}"
+        );
     }
 
     // Compare accounts

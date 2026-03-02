@@ -377,6 +377,7 @@ fn accumulate_single_service(
         }
     }
 
+
     let service_fetch_ctx = FetchContext {
         config_blob: fetch_ctx.config_blob.clone(),
         entropy: fetch_ctx.entropy,
@@ -535,7 +536,10 @@ fn run_accumulate_pvm(
     let initial_gas = pvm.gas();
 
     loop {
+        let gas_before_run = pvm.gas();
         let exit_reason = pvm.run();
+        let gas_after_run = pvm.gas();
+        eprintln!("[pvm] exit={exit_reason:?} gas_before={gas_before_run} gas_after={gas_after_run} delta={}", gas_before_run - gas_after_run);
         match exit_reason {
             ExitReason::Halt => {
                 let gas_used = initial_gas - pvm.gas();
@@ -546,6 +550,7 @@ fn run_accumulate_pvm(
                 return (exceptional, gas_used);
             }
             ExitReason::HostCall(id) => {
+                let gas_pre_host = pvm.gas();
                 let ok = handle_host_call(
                     id,
                     &mut pvm,
@@ -555,6 +560,8 @@ fn run_accumulate_pvm(
                     entropy,
                     fetch_ctx,
                 );
+                let gas_post_host = pvm.gas();
+                eprintln!("[host] id={id} ok={ok} gas_pre={gas_pre_host} gas_post={gas_post_host} host_delta={}", gas_pre_host as i64 - gas_post_host as i64);
                 if !ok {
                     let gas_used = initial_gas - pvm.gas();
                     return (exceptional, gas_used);
@@ -576,23 +583,13 @@ fn handle_host_call(
     fetch_ctx: &FetchContext,
 ) -> bool {
     // Host-call gas cost (GP Appendix B, eq B.15): ϱ′ ≡ ϱ − g
-    //
-    // Per the GP spec (A.36), when the PVM exits on ecalli the machine state
-    // is "prior to this instruction" — ecalli's instruction gas (1) is NOT
-    // applied.  The host-call gas g covers the full cost.
-    //
-    // With basic-block gas metering, ecalli's cost (1) is already charged as
-    // part of the block.  We therefore refund 1 gas so the net charge matches
-    // the spec: total = g (not 1 + g).
+    // ecalli costs 0 gas in the PVM (charged in vm.rs step()), so the
+    // host-call gas cost g is the total cost of the operation.
     let host_gas_cost: u64 = match id {
         100 => 0,  // log: g=0 (JIP-1, per accumulate test vector README)
         20 => 10,  // transfer: base cost 10, gas_limit charged on success only
         _ => 10,
     };
-
-    // Refund ecalli instruction cost (1) that was included in the block gas
-    // charge, since the spec says the exit state is prior to ecalli.
-    pvm.set_gas(pvm.gas() + 1);
 
     if pvm.gas() < host_gas_cost {
         return false;
@@ -637,6 +634,7 @@ fn host_fetch(pvm: &mut PvmInstance, fetch_ctx: &FetchContext) -> bool {
     let max_len = pvm.reg(9);
     let mode = pvm.reg(10);
     let sub1 = pvm.reg(11) as usize;
+    eprintln!("[fetch] mode={mode} offset={offset} max_len={max_len} sub1={sub1} buf_ptr={buf_ptr}");
 
     // Select data based on mode (accumulate context: modes 0, 1, 14, 15)
     let owned_data: Option<Vec<u8>>;
@@ -674,6 +672,7 @@ fn host_fetch(pvm: &mut PvmInstance, fetch_ctx: &FetchContext) -> bool {
     }
 
     // Return total length of the data
+    eprintln!("[fetch] data_len={data_len} written={l}");
     pvm.set_reg(7, data_len);
     true
 }

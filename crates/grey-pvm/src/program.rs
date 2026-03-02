@@ -139,7 +139,8 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
 
     // Read-write data at 2*ZZ + Z(|o|)
     let rw_base = 2 * zz + zone_round(ro_size);
-    let heap_base = rw_base;
+    // Heap starts after the initialized RW data (matching polkavm behavior)
+    let heap_base = rw_base + rw_size;
     map_region_with_data(
         &mut memory,
         rw_base,

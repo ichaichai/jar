@@ -1,7 +1,7 @@
 # Grey — JAM Blockchain Node Implementation in Rust
 
 Grey is an implementation of the JAM (Join-Accumulate Machine) protocol as specified
-in the [Gray Paper v0.7.2](https://github.com/gavofyork/graypaper/releases/download/v0.7.2/graypaper-0.7.2.pdf).
+in the [Gray Paper v0.7.2](https://github.com/gavofyork/graypaper/releases/download/v0.7.2/graypaper-0.7.2.pdf). A markdown version of the Gray Paper is available locally at `docs/graypaper.md`.
 
 ## Project Structure
 
