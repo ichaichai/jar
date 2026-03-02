@@ -73,15 +73,11 @@ pub fn deblob(blob: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Vec<u32>)> {
 ///
 /// Returns a fully initialized PVM or None if the program blob is invalid.
 pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Option<Pvm> {
-    // Skip metadata prefix if present (polkavm-linker output includes metadata).
-    // Detect by checking if the first 3 bytes as E3(ro_size) are too large.
     let blob = skip_metadata(program_blob);
-    eprintln!("[init_prog] blob_len={} after_skip={}", program_blob.len(), blob.len());
 
     // Parse the standard program blob header (eq A.38):
     // E₃(|o|) ⌢ E₃(|w|) ⌢ E₂(z) ⌢ E₃(s) ⌢ o ⌢ w ⌢ E₄(|c|) ⌢ c
     if blob.len() < 15 {
-        eprintln!("[init_prog] blob too small: {}", blob.len());
         return None;
     }
 
@@ -91,7 +87,6 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
     let rw_size = read_le_u24(blob, &mut offset)? as u32;
     let heap_pages = read_le_u16(blob, &mut offset)? as u32;
     let stack_size = read_le_u24(blob, &mut offset)? as u32;
-    eprintln!("[init_prog] ro={ro_size} rw={rw_size} heap_pages={heap_pages} stack={stack_size}");
 
     // Read read-only data
     if offset + ro_size as usize > blob.len() {
@@ -109,15 +104,11 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
 
     // Read E₄(|c|) — 4-byte LE code blob length
     let code_len = read_le_u32(blob, &mut offset)? as usize;
-    eprintln!("[init_prog] E4 code_len={code_len} remaining={}", blob.len() - offset);
     if offset + code_len > blob.len() {
-        eprintln!("[init_prog] code_len too large");
         return None;
     }
     let program_data = &blob[offset..offset + code_len];
-    let deblob_result = deblob(program_data);
-    eprintln!("[init_prog] deblob result={}", deblob_result.is_some());
-    let (code, bitmask, jump_table) = deblob_result?;
+    let (code, bitmask, jump_table) = deblob(program_data)?;
 
     let zz = PVM_ZONE_SIZE;
     let zi = PVM_INIT_INPUT_SIZE;

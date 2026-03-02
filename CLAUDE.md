@@ -227,9 +227,11 @@ crates/
 
 ## Development Guidelines
 
+- **Commit frequently** — run `git commit` after every meaningful change (passing a new test vector, fixing a bug, adding a type). Small commits make it easy to bisect regressions.
 - Specification reference: Gray Paper v0.7.2 (cached at `/tmp/graypaper/`)
 - Use `#[cfg(test)]` for unit tests within each crate
 - Follow the specification's naming where reasonable, mapping Greek letters to descriptive Rust names
 - Use strong typing: distinct newtypes for hashes, keys, indices, etc.
 - Prefer `no_std` compatibility where feasible for core crates
 - Use `thiserror` for error types, `serde` for auxiliary serialization
+- **No PolkaVM** — implement the PVM from first principles using the Gray Paper. Do not use the `polkavm` or `polkavm-common` crates.
