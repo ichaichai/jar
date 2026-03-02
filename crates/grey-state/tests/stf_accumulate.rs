@@ -383,8 +383,8 @@ fn run_accumulate_test(path: &str) {
         );
         let gas_delta = (got_stats.accumulate_gas_used as i64) - (exp_stats.accumulate_gas_used as i64);
         if gas_delta != 0 {
-            eprintln!(
-                "WARNING: statistics[{got_id}].accumulate_gas_used mismatch in {path}: got {} expected {} (delta={})",
+            tracing::warn!(
+                "statistics[{got_id}].accumulate_gas_used mismatch in {path}: got {} expected {} (delta={})",
                 got_stats.accumulate_gas_used, exp_stats.accumulate_gas_used, gas_delta
             );
         }

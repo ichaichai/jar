@@ -235,3 +235,4 @@ crates/
 - Prefer `no_std` compatibility where feasible for core crates
 - Use `thiserror` for error types, `serde` for auxiliary serialization
 - **No PolkaVM** — implement the PVM from first principles using the Gray Paper. Do not use the `polkavm` or `polkavm-common` crates.
+- **Use `tracing` for logging** — prefer `tracing::info!`, `tracing::warn!`, `tracing::debug!` etc. over `eprintln!` or `println!`. Use `tracing-test` for capturing log output in tests.
