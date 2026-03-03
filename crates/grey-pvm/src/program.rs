@@ -87,6 +87,7 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
     let rw_size = read_le_u24(blob, &mut offset)? as u32;
     let heap_pages = read_le_u16(blob, &mut offset)? as u32;
     let stack_size = read_le_u24(blob, &mut offset)? as u32;
+    tracing::debug!("Program header: ro_size={}, rw_size={}, heap_pages={}, stack_size={}", ro_size, rw_size, heap_pages, stack_size);
 
     // Read read-only data
     if offset + ro_size as usize > blob.len() {
@@ -139,8 +140,8 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
 
     // Read-write data at 2*ZZ + Z(|o|)
     let rw_base = 2 * zz + zone_round(ro_size);
-    // Heap starts after the initialized RW data (matching polkavm behavior)
-    let heap_base = rw_base + rw_size;
+    // GP sbrk h value: beginning of the heap section = 2*Z_Z + Z(|o|) = rw_base
+    let heap_base = rw_base;
     map_region_with_data(
         &mut memory,
         rw_base,
@@ -171,8 +172,17 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
     registers[7] = (1u64 << 32) - zz as u64 - zi as u64; // arg base
     registers[8] = arguments.len() as u64; // arg length
 
+    tracing::info!(
+        "PVM init: ro={:#x}+{}, rw={:#x}+{}, heap={:#x}, stack={:#x}..{:#x}, args={:#x}+{}, SP={:#x}",
+        ro_base, ro_size, rw_base, rw_size, heap_base,
+        stack_bottom, stack_top, arg_base, arguments.len(), registers[0]
+    );
+
     let mut pvm = Pvm::new(code, bitmask, jump_table, registers, memory, gas);
     pvm.heap_base = heap_base;
+    // heap_top starts at the end of the pre-mapped rw+heap region
+    // (heap_base + rw_size + heap_pages * page_size, page-aligned)
+    pvm.heap_top = heap_base + page_round(rw_size + heap_pages * PVM_PAGE_SIZE);
 
     Some(pvm)
 }

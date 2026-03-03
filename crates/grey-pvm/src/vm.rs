@@ -42,11 +42,17 @@ pub struct Pvm {
     pub jump_table: Vec<u32>,
     /// Heap base address (h) for sbrk.
     pub heap_base: u32,
+    /// Current heap top pointer for sbrk (heap_base + total_allocated).
+    pub heap_top: u32,
     /// Set of basic block start indices (ϖ).
     basic_block_starts: Vec<bool>,
     /// Gas cost for each basic block (indexed by block start PC).
     /// Only entries at basic_block_starts[i]==true are meaningful.
     pub block_gas_costs: Vec<u64>,
+    /// When true, collect instruction trace in `pc_trace`.
+    pub tracing_enabled: bool,
+    /// Collected instruction trace: (PC, opcode_byte) pairs.
+    pub pc_trace: Vec<(u32, u8)>,
 }
 
 impl Pvm {
@@ -70,8 +76,11 @@ impl Pvm {
             bitmask,
             jump_table,
             heap_base: 0,
+            heap_top: 0,
             basic_block_starts,
             block_gas_costs,
+            tracing_enabled: false,
+            pc_trace: Vec::new(),
         }
     }
 
@@ -176,15 +185,18 @@ impl Pvm {
         };
 
         // Per-instruction gas metering (v0.7.2: ϱ' = ϱ - ϱ_Δ where ϱ_Δ = 1).
-        // ecalli costs 0 gas as an instruction — the host-call gas cost g
-        // (charged by the host-call handler) is the total cost of the operation.
-        // This matches polkavm 0.30.0 behavior where ecalli's cost is absorbed
-        // into the host-call gas accounting.
-        let gas_cost: u64 = if opcode == Opcode::Ecalli { 0 } else { 1 };
+        // All instructions cost ϱΔ = 1 gas per GP instruction table (including ecalli).
+        // The host-call handler additionally charges g = 10 for ecalli.
+        let gas_cost: u64 = 1;
         if self.gas < gas_cost {
             return Some(ExitReason::OutOfGas);
         }
         self.gas -= gas_cost;
+
+        // Collect trace if enabled
+        if self.tracing_enabled {
+            self.pc_trace.push((self.pc, opcode_byte));
+        }
 
         // Compute skip length ℓ (eq A.20)
         let skip = self.skip(pc);
@@ -545,31 +557,40 @@ impl Pvm {
             }
             Opcode::Sbrk => {
                 if let Args::TwoReg { rd, ra } = args {
-                    // sbrk: grow heap by φ_A bytes, return new heap top.
-                    //
-                    // Matches polkavm behavior: returns heap_base + new_heap_size
-                    // (the new heap top after allocation). Returns 0 on failure.
+                    // sbrk: GP eq A.5, opcode 101
+                    // Heap-pointer tracking model (matching polkavm reference):
+                    // - heap_top tracks the current end of the allocated heap
+                    // - sbrk(0) returns heap_top (query mode)
+                    // - sbrk(n) returns old heap_top and advances heap_top by n,
+                    //   mapping any needed pages along the way
                     let size = self.registers[ra];
-                    let size_u32 = if size <= u32::MAX as u64 { size as u32 } else { 0xFFFF_FFFF };
-                    let base = self.heap_base;
-                    let new_end = base as u64 + size_u32 as u64;
-                    if size_u32 as u64 == size && new_end <= u32::MAX as u64 {
-                        let new_end_u32 = new_end as u32;
-                        // Map pages as read-write for the new allocation
-                        if size_u32 > 0 {
-                            let ps = grey_types::constants::PVM_PAGE_SIZE;
-                            let start_page = base / ps;
-                            let end_page = (new_end_u32.saturating_sub(1)) / ps;
+                    let ps = grey_types::constants::PVM_PAGE_SIZE;
+
+                    if size > u32::MAX as u64 {
+                        self.registers[rd] = 0;
+                    } else if size == 0 {
+                        // Query mode: return current heap top
+                        self.registers[rd] = self.heap_top as u64;
+                    } else {
+                        let size_u32 = size as u32;
+                        let old_top = self.heap_top;
+                        let new_top = (old_top as u64) + (size_u32 as u64);
+
+                        if new_top > (u32::MAX as u64) + 1 {
+                            self.registers[rd] = 0;
+                        } else {
+                            let new_top_u32 = new_top as u32;
+                            // Map any pages in [old_top, new_top) that aren't mapped yet
+                            let start_page = old_top / ps;
+                            let end_page = if new_top_u32 == 0 { u32::MAX / ps } else { (new_top_u32 - 1) / ps };
                             for p in start_page..=end_page {
-                                if !self.memory.is_writable(p * ps, 1) {
+                                if !self.memory.is_page_mapped(p) {
                                     self.memory.map_page(p, crate::memory::PageAccess::ReadWrite);
                                 }
                             }
+                            self.registers[rd] = old_top as u64;
+                            self.heap_top = new_top_u32;
                         }
-                        self.registers[rd] = new_end_u32 as u64;
-                        self.heap_base = new_end_u32;
-                    } else {
-                        self.registers[rd] = 0;
                     }
                     self.pc = next_pc;
                 }

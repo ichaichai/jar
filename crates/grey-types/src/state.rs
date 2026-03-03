@@ -58,8 +58,8 @@ pub struct State {
     /// π: Validator activity statistics.
     pub statistics: ValidatorStatistics,
 
-    /// ω: Accumulation queue.
-    pub accumulation_queue: Vec<Vec<(WorkReport, Vec<(ServiceId, Hash)>)>>,
+    /// ω: Accumulation queue — per-slot list of (report, unfulfilled deps).
+    pub accumulation_queue: Vec<Vec<(WorkReport, Vec<Hash>)>>,
 
     /// ξ: Accumulation history.
     pub accumulation_history: Vec<Vec<Hash>>,

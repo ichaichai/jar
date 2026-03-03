@@ -65,4 +65,20 @@ impl PvmInstance {
             self.inner.memory.write_u8(addr + i as u32, byte);
         }
     }
+
+    /// Enable instruction trace collection.
+    pub fn enable_tracing(&mut self) {
+        self.inner.tracing_enabled = true;
+    }
+
+    /// Dump code blob and bitmask to files for disassembly.
+    pub fn dump_code(&self, code_path: &str, bitmask_path: &str) {
+        let _ = std::fs::write(code_path, &self.inner.code);
+        let _ = std::fs::write(bitmask_path, &self.inner.bitmask);
+    }
+
+    /// Take the collected instruction trace.
+    pub fn take_trace(&mut self) -> Vec<(u32, u8)> {
+        std::mem::take(&mut self.inner.pc_trace)
+    }
 }

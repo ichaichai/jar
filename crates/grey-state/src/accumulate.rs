@@ -90,8 +90,12 @@ pub struct AccumulateInput {
 
 /// Output of the accumulate sub-transition.
 #[derive(Debug)]
-pub enum AccumulateOutput {
-    Ok(Hash),
+pub struct AccumulateOutput {
+    pub hash: Hash,
+    /// Per-service yield outputs (service_id, yield_hash) — becomes θ.
+    pub outputs: Vec<(ServiceId, Hash)>,
+    /// Per-service gas usage from accumulation — needed for π_S statistics.
+    pub gas_usage: Vec<(ServiceId, Gas)>,
 }
 
 /// Deferred transfer between services (eq 12.16).
@@ -524,29 +528,76 @@ fn run_accumulate_pvm(
     entropy: &Hash,
     fetch_ctx: &FetchContext,
 ) -> (AccContext, Gas) {
+    tracing::info!(
+        "run_accumulate_pvm: service={}, code_blob={} bytes, gas={}, args={} bytes",
+        regular.service_id, code_blob.len(), gas, args.len()
+    );
     // Initialize PVM
     let mut pvm = match PvmInstance::initialize(code_blob, args, gas) {
         Some(p) => p,
-        None => return (exceptional, 0),
+        None => {
+            tracing::warn!("PVM initialization failed for service {}", regular.service_id);
+            return (exceptional, 0);
+        }
     };
 
     // Set entry point: ΨM(c, 5, ...) starts at instruction counter 5 for accumulate
     pvm.set_pc(5);
 
     let initial_gas = pvm.gas();
+    let mut host_call_count = 0u32;
+    let mut total_instruction_gas = 0u64;
+    let mut total_host_gas = 0u64;
 
     loop {
+        let gas_before_run = pvm.gas();
         let exit_reason = pvm.run();
+        let gas_after_run = pvm.gas();
+        let inst_gas = gas_before_run - gas_after_run;
+        total_instruction_gas += inst_gas;
+
         match exit_reason {
             ExitReason::Halt => {
                 let gas_used = initial_gas - pvm.gas();
+                tracing::info!(
+                    "PVM HALT: service={}, gas_used={}, remaining={}, host_calls={}, \
+                     total_inst_gas={}, total_host_gas={}",
+                    regular.service_id, gas_used, pvm.gas(), host_call_count,
+                    total_instruction_gas, total_host_gas
+                );
                 return (regular, gas_used);
             }
-            ExitReason::Panic | ExitReason::OutOfGas | ExitReason::PageFault(_) => {
+            ExitReason::Panic => {
                 let gas_used = initial_gas - pvm.gas();
+                tracing::warn!(
+                    "PVM PANIC: service={}, gas_used={}, pc={}",
+                    regular.service_id, gas_used, pvm.pc()
+                );
+                return (exceptional, gas_used);
+            }
+            ExitReason::OutOfGas => {
+                let gas_used = initial_gas;
+                tracing::warn!(
+                    "PVM OOG: service={}, gas_budget={}, pc={}",
+                    regular.service_id, initial_gas, pvm.pc()
+                );
+                return (exceptional, gas_used);
+            }
+            ExitReason::PageFault(addr) => {
+                let gas_used = initial_gas - pvm.gas();
+                tracing::warn!(
+                    "PVM PAGE_FAULT: service={}, addr=0x{:08x}, gas_used={}, pc={}",
+                    regular.service_id, addr, gas_used, pvm.pc()
+                );
                 return (exceptional, gas_used);
             }
             ExitReason::HostCall(id) => {
+                host_call_count += 1;
+                let gas_before_host = pvm.gas();
+                tracing::info!(
+                    "PVM host_call #{}: id={}, gas_before={}, inst_gas_this_segment={}, pc={}",
+                    host_call_count, id, gas_before_host, inst_gas, pvm.pc()
+                );
                 let ok = handle_host_call(
                     id,
                     &mut pvm,
@@ -556,8 +607,18 @@ fn run_accumulate_pvm(
                     entropy,
                     fetch_ctx,
                 );
+                let gas_after_host = pvm.gas();
+                let host_gas = gas_before_host - gas_after_host;
+                total_host_gas += host_gas;
+                tracing::info!(
+                    "  host_call #{} done: gas_cost={}, gas_remaining={}",
+                    host_call_count, host_gas, gas_after_host
+                );
                 if !ok {
                     let gas_used = initial_gas - pvm.gas();
+                    tracing::warn!(
+                        "PVM host_call {} failed, gas_used={}", id, gas_used
+                    );
                     return (exceptional, gas_used);
                 }
             }
@@ -576,21 +637,28 @@ fn handle_host_call(
     _entropy: &Hash,
     fetch_ctx: &FetchContext,
 ) -> bool {
-    // Host-call gas cost (GP Appendix B, eq B.15): ϱ′ ≡ ϱ − g
-    // ecalli costs 0 gas in the PVM (charged in vm.rs step()), so the
-    // host-call gas cost g is the total cost of the operation.
-    let host_gas_cost: u64 = match id {
-        100 => 0,  // log: g=0 (JIP-1, per accumulate test vector README)
-        20 => 10,  // transfer: base cost 10, gas_limit charged on success only
-        _ => 10,
-    };
+    // Host-call gas cost (GP Section 24.6/24.7): ϱ' ≡ ϱ − g
+    // All host calls cost g=10 (including log/JIP-1 and unknown IDs).
+    // ecalli instruction already costs ϱ∆=1 in the PVM; g is charged on top.
+    // For transfer, there's an additional gas_limit deduction on success.
+    let host_gas_cost: u64 = 10;
 
     if pvm.gas() < host_gas_cost {
         return false;
     }
     pvm.set_gas(pvm.gas() - host_gas_cost);
 
-    match id {
+    let name = match id {
+        0 => "gas", 1 => "fetch", 3 => "read", 4 => "write", 5 => "info",
+        17 => "checkpoint", 20 => "transfer", 21 => "eject", 25 => "yield", 100 => "log",
+        _ => "unknown",
+    };
+    tracing::info!(
+        "  host_call {name}({id}): ω7={}, ω8={}, ω9={}, ω10={}, ω11={}, ω12={}, gas={}",
+        pvm.reg(7), pvm.reg(8), pvm.reg(9), pvm.reg(10), pvm.reg(11), pvm.reg(12), pvm.gas()
+    );
+
+    let result = match id {
         0 => host_gas(pvm, regular),
         1 => host_fetch(pvm, fetch_ctx),
         3 => host_read(pvm, regular),
@@ -601,16 +669,23 @@ fn handle_host_call(
         21 => host_eject(pvm, regular, timeslot),
         25 => host_yield(pvm, regular),
         100 => {
-            // log host call (JIP-1): always returns WHAT in φ'7
-            pvm.set_reg(7, u64::MAX);
+            // log (JIP-1): Return WHAT (2^64-2) per JAM docs spec.
+            // Reads target from μ[φ8..+φ9] and message from μ[φ10..+φ11]
+            // but we don't need to act on them.
+            pvm.set_reg(7, u64::MAX - 1); // WHAT
             true
         }
         _ => {
-            // Unknown host call: set WHAT in register 7
-            pvm.set_reg(7, u64::MAX);
+            // Unknown host call: return WHAT (2^64-2), cost g=10 (GP catch-all)
+            pvm.set_reg(7, u64::MAX - 1); // WHAT
             true
         }
-    }
+    };
+    tracing::info!(
+        "    -> ω7={}, ω8={}, gas={}",
+        pvm.reg(7), pvm.reg(8), pvm.gas()
+    );
+    result
 }
 
 /// gas (id=0): Return remaining gas in φ[7].
@@ -656,6 +731,11 @@ fn host_fetch(pvm: &mut PvmInstance, fetch_ctx: &FetchContext) -> bool {
     let data_len = data.len() as u64;
     let f = offset.min(data_len);
     let l = max_len.min(data_len - f);
+
+    // Log data hex for debugging
+    if max_len > 0 {
+        tracing::info!("  fetch mode={} data ({} bytes): {}", mode, data.len(), data.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+    }
 
     // Write data[f..f+l] to memory at buf_ptr
     if l > 0 {
@@ -779,30 +859,57 @@ fn host_write(pvm: &mut PvmInstance, ctx: &mut AccContext) -> bool {
     true
 }
 
-/// info (id=5): Get service account info.
-/// φ[7] = service_id (or if ≥ 2^32, defaults to current service s)
-/// φ[8] = output_ptr
-/// Returns φ[7] = OK(0) or error, writes info to memory
+/// info (id=5): Get service account info (GP eq ΩI).
+/// φ[7] = service_id (or 2^64-1 for current service s)
+/// φ[8] = output_ptr (o), φ[9] = offset (f), φ[10] = max_len (l)
+/// Returns φ[7] = |v| (total info length) or NONE
 fn host_info(pvm: &mut PvmInstance, ctx: &mut AccContext) -> bool {
     let service_id = if pvm.reg(7) == u64::MAX {
         ctx.service_id
     } else if pvm.reg(7) <= u32::MAX as u64 {
         pvm.reg(7) as ServiceId
     } else {
-        pvm.set_reg(7, u64::MAX);
+        pvm.set_reg(7, u64::MAX); // NONE
         return true;
     };
     let out_ptr = pvm.reg(8) as u32;
+    let offset = pvm.reg(9);
+    let max_len = pvm.reg(10);
 
     if let Some(account) = ctx.accounts.get(&service_id) {
-        // code_hash (32 bytes) + balance (8) + min_item_gas (8) + min_memo_gas (8)
-        let mut buf = [0u8; 56];
-        buf[..32].copy_from_slice(&account.code_hash.0);
-        buf[32..40].copy_from_slice(&account.balance.to_le_bytes());
-        buf[40..48].copy_from_slice(&account.min_item_gas.to_le_bytes());
-        buf[48..56].copy_from_slice(&account.min_memo_gas.to_le_bytes());
-        pvm.write_bytes(out_ptr, &buf);
-        pvm.set_reg(7, 0); // OK
+        // Build info struct v per GP:
+        // E(a_c, E_8(a_b, a_t, a_g, a_m, a_o), E_4(a_i), E_8(a_f), E_4(a_r, a_a, a_p))
+        // = 32 + 40 + 4 + 8 + 12 = 96 bytes
+        let threshold = {
+            let total = grey_types::constants::BALANCE_SERVICE_MINIMUM
+                + grey_types::constants::BALANCE_PER_ITEM * account.items
+                + grey_types::constants::BALANCE_PER_OCTET * account.bytes;
+            total.saturating_sub(account.deposit_offset)
+        };
+
+        let mut buf = [0u8; 96];
+        buf[0..32].copy_from_slice(&account.code_hash.0);       // a_c
+        buf[32..40].copy_from_slice(&account.balance.to_le_bytes()); // a_b
+        buf[40..48].copy_from_slice(&threshold.to_le_bytes());   // a_t
+        buf[48..56].copy_from_slice(&account.min_item_gas.to_le_bytes()); // a_g
+        buf[56..64].copy_from_slice(&account.min_memo_gas.to_le_bytes()); // a_m
+        buf[64..72].copy_from_slice(&account.bytes.to_le_bytes()); // a_o
+        buf[72..76].copy_from_slice(&(account.items as u32).to_le_bytes()); // a_i
+        buf[76..84].copy_from_slice(&account.deposit_offset.to_le_bytes()); // a_f
+        buf[84..88].copy_from_slice(&account.creation_slot.to_le_bytes()); // a_r
+        buf[88..92].copy_from_slice(&account.last_accumulation_slot.to_le_bytes()); // a_a
+        buf[92..96].copy_from_slice(&account.parent_service.to_le_bytes()); // a_p
+
+        tracing::info!("  info struct ({} bytes): {}", buf.len(), buf.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+
+        let v_len = buf.len() as u64;
+        let f = offset.min(v_len);
+        let l = max_len.min(v_len - f);
+
+        if l > 0 {
+            pvm.write_bytes(out_ptr, &buf[f as usize..(f + l) as usize]);
+        }
+        pvm.set_reg(7, v_len); // return |v|
     } else {
         pvm.set_reg(7, u64::MAX); // NONE
     }
@@ -1120,6 +1227,9 @@ pub fn process_accumulate(
     state.accounts = new_accounts;
 
     // Step 6: Update last_accumulation_slot for all accumulated services
+    // This tracks the accumulation timeslot in the internal AccServiceAccount representation.
+    // The mapping to ServiceAccount fields (a_r = creation slot, a_a = most recent accumulation)
+    // is handled in acc_to_service.
     for (sid, _) in &gas_usage {
         if let Some(account) = state.accounts.get_mut(sid) {
             account.last_accumulation_slot = input.slot;
@@ -1162,7 +1272,11 @@ pub fn process_accumulate(
 
     // Step 12: Compute output hash (Keccak Merkle root of outputs)
     let output_hash = compute_output_hash(&outputs);
-    AccumulateOutput::Ok(output_hash)
+    AccumulateOutput {
+        hash: output_hash,
+        outputs,
+        gas_usage,
+    }
 }
 
 /// Shift accumulated history (eq 12.32).
@@ -1315,4 +1429,284 @@ fn keccak_merkle_root(leaves: Vec<Vec<u8>>) -> Hash {
             grey_crypto::keccak_256(&combined)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bridge: State ↔ AccumulateState conversion
+// ---------------------------------------------------------------------------
+
+use grey_types::state::{PrivilegedServices, ServiceAccount, State};
+
+/// Convert a ServiceAccount to AccServiceAccount, optionally looking up
+/// the code blob from opaque state data.
+fn service_to_acc(
+    sid: ServiceId,
+    a: &ServiceAccount,
+    opaque_data: &[([u8; 31], Vec<u8>)],
+) -> AccServiceAccount {
+    // Build preimage_lookup from ServiceAccount, plus code blob from opaque data
+    let mut preimage_lookup = a.preimage_lookup.clone();
+    if a.code_hash != Hash::ZERO && !preimage_lookup.contains_key(&a.code_hash) {
+        if let Some(code_blob) =
+            grey_merkle::state_serial::lookup_preimage_in_opaque(sid, &a.code_hash, opaque_data)
+        {
+            tracing::info!(
+                "Found code blob for service {} in opaque data: {} bytes",
+                sid, code_blob.len()
+            );
+            preimage_lookup.insert(a.code_hash, code_blob);
+        }
+    }
+
+    AccServiceAccount {
+        version: 0,
+        code_hash: a.code_hash,
+        balance: a.balance,
+        min_item_gas: a.min_accumulate_gas,
+        min_memo_gas: a.min_on_transfer_gas,
+        bytes: a.total_footprint,
+        deposit_offset: a.free_storage_offset,
+        items: a.accumulation_counter as u64,
+        creation_slot: 0, // Not tracked in ServiceAccount
+        last_accumulation_slot: a.last_accumulation,
+        parent_service: 0, // Not tracked
+        storage: a.storage.clone(),
+        preimage_lookup,
+        preimage_info: a.preimage_info.clone(),
+    }
+}
+
+/// Convert AccServiceAccount back to ServiceAccount.
+///
+/// GP field mapping:
+///   a_r (ServiceAccount.last_accumulation) = creation slot — preserved from original
+///   a_a (ServiceAccount.last_activity) = most recent accumulation slot — set to timeslot if accumulated
+fn acc_to_service(
+    a: &AccServiceAccount,
+    original: Option<&ServiceAccount>,
+    was_accumulated: bool,
+    accumulation_timeslot: Timeslot,
+) -> ServiceAccount {
+    // a_a: set to current timeslot if this service was accumulated (GP eq 12.25: a'_a = τ')
+    let last_activity = if was_accumulated {
+        accumulation_timeslot
+    } else {
+        original.map(|o| o.last_activity).unwrap_or(0)
+    };
+    // a_r: always preserve creation slot from original
+    let last_accumulation = original.map(|o| o.last_accumulation).unwrap_or(a.creation_slot);
+    ServiceAccount {
+        code_hash: a.code_hash,
+        balance: a.balance,
+        min_accumulate_gas: a.min_item_gas,
+        min_on_transfer_gas: a.min_memo_gas,
+        storage: a.storage.clone(),
+        preimage_lookup: a.preimage_lookup.clone(),
+        preimage_info: a.preimage_info.clone(),
+        free_storage_offset: a.deposit_offset,
+        total_footprint: a.bytes,
+        accumulation_counter: a.items as u32,
+        last_accumulation,
+        last_activity,
+        preimage_count: original.map(|o| o.preimage_count).unwrap_or(a.preimage_info.len() as u32),
+    }
+}
+
+/// Convert PrivilegedServices to AccPrivileges.
+fn privileges_to_acc(p: &PrivilegedServices) -> AccPrivileges {
+    AccPrivileges {
+        bless: p.manager,
+        assign: p.assigner.clone(),
+        designate: p.designator,
+        register: p.registrar,
+        always_acc: p.always_accumulate.iter().map(|(&s, &g)| (s, g)).collect(),
+    }
+}
+
+/// Convert AccPrivileges back to PrivilegedServices.
+fn acc_to_privileges(p: &AccPrivileges) -> PrivilegedServices {
+    PrivilegedServices {
+        manager: p.bless,
+        assigner: p.assign.clone(),
+        designator: p.designate,
+        registrar: p.register,
+        always_accumulate: p.always_acc.iter().map(|&(s, g)| (s, g)).collect(),
+    }
+}
+
+/// Convert State's accumulation_queue to AccumulateState's ready_queue format.
+fn state_queue_to_ready(queue: &[Vec<(WorkReport, Vec<Hash>)>]) -> Vec<Vec<ReadyRecord>> {
+    queue
+        .iter()
+        .map(|slot| {
+            slot.iter()
+                .map(|(report, deps)| ReadyRecord {
+                    report: report.clone(),
+                    dependencies: deps.clone(),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Convert AccumulateState's ready_queue back to State's accumulation_queue format.
+fn ready_to_state_queue(ready: &[Vec<ReadyRecord>]) -> Vec<Vec<(WorkReport, Vec<Hash>)>> {
+    ready
+        .iter()
+        .map(|slot| {
+            slot.iter()
+                .map(|rr| (rr.report.clone(), rr.dependencies.clone()))
+                .collect()
+        })
+        .collect()
+}
+
+/// Run accumulation on available reports, updating the state in-place.
+///
+/// Returns (accumulate_root_hash, gas_usage) where gas_usage is per-service
+/// accumulation gas for statistics (π_S).
+pub fn run_accumulation(
+    config: &Config,
+    state: &mut State,
+    prev_timeslot: Timeslot,
+    available_reports: Vec<WorkReport>,
+    opaque_data: &[([u8; 31], Vec<u8>)],
+) -> (Hash, Vec<(ServiceId, Gas)>) {
+    let epoch_length = config.epoch_length as usize;
+
+    tracing::info!(
+        "run_accumulation: {} available reports, timeslot={}, prev={}",
+        available_reports.len(), state.timeslot, prev_timeslot
+    );
+    for (i, r) in available_reports.iter().enumerate() {
+        tracing::info!(
+            "  report[{}]: core={}, results={}, pkg_hash={}",
+            i, r.core_index, r.results.len(), r.package_spec.package_hash
+        );
+        for (j, d) in r.results.iter().enumerate() {
+            tracing::info!(
+                "    digest[{}]: svc={}, acc_gas={}, code_hash={}",
+                j, d.service_id, d.accumulate_gas, d.code_hash
+            );
+        }
+    }
+
+    if available_reports.is_empty() {
+        // Still need to shift history and queue for this timeslot
+        shift_accumulated(
+            &mut state.accumulation_history,
+            &[],
+            0,
+            epoch_length,
+        );
+
+        let mut ready = state_queue_to_ready(&state.accumulation_queue);
+        update_ready_queue(
+            &mut ready,
+            &[],
+            &BTreeSet::new(),
+            epoch_length,
+            prev_timeslot,
+            state.timeslot,
+        );
+        state.accumulation_queue = ready_to_state_queue(&ready);
+
+        state.accumulation_outputs = vec![];
+        return (Hash::ZERO, vec![]);
+    }
+
+    // Build AccumulateState from main State
+    tracing::info!("  services in state: {:?}", state.services.keys().collect::<Vec<_>>());
+    for (&sid, acc) in &state.services {
+        let has_code = acc.preimage_lookup.contains_key(&acc.code_hash);
+        tracing::info!(
+            "  service {}: code_hash={}, has_code={}, balance={}, storage_keys={}",
+            sid, acc.code_hash, has_code, acc.balance, acc.storage.len()
+        );
+    }
+
+    let mut acc_state = AccumulateState {
+        slot: prev_timeslot,
+        entropy: state.entropy[0],
+        ready_queue: state_queue_to_ready(&state.accumulation_queue),
+        accumulated: state.accumulation_history.clone(),
+        privileges: privileges_to_acc(&state.privileged_services),
+        statistics: vec![],
+        accounts: state
+            .services
+            .iter()
+            .map(|(&sid, a)| (sid, service_to_acc(sid, a, opaque_data)))
+            .collect(),
+    };
+
+    let input = AccumulateInput {
+        slot: state.timeslot,
+        reports: available_reports,
+    };
+
+    // Log service account before accumulation for debugging
+    for (&sid, acc) in &acc_state.accounts {
+        tracing::debug!(
+            "  pre-acc svc {}: balance={}, items={}, bytes={}, last_acc={}, preimages={}",
+            sid, acc.balance, acc.items, acc.bytes, acc.last_accumulation_slot,
+            acc.preimage_lookup.len()
+        );
+    }
+
+    let acc_output = process_accumulate(config, &mut acc_state, &input);
+    tracing::info!("  accumulate output_hash: {}", acc_output.hash);
+
+    // Log service account after accumulation for debugging
+    for (&sid, acc) in &acc_state.accounts {
+        tracing::debug!(
+            "  post-acc svc {}: balance={}, items={}, bytes={}, last_acc={}, preimages={}, storage={}",
+            sid, acc.balance, acc.items, acc.bytes, acc.last_accumulation_slot,
+            acc.preimage_lookup.len(), acc.storage.len()
+        );
+    }
+
+    // Build set of accumulated service IDs from gas_usage
+    let accumulated_sids: std::collections::BTreeSet<ServiceId> =
+        acc_output.gas_usage.iter().map(|(sid, _)| *sid).collect();
+
+    // Propagate results back to State
+    let new_services: BTreeMap<ServiceId, ServiceAccount> = acc_state
+        .accounts
+        .iter()
+        .map(|(&sid, a)| {
+            let was_accumulated = accumulated_sids.contains(&sid);
+            (sid, acc_to_service(a, state.services.get(&sid), was_accumulated, state.timeslot))
+        })
+        .collect();
+
+    // Log changes to service accounts
+    for (&sid, new_acc) in &new_services {
+        if let Some(old_acc) = state.services.get(&sid) {
+            // Serialize both and compare
+            let old_bytes = grey_merkle::state_serial::serialize_single_service(old_acc);
+            let new_bytes = grey_merkle::state_serial::serialize_single_service(new_acc);
+            if old_bytes != new_bytes {
+                tracing::info!("  svc {} account changed: {} -> {} bytes", sid, old_bytes.len(), new_bytes.len());
+                let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{:02x}", x)).collect() };
+                tracing::info!("    old: {}", hex(&old_bytes));
+                tracing::info!("    new: {}", hex(&new_bytes));
+            }
+            if old_acc.preimage_lookup.len() != new_acc.preimage_lookup.len() {
+                tracing::info!("  svc {} preimage_lookup: {} -> {} entries", sid, old_acc.preimage_lookup.len(), new_acc.preimage_lookup.len());
+            }
+            if old_acc.storage.len() != new_acc.storage.len() {
+                tracing::info!("  svc {} storage: {} -> {} keys", sid, old_acc.storage.len(), new_acc.storage.len());
+            }
+        } else {
+            tracing::info!("  NEW service {}", sid);
+        }
+    }
+
+    state.services = new_services;
+    state.accumulation_history = acc_state.accumulated;
+    state.accumulation_queue = ready_to_state_queue(&acc_state.ready_queue);
+    state.privileged_services = acc_to_privileges(&acc_state.privileges);
+    state.accumulation_outputs = acc_output.outputs.clone();
+
+    (acc_output.hash, acc_output.gas_usage)
 }

@@ -92,6 +92,28 @@ impl Memory {
         self.pages.keys().copied().collect()
     }
 
+    /// Check if a page is mapped (has any access mode, even Inaccessible).
+    pub fn is_page_mapped(&self, page: u32) -> bool {
+        self.pages.contains_key(&page)
+    }
+
+    /// Find the first unmapped page starting from `start_page`.
+    /// Returns None if all pages from start_page to max are mapped (unlikely).
+    pub fn first_unmapped_page_from(&self, start_page: u32) -> Option<u32> {
+        let mut page = start_page;
+        // Use the BTreeMap ordering to efficiently skip mapped pages
+        for (&mapped_page, _) in self.pages.range(start_page..) {
+            if mapped_page != page {
+                // Found a gap: page is unmapped
+                return Some(page);
+            }
+            page = page.checked_add(1)?;
+        }
+        // All pages from start_page to the last mapped page are mapped,
+        // so the next unmapped page is right after the last mapped one
+        Some(page)
+    }
+
     /// Read a full page's data (4096 bytes). Returns None if page is not mapped.
     pub fn read_page(&self, page: u32) -> Option<&[u8]> {
         self.pages.get(&page).map(|pd| pd.data.as_slice())

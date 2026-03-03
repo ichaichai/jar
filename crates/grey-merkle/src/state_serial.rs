@@ -194,7 +194,15 @@ pub fn serialize_state_with_opaque(
     opaque: &[([u8; 31], Vec<u8>)],
 ) -> Vec<([u8; 31], Vec<u8>)> {
     let mut kvs = serialize_state(state, config);
-    kvs.extend_from_slice(opaque);
+    // Collect state-generated keys for deduplication
+    let state_keys: std::collections::HashSet<[u8; 31]> =
+        kvs.iter().map(|(k, _)| *k).collect();
+    // Only add opaque entries whose keys don't collide with state entries
+    for (k, v) in opaque {
+        if !state_keys.contains(k) {
+            kvs.push((*k, v.clone()));
+        }
+    }
     kvs.sort_by(|a, b| a.0.cmp(&b.0));
     kvs
 }
@@ -479,21 +487,20 @@ fn serialize_validator_records_e4(
 }
 
 /// C(14): ω accumulation_queue — E fixed-size array of ↕ sorted inner lists.
+/// Each entry: E(r ∈ R) followed by ↕ sorted dependency hashes.
 fn serialize_accumulation_queue(
-    queue: &[Vec<(grey_types::work::WorkReport, Vec<(ServiceId, Hash)>)>],
+    queue: &[Vec<(grey_types::work::WorkReport, Vec<Hash>)>],
 ) -> Vec<u8> {
     use grey_codec::Encode;
     let mut buf = Vec::new();
     for slot in queue {
-        // ↕ inner list of (report, ↕digest_pairs)
         encode_compact(slot.len() as u64, &mut buf);
-        for (report, digests) in slot {
+        for (report, deps) in slot {
             // Use standard block encoding E(r ∈ R) for work reports
             report.encode_to(&mut buf);
-            // ↕ sorted digest pairs
-            encode_compact(digests.len() as u64, &mut buf);
-            for &(service_id, ref hash) in digests {
-                buf.extend_from_slice(&service_id.to_le_bytes());
+            // ↕ sorted dependency hashes
+            encode_compact(deps.len() as u64, &mut buf);
+            for hash in deps {
                 buf.extend_from_slice(&hash.0);
             }
         }
@@ -526,6 +533,10 @@ fn serialize_accumulation_outputs(outputs: &[(ServiceId, Hash)]) -> Vec<u8> {
 
 /// C(255, s): service account metadata.
 /// E(0, a_c, E_8(a_b, a_g, a_m, a_o, a_f), E_4(a_i, a_r, a_a, a_p))
+pub fn serialize_single_service(account: &ServiceAccount) -> Vec<u8> {
+    serialize_service_account(account)
+}
+
 fn serialize_service_account(account: &ServiceAccount) -> Vec<u8> {
     let mut buf = Vec::with_capacity(89);
 
@@ -637,6 +648,22 @@ pub fn deserialize_state(
     }
 
     Ok((state, opaque_service_data))
+}
+
+/// Look up a preimage (e.g., code blob) for a specific service from opaque KV data.
+/// This computes the expected key C(service_id, E_4(2^32-2) ++ hash) and searches
+/// the opaque data for a matching entry.
+pub fn lookup_preimage_in_opaque(
+    service_id: ServiceId,
+    hash: &Hash,
+    opaque_data: &[([u8; 31], Vec<u8>)],
+) -> Option<Vec<u8>> {
+    let h = preimage_hash_arg(hash);
+    let expected_key = key_for_service_data(service_id, &h);
+    opaque_data
+        .iter()
+        .find(|(k, _)| *k == expected_key)
+        .map(|(_, v)| v.clone())
 }
 
 /// Classify a 31-byte state key.
@@ -1277,7 +1304,7 @@ fn deserialize_validator_records_e4(
 fn deserialize_accumulation_queue(
     data: &[u8],
     config: &Config,
-) -> Result<Vec<Vec<(grey_types::work::WorkReport, Vec<(ServiceId, Hash)>)>>, String> {
+) -> Result<Vec<Vec<(grey_types::work::WorkReport, Vec<Hash>)>>, String> {
     let mut pos = 0;
     let e = config.epoch_length as usize;
     let mut queue = Vec::with_capacity(e);
@@ -1287,14 +1314,12 @@ fn deserialize_accumulation_queue(
         let mut inner = Vec::with_capacity(inner_count);
         for _ in 0..inner_count {
             let report = deserialize_work_report(data, &mut pos)?;
-            let digest_count = decode_compact(data, &mut pos)? as usize;
-            let mut digests = Vec::with_capacity(digest_count);
-            for _ in 0..digest_count {
-                let service_id = read_u32(data, &mut pos)?;
-                let hash = read_hash(data, &mut pos)?;
-                digests.push((service_id, hash));
+            let dep_count = decode_compact(data, &mut pos)? as usize;
+            let mut deps = Vec::with_capacity(dep_count);
+            for _ in 0..dep_count {
+                deps.push(read_hash(data, &mut pos)?);
             }
-            inner.push((report, digests));
+            inner.push((report, deps));
         }
         queue.push(inner);
     }

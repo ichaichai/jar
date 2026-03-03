@@ -286,7 +286,7 @@ fn run_accumulate_test(path: &str) {
     let expected_output = hash_from_hex(json["output"]["ok"].as_str().unwrap());
 
     let result = process_accumulate(&config, &mut state, &input);
-    let AccumulateOutput::Ok(output_hash) = result;
+    let output_hash = result.hash;
 
     // Compare output hash
     assert_eq!(

@@ -23,11 +23,11 @@ const MINIMUM_GUARANTORS: usize = 2; // Minimum credential count for guarantees
 /// 7. Statistics: π' from block activity
 /// 8. Authorization: α' from ϕ'
 pub fn apply(state: &State, block: &Block) -> Result<State, TransitionError> {
-    apply_with_config(state, block, &Config::full())
+    apply_with_config(state, block, &Config::full(), &[])
 }
 
 /// Apply a block with a specific configuration (for testing with tiny constants).
-pub fn apply_with_config(state: &State, block: &Block, config: &Config) -> Result<State, TransitionError> {
+pub fn apply_with_config(state: &State, block: &Block, config: &Config, opaque_data: &[([u8; 31], Vec<u8>)]) -> Result<State, TransitionError> {
     let header = &block.header;
     let extrinsic = &block.extrinsic;
 
@@ -57,28 +57,31 @@ pub fn apply_with_config(state: &State, block: &Block, config: &Config) -> Resul
     let incoming_reports: Vec<&grey_types::work::WorkReport> = extrinsic.guarantees.iter().map(|g| &g.report).collect();
     process_guarantees(&mut new_state, &extrinsic.guarantees, header.timeslot)?;
 
-    // Step 7: Update recent block history β' (Section 7)
-    // Uses history::update_history which handles:
-    //   - β† correction (fixing last entry's state_root to H_R)
-    //   - MMR append for accumulation belt β_B
-    //   - Computing accumulation_root from MMR super-peak
-    //   - Creating new entry with correct fields
+    // Step 7: Accumulation (Section 12)
+    let (accumulate_root, accumulation_gas_usage) = crate::accumulate::run_accumulation(
+        config,
+        &mut new_state,
+        state.timeslot,
+        available_reports.clone(),
+        opaque_data,
+    );
+
+    // Step 8: Update recent block history β' (Section 7)
     {
         let header_hash = compute_header_hash(header);
         let work_packages: Vec<(Hash, Hash)> = extrinsic.guarantees.iter().map(|g| {
             (g.report.package_spec.package_hash, g.report.package_spec.exports_root)
         }).collect();
-        // No accumulation for now: θ' = [], so M_B([], H_K) = ℍ₀
         let input = crate::history::HistoryInput {
             header_hash,
             parent_state_root: header.state_root,
-            accumulate_root: Hash::ZERO,
+            accumulate_root,
             work_packages,
         };
         crate::history::update_history(&mut new_state.recent_blocks, &input);
     }
 
-    // Step 8: Update validator statistics (Section 13)
+    // Step 9: Update validator statistics (Section 13)
     crate::statistics::update_statistics(
         config,
         &mut new_state.statistics,
@@ -88,13 +91,13 @@ pub fn apply_with_config(state: &State, block: &Block, config: &Config) -> Resul
         extrinsic,
         &incoming_reports,
         &available_reports,
+        &accumulation_gas_usage,
     );
 
-    // Step 9: Process preimages (Section 12.4)
+    // Step 10: Process preimages (Section 12.4)
     process_preimages(&mut new_state, &extrinsic.preimages, header.timeslot);
 
-    // Step 10: Authorization pool rotation (Section 8)
-    // α' depends on φ' (which comes from accumulation — here φ' = φ since no accumulation)
+    // Step 11: Authorization pool rotation (Section 8)
     rotate_auth_pool(&mut new_state, &extrinsic.guarantees, config);
 
     Ok(new_state)

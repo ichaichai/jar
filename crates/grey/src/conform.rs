@@ -417,7 +417,7 @@ impl ConformTarget {
         // Apply state transition
         let parent_opaque = parent_tracked.opaque_data.clone();
 
-        match grey_state::transition::apply_with_config(&parent_tracked.state, &block, &self.config) {
+        match grey_state::transition::apply_with_config(&parent_tracked.state, &block, &self.config, &parent_opaque) {
             Ok(new_state) => {
                 // Compute header hash of the imported block
                 let header_hash = compute_header_hash(&block.header);
@@ -430,6 +430,68 @@ impl ConformTarget {
                 );
                 let state_root = grey_merkle::compute_state_root_from_kvs(&kvs);
                 tracing::info!("Post-block state root: {state_root}");
+
+                // Per-component hash logging for all blocks
+                for (key, val) in &kvs {
+                    let idx = key[0];
+                    let is_simple = key[1..] == [0u8; 30];
+                    if is_simple {
+                        let val_hash = grey_crypto::blake2b_256(val);
+                        tracing::info!(
+                            "  KV C({idx}): {} bytes, hash={val_hash}",
+                            val.len(),
+                        );
+                    }
+                }
+
+                // Targeted debugging for blocks with accumulation
+                if block.header.timeslot >= 5 {
+                    // Log service account and service data keys
+                    for (key, val) in &kvs {
+                        let idx = key[0];
+                        let is_simple = key[1..] == [0u8; 30];
+                        if !is_simple {
+                            let key_hex: String = key[..8].iter().map(|b| format!("{b:02x}")).collect();
+                            let val_hash = grey_crypto::blake2b_256(val);
+                            tracing::info!(
+                                "  KV key={key_hex}...: {} bytes, hash={val_hash}",
+                                val.len(),
+                            );
+                        }
+                    }
+
+                    // Diagnostic: compute state root without C(16) to check if that's the issue
+                    let kvs_no_c16: Vec<_> = kvs.iter()
+                        .filter(|(k, _)| !(k[0] == 16 && k[1..] == [0u8; 30]))
+                        .cloned()
+                        .collect();
+                    let root_no_c16 = grey_merkle::compute_state_root_from_kvs(&kvs_no_c16);
+                    tracing::info!("  Root without C(16): {root_no_c16}");
+
+                    // Also compute without C(14) and C(15)
+                    let kvs_no_accum: Vec<_> = kvs.iter()
+                        .filter(|(k, _)| {
+                            let idx = k[0];
+                            let is_simple = k[1..] == [0u8; 30];
+                            !(is_simple && (idx == 14 || idx == 15 || idx == 16))
+                        })
+                        .cloned()
+                        .collect();
+                    let root_no_accum = grey_merkle::compute_state_root_from_kvs(&kvs_no_accum);
+                    tracing::info!("  Root without C(14,15,16): {root_no_accum}");
+
+                    // Log C(16) raw hex for debugging
+                    if let Some((_, val)) = kvs.iter().find(|(k, _)| k[0] == 16 && k[1..] == [0u8; 30]) {
+                        let hex: String = val.iter().map(|b| format!("{b:02x}")).collect();
+                        tracing::info!("  C(16) raw: {hex}");
+                    }
+
+                    // Log number of KV pairs by category
+                    let n_components = kvs.iter().filter(|(k, _)| k[1..] == [0u8; 30]).count();
+                    let n_svc_accounts = kvs.iter().filter(|(k, _)| k[0] == 255 && k[1..] != [0u8; 30]).count();
+                    let n_svc_data = kvs.iter().filter(|(k, _)| k[0] != 255 && k[1..] != [0u8; 30]).count();
+                    tracing::info!("  KV breakdown: {} components, {} svc accounts, {} svc data", n_components, n_svc_accounts, n_svc_data);
+                }
 
                 // Update ancestry
                 self.ancestry
@@ -476,8 +538,14 @@ impl ConformTarget {
             &self.config,
             &tracked.opaque_data,
         );
+        tracing::info!(
+            "GetState: {} KV pairs, {} opaque entries, {} services",
+            kvs.len(),
+            tracked.opaque_data.len(),
+            tracked.state.services.len()
+        );
 
-        // Encode as State message
+        // Encode as State message (disc + compact(kv_count) + KV pairs, no ancestry)
         let mut msg = Vec::new();
         msg.push(MSG_STATE);
 

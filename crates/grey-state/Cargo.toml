@@ -11,6 +11,7 @@ grey-codec = { workspace = true }
 grey-crypto = { workspace = true }
 grey-pvm = { workspace = true }
 grey-merkle = { workspace = true }
+tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
