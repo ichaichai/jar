@@ -20,6 +20,7 @@ deploy: book
 	git rm -rf --quiet . 2>/dev/null || true && \
 	cp -r $$TMPDIR/. . && \
 	rm -rf $$TMPDIR && \
+	printf '.lake\n_out\n' > .gitignore && \
 	git add -A && \
 	git commit -m "Deploy JAR book from $$COMMIT" && \
 	git push $(REMOTE) $(BRANCH) && \
