@@ -106,7 +106,18 @@ pub fn run_sequential_test(num_blocks: u32) -> Result<SequentialTestResult, Stri
 
     // --- Install a PVM service into genesis state ---
     let service_id: ServiceId = 1000;
-    let pvm_blob = grey_transpiler::assembler::build_sample_service_precise();
+    // Transpile the sample RISC-V service to PVM (or fall back to hand-assembled)
+    let pvm_blob = match std::fs::read(grey_transpiler::SAMPLE_SERVICE_ELF_PATH) {
+        Ok(elf_data) => {
+            tracing::info!("Using transpiled RISC-V service");
+            grey_transpiler::transpile_elf_service(&elf_data)
+                .expect("failed to transpile sample service ELF")
+        }
+        Err(_) => {
+            tracing::info!("Using hand-assembled service (ELF not found)");
+            grey_transpiler::assembler::build_sample_service_precise()
+        }
+    };
     let code_hash = grey_crypto::blake2b_256(&pvm_blob);
     let mut preimage_lookup = BTreeMap::new();
     preimage_lookup.insert(code_hash, pvm_blob);

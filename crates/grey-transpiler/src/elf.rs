@@ -21,6 +21,15 @@ pub struct Elf {
     pub stack_size: u32,
     /// Entry point address.
     pub entry_point: u64,
+    /// Named symbols: (name, address).
+    pub symbols: Vec<(String, u64)>,
+}
+
+impl Elf {
+    /// Look up a symbol address by name.
+    pub fn symbol_address(&self, name: &str) -> Option<u64> {
+        self.symbols.iter().find(|(n, _)| n == name).map(|(_, a)| *a)
+    }
 }
 
 /// A code section from the ELF.
@@ -81,8 +90,9 @@ impl Elf {
         let mut code_sections = Vec::new();
         let mut ro_data = Vec::new();
         let mut rw_data = Vec::new();
+        let mut symbols = Vec::new();
 
-        // Get string table
+        // Get section-name string table
         let strtab = if sh_strndx < sh_count {
             let str_sh = sh_offset + sh_strndx * sh_size;
             let str_off = u32::from_le_bytes([data[str_sh + 16], data[str_sh + 17], data[str_sh + 18], data[str_sh + 19]]) as usize;
@@ -91,6 +101,11 @@ impl Elf {
         } else {
             &[]
         };
+
+        // Track symtab/strtab sections for symbol parsing
+        let mut symtab_off = 0usize;
+        let mut symtab_sz = 0usize;
+        let mut symtab_link = 0usize; // index of associated string table
 
         for i in 0..sh_count {
             let sh = sh_offset + i * sh_size;
@@ -102,6 +117,14 @@ impl Elf {
             let sh_addr = u32::from_le_bytes([data[sh + 12], data[sh + 13], data[sh + 14], data[sh + 15]]) as u64;
             let sh_off = u32::from_le_bytes([data[sh + 16], data[sh + 17], data[sh + 18], data[sh + 19]]) as usize;
             let sh_sz = u32::from_le_bytes([data[sh + 20], data[sh + 21], data[sh + 22], data[sh + 23]]) as usize;
+            let sh_link = u32::from_le_bytes([data[sh + 24], data[sh + 25], data[sh + 26], data[sh + 27]]) as usize;
+
+            // SHT_SYMTAB = 2
+            if sh_type == 2 {
+                symtab_off = sh_off;
+                symtab_sz = sh_sz;
+                symtab_link = sh_link;
+            }
 
             let name = get_string(strtab, name_off);
 
@@ -117,7 +140,6 @@ impl Elf {
                     data: data[sh_off..sh_off + sh_sz].to_vec(),
                 });
             } else if !is_write && !is_exec && sh_off + sh_sz <= data.len() {
-                // Read-only data
                 if name.starts_with(".rodata") || name == ".srodata" {
                     ro_data.extend_from_slice(&data[sh_off..sh_off + sh_sz]);
                 }
@@ -130,6 +152,40 @@ impl Elf {
             }
         }
 
+        // Parse symbol table
+        if symtab_sz > 0 && symtab_link < sh_count {
+            // Get the symbol string table
+            let sym_strtab_sh = sh_offset + symtab_link * sh_size;
+            let sym_strtab_off = u32::from_le_bytes([
+                data[sym_strtab_sh + 16], data[sym_strtab_sh + 17],
+                data[sym_strtab_sh + 18], data[sym_strtab_sh + 19],
+            ]) as usize;
+            let sym_strtab_sz = u32::from_le_bytes([
+                data[sym_strtab_sh + 20], data[sym_strtab_sh + 21],
+                data[sym_strtab_sh + 22], data[sym_strtab_sh + 23],
+            ]) as usize;
+            let sym_strtab = &data[sym_strtab_off..sym_strtab_off + sym_strtab_sz];
+
+            // ELF32 symbol entry is 16 bytes
+            let sym_count = symtab_sz / 16;
+            for j in 0..sym_count {
+                let sym = symtab_off + j * 16;
+                if sym + 16 > data.len() { break; }
+                let st_name = u32::from_le_bytes([data[sym], data[sym + 1], data[sym + 2], data[sym + 3]]) as usize;
+                let st_value = u32::from_le_bytes([data[sym + 4], data[sym + 5], data[sym + 6], data[sym + 7]]) as u64;
+                let st_info = data[sym + 12];
+                // STT_FUNC=2, STT_NOTYPE=0; STB_GLOBAL=1, STB_WEAK=2
+                let st_type = st_info & 0xF;
+                let st_bind = st_info >> 4;
+                if (st_type == 2 || st_type == 0) && (st_bind == 1 || st_bind == 2) && st_value != 0 {
+                    let name = get_string(sym_strtab, st_name);
+                    if !name.is_empty() && !name.starts_with('$') {
+                        symbols.push((name.to_string(), st_value));
+                    }
+                }
+            }
+        }
+
         Ok(Elf {
             is_64bit: false,
             code_sections,
@@ -138,6 +194,7 @@ impl Elf {
             heap_pages: 4,
             stack_size: 4096,
             entry_point,
+            symbols,
         })
     }
 
@@ -215,6 +272,7 @@ impl Elf {
             heap_pages: 4,
             stack_size: 4096,
             entry_point,
+            symbols: vec![], // TODO: ELF64 symbol parsing
         })
     }
 }

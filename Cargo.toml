@@ -14,6 +14,9 @@ members = [
     "crates/grey-network",
     "crates/grey-transpiler",
 ]
+exclude = [
+    "services/sample-service",
+]
 
 [workspace.package]
 version = "0.1.0"

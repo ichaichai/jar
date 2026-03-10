@@ -50,9 +50,13 @@ pub struct TranslationContext {
     /// Whether translating 64-bit RISC-V.
     pub is_64bit: bool,
     /// Map from RISC-V address to PVM code offset.
-    address_map: std::collections::HashMap<u64, u32>,
-    /// Pending branch fixups: (pvm_code_offset, target_rv_address, fixup_size)
+    pub address_map: std::collections::HashMap<u64, u32>,
+    /// Pending branch fixups: (pvm_imm_offset, target_rv_address, fixup_size)
     fixups: Vec<(usize, u64, u8)>,
+    /// Map from fixup imm offset → instruction PC (for PC-relative encoding)
+    fixup_pcs: std::collections::HashMap<usize, u32>,
+    /// Last immediate loaded into t0 (x5) — used for ecall → ecalli translation.
+    last_t0_imm: Option<i32>,
 }
 
 impl TranslationContext {
@@ -64,6 +68,8 @@ impl TranslationContext {
             is_64bit,
             address_map: std::collections::HashMap::new(),
             fixups: Vec::new(),
+            fixup_pcs: std::collections::HashMap::new(),
+            last_t0_imm: None,
         }
     }
 
@@ -193,7 +199,12 @@ impl TranslationContext {
                     0 => {
                         let csr = (inst >> 20) & 0xFFF;
                         match csr {
-                            0 => self.emit_ecalli(0), // ECALL → ecalli 0
+                            0 => {
+                                // ECALL → ecalli N, where N is the last value loaded into t0
+                                let id = self.last_t0_imm.unwrap_or(0) as u32;
+                                self.emit_ecalli(id);
+                                self.last_t0_imm = None;
+                            }
                             1 => self.emit_inst(0),   // EBREAK → trap
                             _ => self.emit_inst(1),   // fence etc → fallthrough
                         }
@@ -239,11 +250,13 @@ impl TranslationContext {
             }),
         };
 
+        let inst_pc = self.code.len() as u32;
         self.emit_inst(pvm_opcode);
         self.emit_data(pvm_rs1 | (pvm_rs2 << 4));
-        // Fixup target offset
+        // Fixup target offset (PC-relative)
         let fixup_pos = self.code.len();
         self.fixups.push((fixup_pos, target, 4));
+        self.fixup_pcs.insert(fixup_pos, inst_pc);
         self.emit_imm32(0); // placeholder
 
         Ok(())
@@ -298,6 +311,29 @@ impl TranslationContext {
     }
 
     fn translate_op_imm(&mut self, funct3: u32, funct7: u32, rd: u8, rs1: u8, imm: i32) -> Result<(), TranspileError> {
+        // Track `li t0, N` (ADDI x5, x0, N) for ecall ID translation
+        if funct3 == 0 && rd == 5 && rs1 == 0 {
+            self.last_t0_imm = Some(imm);
+        }
+
+        // When rs1 = x0 (zero register), treat as loading immediate directly
+        // because PVM has no zero register — x0 maps to RA which is NOT zero.
+        if rs1 == 0 {
+            match funct3 {
+                0 => return self.emit_load_imm(rd, imm as i64), // li rd, imm
+                2 => { // SLTI rd, x0, imm → rd = (0 < imm) ? 1 : 0
+                    return self.emit_load_imm(rd, if 0 < imm { 1 } else { 0 });
+                }
+                3 => { // SLTIU rd, x0, imm → rd = (0 < imm unsigned) ? 1 : 0
+                    return self.emit_load_imm(rd, if imm != 0 { 1 } else { 0 });
+                }
+                4 => return self.emit_load_imm(rd, imm as i64), // XORI rd, x0, imm = imm
+                6 => return self.emit_load_imm(rd, imm as i64), // ORI rd, x0, imm = imm
+                7 => return self.emit_load_imm(rd, 0), // ANDI rd, x0, imm = 0
+                _ => {} // shifts with x0 → just 0, but rare
+            }
+        }
+
         let pvm_rd = self.require_reg(rd)?;
         let pvm_rs1 = self.require_reg(rs1)?;
 
@@ -507,9 +543,11 @@ impl TranslationContext {
     }
 
     fn emit_jump(&mut self, target: u64) {
+        let inst_pc = self.code.len() as u32;
         self.emit_inst(40); // jump
         let fixup_pos = self.code.len();
         self.fixups.push((fixup_pos, target, 4));
+        self.fixup_pcs.insert(fixup_pos, inst_pc);
         self.emit_imm32(0); // placeholder
     }
 
@@ -534,7 +572,13 @@ impl TranslationContext {
     fn apply_fixups(&mut self) {
         for (pvm_offset, rv_target, size) in self.fixups.drain(..).collect::<Vec<_>>() {
             if let Some(&pvm_target) = self.address_map.get(&rv_target) {
-                let bytes = pvm_target.to_le_bytes();
+                // PVM branch/jump offsets are PC-relative: target = pc + imm
+                // The instruction opcode is at pvm_offset - 1 (for branches: pvm_offset - 2)
+                // For jump (1 byte opcode + 4 byte imm): pc = pvm_offset - 1
+                // For branch (1 byte opcode + 1 byte regs + 4 byte imm): pc = pvm_offset - 2
+                let inst_pc = self.fixup_pcs.get(&pvm_offset).copied().unwrap_or(pvm_offset as u32 - 1);
+                let relative = (pvm_target as i64 - inst_pc as i64) as i32;
+                let bytes = relative.to_le_bytes();
                 for i in 0..size as usize {
                     self.code[pvm_offset + i] = bytes[i];
                 }
