@@ -47,6 +47,12 @@ pub struct JitContext {
     /// Basic block starts length (offset 160).
     pub bb_len: u32,
     _pad1: u32,
+    /// Entry PC for re-entry after host calls (offset 168).
+    /// 0 = start from beginning, otherwise jump to this basic block.
+    pub entry_pc: u32,
+    /// Current PC when execution stopped (offset 172).
+    /// Updated on ecalli/djump exits.
+    pub pc: u32,
 }
 
 /// Compiled native code buffer (mmap'd as executable).
@@ -112,69 +118,142 @@ impl Drop for NativeCode {
 // But the helper doesn't have ctx... Let's restructure.
 // Pass ctx as first arg to everything.
 
-/// Memory read helper — reads u8, returns value or sets fault in ctx.
-extern "sysv64" fn mem_read_u8(memory: *const Memory, addr: u32) -> u64 {
-    let mem = unsafe { &*memory };
+/// Memory read helper — reads u8 via ctx. Sets exit_reason on page fault.
+extern "sysv64" fn mem_read_u8(ctx: *mut JitContext, addr: u32) -> u64 {
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &*ctx.memory };
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_read_u8: addr=0x{:08x}", addr);
+    }
     match mem.read_u8(addr) {
         Some(v) => v as u64,
-        None => u64::MAX, // sentinel — caller checks
+        None => {
+            if std::env::var("GREY_PVM_DEBUG").is_ok() {
+                eprintln!("  mem_read_u8: PAGE FAULT at 0x{:08x}", addr);
+            }
+            ctx.exit_reason = 3; // EXIT_PAGE_FAULT
+            ctx.exit_arg = addr;
+            0
+        }
     }
 }
 
-extern "sysv64" fn mem_read_u16(memory: *const Memory, addr: u32) -> u64 {
-    let mem = unsafe { &*memory };
+extern "sysv64" fn mem_read_u16(ctx: *mut JitContext, addr: u32) -> u64 {
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &*ctx.memory };
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_read_u16: addr=0x{:08x}", addr);
+    }
     match mem.read_u16_le(addr) {
         Some(v) => v as u64,
-        None => u64::MAX,
+        None => {
+            if std::env::var("GREY_PVM_DEBUG").is_ok() {
+                eprintln!("  mem_read_u16: PAGE FAULT at 0x{:08x}", addr);
+            }
+            ctx.exit_reason = 3;
+            ctx.exit_arg = addr;
+            0
+        }
     }
 }
 
-extern "sysv64" fn mem_read_u32(memory: *const Memory, addr: u32) -> u64 {
-    let mem = unsafe { &*memory };
+extern "sysv64" fn mem_read_u32(ctx: *mut JitContext, addr: u32) -> u64 {
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &*ctx.memory };
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_read_u32: addr=0x{:08x}", addr);
+    }
     match mem.read_u32_le(addr) {
         Some(v) => v as u64,
-        None => u64::MAX,
+        None => {
+            if std::env::var("GREY_PVM_DEBUG").is_ok() {
+                eprintln!("  mem_read_u32: PAGE FAULT at 0x{:08x}", addr);
+            }
+            ctx.exit_reason = 3;
+            ctx.exit_arg = addr;
+            0
+        }
     }
 }
 
-extern "sysv64" fn mem_read_u64_fn(memory: *const Memory, addr: u32) -> u64 {
-    let mem = unsafe { &*memory };
+extern "sysv64" fn mem_read_u64_fn(ctx: *mut JitContext, addr: u32) -> u64 {
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &*ctx.memory };
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_read_u64: addr=0x{:08x}", addr);
+    }
     match mem.read_u64_le(addr) {
         Some(v) => v,
-        None => u64::MAX,
+        None => {
+            if std::env::var("GREY_PVM_DEBUG").is_ok() {
+                eprintln!("  mem_read_u64: PAGE FAULT at 0x{:08x}", addr);
+            }
+            ctx.exit_reason = 3;
+            ctx.exit_arg = addr;
+            0
+        }
     }
 }
 
-/// Memory write helper — writes value, returns 0 on success or fault page addr.
-extern "sysv64" fn mem_write_u8(memory: *mut Memory, addr: u32, value: u64) -> u64 {
-    let mem = unsafe { &mut *memory };
+/// Memory write helper — writes value via ctx. Sets exit_reason on page fault.
+extern "sysv64" fn mem_write_u8(ctx: *mut JitContext, addr: u32, value: u64) -> u64 {
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &mut *ctx.memory };
     match mem.write_u8(addr, value as u8) {
         crate::memory::MemoryAccess::Ok => 0,
-        crate::memory::MemoryAccess::PageFault(a) => a as u64,
+        crate::memory::MemoryAccess::PageFault(a) => {
+            ctx.exit_reason = 3;
+            ctx.exit_arg = a;
+            1
+        }
     }
 }
 
-extern "sysv64" fn mem_write_u16(memory: *mut Memory, addr: u32, value: u64) -> u64 {
-    let mem = unsafe { &mut *memory };
+extern "sysv64" fn mem_write_u16(ctx: *mut JitContext, addr: u32, value: u64) -> u64 {
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_write_u16: addr=0x{:08x}", addr);
+    }
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &mut *ctx.memory };
     match mem.write_u16_le(addr, value as u16) {
         crate::memory::MemoryAccess::Ok => 0,
-        crate::memory::MemoryAccess::PageFault(a) => a as u64,
+        crate::memory::MemoryAccess::PageFault(a) => {
+            ctx.exit_reason = 3;
+            ctx.exit_arg = a;
+            1
+        }
     }
 }
 
-extern "sysv64" fn mem_write_u32(memory: *mut Memory, addr: u32, value: u64) -> u64 {
-    let mem = unsafe { &mut *memory };
+extern "sysv64" fn mem_write_u32(ctx: *mut JitContext, addr: u32, value: u64) -> u64 {
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_write_u32: addr=0x{:08x}", addr);
+    }
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &mut *ctx.memory };
     match mem.write_u32_le(addr, value as u32) {
         crate::memory::MemoryAccess::Ok => 0,
-        crate::memory::MemoryAccess::PageFault(a) => a as u64,
+        crate::memory::MemoryAccess::PageFault(a) => {
+            ctx.exit_reason = 3;
+            ctx.exit_arg = a;
+            1
+        }
     }
 }
 
-extern "sysv64" fn mem_write_u64_fn(memory: *mut Memory, addr: u32, value: u64) -> u64 {
-    let mem = unsafe { &mut *memory };
+extern "sysv64" fn mem_write_u64_fn(ctx: *mut JitContext, addr: u32, value: u64) -> u64 {
+    if std::env::var("GREY_PVM_DEBUG").is_ok() {
+        eprintln!("  mem_write_u64: addr=0x{:08x}", addr);
+    }
+    let ctx = unsafe { &mut *ctx };
+    let mem = unsafe { &mut *ctx.memory };
     match mem.write_u64_le(addr, value) {
         crate::memory::MemoryAccess::Ok => 0,
-        crate::memory::MemoryAccess::PageFault(a) => a as u64,
+        crate::memory::MemoryAccess::PageFault(a) => {
+            ctx.exit_reason = 3;
+            ctx.exit_arg = a;
+            1
+        }
     }
 }
 
@@ -182,23 +261,35 @@ extern "sysv64" fn mem_write_u64_fn(memory: *mut Memory, addr: u32, value: u64) 
 extern "sysv64" fn sbrk_helper(ctx: *mut JitContext, size: u64) -> u64 {
     let ctx = unsafe { &mut *ctx };
     let mem = unsafe { &mut *ctx.memory };
+    let ps = grey_types::constants::PVM_PAGE_SIZE;
 
+    if size > u32::MAX as u64 {
+        return 0;
+    }
     if size == 0 {
         // Query: return current heap top
         return ctx.heap_top as u64;
     }
 
-    let pages = size as u32;
-    let new_top = ctx.heap_top.wrapping_add(pages * grey_types::constants::PVM_PAGE_SIZE);
+    let size_u32 = size as u32;
+    let old_top = ctx.heap_top;
+    let new_top = (old_top as u64) + (size_u32 as u64);
 
-    // Map pages
-    let start_page = ctx.heap_top / grey_types::constants::PVM_PAGE_SIZE;
-    for p in 0..pages {
-        mem.map_page(start_page + p, crate::memory::PageAccess::ReadWrite);
+    if new_top > (u32::MAX as u64) + 1 {
+        return 0;
     }
 
-    let old_top = ctx.heap_top;
-    ctx.heap_top = new_top;
+    let new_top_u32 = new_top as u32;
+    // Map any pages in [old_top, new_top) that aren't mapped yet
+    let start_page = old_top / ps;
+    let end_page = if new_top_u32 == 0 { u32::MAX / ps } else { (new_top_u32 - 1) / ps };
+    for p in start_page..=end_page {
+        if !mem.is_page_mapped(p) {
+            mem.map_page(p, crate::memory::PageAccess::ReadWrite);
+        }
+    }
+
+    ctx.heap_top = new_top_u32;
     old_top as u64
 }
 
@@ -230,7 +321,10 @@ impl RecompiledPvm {
         memory: Memory,
         gas: Gas,
     ) -> Result<Self, String> {
-        let basic_block_starts = crate::vm::compute_basic_block_starts(&code, &bitmask);
+        // For the recompiler, treat every instruction start as a basic block start.
+        // This allows re-entry at any PC (e.g., PC=5 for accumulate, PC=10 for on-transfer).
+        // The cost is slightly more frequent gas checks (per-instruction rather than per-block).
+        let basic_block_starts: Vec<bool> = bitmask.iter().map(|&b| b == 1).collect();
 
         // Allocate memory on the heap so we have a stable pointer
         let memory = Box::new(memory);
@@ -250,11 +344,20 @@ impl RecompiledPvm {
             bb_starts: std::ptr::null(),
             bb_len: basic_block_starts.len() as u32,
             _pad1: 0,
+            entry_pc: 0,
+            pc: 0,
         });
 
         // Set up pointers (will be updated after Box stabilizes)
         ctx.jt_ptr = jump_table.as_ptr();
         ctx.bb_starts = basic_block_starts.as_ptr() as *const u8;
+
+        // Debug helper addresses
+        if std::env::var("GREY_PVM_DEBUG").is_ok() {
+            eprintln!("  write_u8 fn=0x{:x}", mem_write_u8 as usize);
+            eprintln!("  write_u32 fn=0x{:x}", mem_write_u32 as usize);
+            eprintln!("  read_u8 fn=0x{:x}", mem_read_u8 as usize);
+        }
 
         // Compile
         let helpers = HelperFns {
@@ -275,6 +378,14 @@ impl RecompiledPvm {
             helpers,
         );
         let native = compiler.compile(&code, &bitmask);
+
+        // Dump native code for debugging if requested
+        if std::env::var("GREY_PVM_DEBUG").is_ok() {
+            let _ = std::fs::write("/tmp/pvm_native.bin", &native);
+            eprintln!("Wrote {} bytes of native code to /tmp/pvm_native.bin", native.len());
+            eprintln!("  basic_block_starts count: {}", basic_block_starts.iter().filter(|&&b| b).count());
+        }
+
         let native_code = NativeCode::new(&native)?;
 
         Ok(Self {
@@ -288,54 +399,109 @@ impl RecompiledPvm {
         })
     }
 
-    /// Run the compiled code to completion.
-    /// Returns (exit_reason, gas_remaining).
-    pub fn run(&mut self) -> (ExitReason, u64) {
-        // Execute native code
-        let entry = self.native_code.entry();
-        let ctx_ptr = &mut *self.ctx as *mut JitContext;
-
-        unsafe {
-            entry(ctx_ptr);
-        }
-
-        // Read exit reason from context
-        let exit = match self.ctx.exit_reason {
-            0 => ExitReason::Halt,      // EXIT_HALT
-            1 => ExitReason::Panic,     // EXIT_PANIC
-            2 => ExitReason::OutOfGas,  // EXIT_OOG
-            3 => ExitReason::PageFault(self.ctx.exit_arg), // EXIT_PAGE_FAULT
-            4 => ExitReason::HostCall(self.ctx.exit_arg),  // EXIT_HOST_CALL
-            5 => {
-                // Dynamic jump — handle in software
-                // exit_arg has the jump table index
-                let idx = self.ctx.exit_arg;
-                self.handle_djump(idx)
+    /// Run the compiled code until exit (halt, panic, OOG, page fault, or host call).
+    /// Returns the exit reason. For host calls, the caller should handle the call,
+    /// modify registers/memory as needed, then call run() again (entry_pc is set
+    /// automatically for re-entry).
+    pub fn run(&mut self) -> ExitReason {
+        let debug = std::env::var("GREY_PVM_DEBUG").is_ok();
+        loop {
+            if debug {
+                eprintln!("recompiler::run() entry_pc={} gas={} heap_base=0x{:08x} heap_top=0x{:08x}",
+                    self.ctx.entry_pc, self.ctx.gas, self.ctx.heap_base, self.ctx.heap_top);
+                eprintln!("  initial regs: {:?}", &self.ctx.regs);
             }
-            _ => ExitReason::Panic,
-        };
+            // Execute native code
+            let entry = self.native_code.entry();
+            let ctx_ptr = &mut *self.ctx as *mut JitContext;
 
-        let gas_remaining = self.ctx.gas.max(0) as u64;
-        (exit, gas_remaining)
+            // Set sentinel to verify prologue clears it
+            if debug {
+                self.ctx.exit_reason = 0xDEAD;
+            }
+
+            unsafe {
+                entry(ctx_ptr);
+            }
+
+            if debug {
+                // Dump raw bytes around exit_reason to verify layout
+                let ctx_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        ctx_ptr as *const u8,
+                        176, // size of JitContext
+                    )
+                };
+                eprintln!("recompiler::run() exit_reason={} exit_arg={} gas={} pc={}",
+                    self.ctx.exit_reason, self.ctx.exit_arg, self.ctx.gas, self.ctx.pc);
+                eprintln!("  regs: {:?}", &self.ctx.regs);
+                // Show bytes at offset 104-135 (gas through heap_top)
+                eprintln!("  ctx[104..136] = {:02x?}", &ctx_bytes[104..136]);
+                eprintln!("  ctx[120..128] = {:02x?} (exit_reason + exit_arg)", &ctx_bytes[120..128]);
+            }
+
+            // Read exit reason from context
+            match self.ctx.exit_reason {
+                0 => return ExitReason::Halt,
+                1 => return ExitReason::Panic,
+                2 => {
+                    // Set entry_pc for potential re-entry (e.g. compare mode)
+                    self.ctx.entry_pc = self.ctx.pc;
+                    return ExitReason::OutOfGas;
+                }
+                3 => return ExitReason::PageFault(self.ctx.exit_arg),
+                4 => {
+                    // Host call — set entry_pc for re-entry at the next instruction
+                    self.ctx.entry_pc = self.ctx.pc;
+                    return ExitReason::HostCall(self.ctx.exit_arg);
+                }
+                5 => {
+                    // Dynamic jump — resolve and re-enter
+                    let idx = self.ctx.exit_arg;
+                    if debug {
+                        eprintln!("recompiler::run() DJUMP idx={} jt_len={} pc={}",
+                            idx, self.jump_table.len(), self.ctx.pc);
+                    }
+                    if let Some(target) = self.resolve_djump(idx) {
+                        if debug {
+                            eprintln!("  resolved to target PC={}", target);
+                        }
+                        self.ctx.entry_pc = target;
+                        // Continue the loop to re-enter native code at target
+                        continue;
+                    } else {
+                        if debug {
+                            if (idx as usize) < self.jump_table.len() {
+                                let jt_target = self.jump_table[idx as usize];
+                                eprintln!("  DJUMP FAILED: idx={} jt[idx]={} bb_starts_len={} is_bb={}",
+                                    idx, jt_target, self.basic_block_starts.len(),
+                                    if (jt_target as usize) < self.basic_block_starts.len() {
+                                        self.basic_block_starts[jt_target as usize]
+                                    } else { false });
+                            } else {
+                                eprintln!("  DJUMP FAILED: idx={} out of bounds (jt_len={})", idx, self.jump_table.len());
+                            }
+                        }
+                        return ExitReason::Panic;
+                    }
+                }
+                _ => return ExitReason::Panic,
+            }
+        }
     }
 
-    /// Handle a dynamic jump that the compiled code couldn't resolve.
-    fn handle_djump(&mut self, idx: u32) -> ExitReason {
-        // idx = addr/2 - 1 (already computed by codegen)
+    /// Resolve a dynamic jump target from jump table index.
+    fn resolve_djump(&self, idx: u32) -> Option<u32> {
         if idx as usize >= self.jump_table.len() {
-            return ExitReason::Panic;
+            return None;
         }
         let target = self.jump_table[idx as usize];
         if (target as usize) < self.basic_block_starts.len()
             && self.basic_block_starts[target as usize]
         {
-            // Valid target — but we can't jump there in native code easily.
-            // For now, return Panic. A full implementation would re-enter
-            // native code at the target PC.
-            // TODO: implement re-entry at target PC
-            ExitReason::Panic
+            Some(target)
         } else {
-            ExitReason::Panic
+            None
         }
     }
 
@@ -362,12 +528,20 @@ impl RecompiledPvm {
         unsafe { &mut *self.ctx.memory }
     }
 
-    /// Set the program counter (for re-entry after host calls).
-    pub fn set_pc(&mut self, _pc: u32) {
-        // In the recompiled model, we don't have a PC in the traditional sense.
-        // The native code runs from beginning. For host-call re-entry, we'd need
-        // to support re-entering at a specific basic block.
-        // TODO: implement PC-based re-entry
+    /// Get the program counter (last known PC on exit).
+    pub fn pc(&self) -> u32 {
+        self.ctx.pc
+    }
+
+    /// Set the program counter for re-entry.
+    pub fn set_pc(&mut self, pc: u32) {
+        self.ctx.entry_pc = pc;
+        self.ctx.pc = pc;
+    }
+
+    /// Set gas.
+    pub fn set_gas(&mut self, gas: Gas) {
+        self.ctx.gas = gas as i64;
     }
 }
 
@@ -390,21 +564,27 @@ pub fn initialize_program_recompiled(
     let pvm = crate::program::initialize_program(blob, arguments, gas)?;
 
     // Create recompiled version from the interpreter's parsed state
-    RecompiledPvm::new(
+    let mut rpvm = RecompiledPvm::new(
         pvm.code.clone(),
         pvm.bitmask.clone(),
         pvm.jump_table.clone(),
         pvm.registers,
         pvm.memory.clone(),
         pvm.gas,
-    ).ok()
+    ).ok()?;
+
+    // Transfer heap state from interpreter
+    rpvm.ctx.heap_base = pvm.heap_base;
+    rpvm.ctx.heap_top = pvm.heap_top;
+
+    Some(rpvm)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::PageAccess;
-    use codegen::{CTX_REGS, CTX_GAS, CTX_EXIT_REASON, CTX_EXIT_ARG};
+    use codegen::{CTX_REGS, CTX_GAS, CTX_EXIT_REASON, CTX_EXIT_ARG, CTX_ENTRY_PC, CTX_PC};
 
     #[test]
     fn test_jit_context_layout() {
@@ -423,6 +603,8 @@ mod tests {
             bb_starts: std::ptr::null(),
             bb_len: 0,
             _pad1: 0,
+            entry_pc: 0,
+            pc: 0,
         };
         let base = &ctx as *const JitContext as usize;
 
@@ -430,11 +612,12 @@ mod tests {
         assert_eq!(&ctx.gas as *const _ as usize - base, CTX_GAS as usize);
         assert_eq!(&ctx.exit_reason as *const _ as usize - base, CTX_EXIT_REASON as usize);
         assert_eq!(&ctx.exit_arg as *const _ as usize - base, CTX_EXIT_ARG as usize);
+        assert_eq!(&ctx.entry_pc as *const _ as usize - base, CTX_ENTRY_PC as usize);
+        assert_eq!(&ctx.pc as *const _ as usize - base, CTX_PC as usize);
     }
 
     #[test]
     fn test_recompile_trap() {
-        // Simple program: trap (opcode 0)
         let code = vec![0u8]; // trap
         let bitmask = vec![1u8];
         let registers = [0u64; 13];
@@ -442,14 +625,12 @@ mod tests {
 
         let mut pvm = RecompiledPvm::new(code, bitmask, vec![], registers, memory, 1000)
             .expect("compilation should succeed");
-        let (exit, _gas) = pvm.run();
+        let exit = pvm.run();
         assert_eq!(exit, ExitReason::Panic);
     }
 
     #[test]
     fn test_recompile_ecalli() {
-        // Program: ecalli 42
-        // ecalli = opcode 10, imm = 42 (1 byte)
         let code = vec![10, 42]; // ecalli 42
         let bitmask = vec![1, 0];
         let registers = [0u64; 13];
@@ -457,32 +638,26 @@ mod tests {
 
         let mut pvm = RecompiledPvm::new(code, bitmask, vec![], registers, memory, 1000)
             .expect("compilation should succeed");
-        let (exit, _gas) = pvm.run();
+        let exit = pvm.run();
         assert_eq!(exit, ExitReason::HostCall(42));
     }
 
     #[test]
     fn test_recompile_load_imm() {
-        // Program: load_imm φ[0], 123; trap
-        // load_imm = opcode 51, reg_byte = 0 (φ[0]), imm = 123
         let code = vec![51, 0, 123, 0]; // load_imm φ[0], 123; then trap
-        let bitmask = vec![1, 0, 0, 1]; // two instructions: [51,0,123] and [0]
+        let bitmask = vec![1, 0, 0, 1];
         let registers = [0u64; 13];
         let memory = Memory::new();
 
         let mut pvm = RecompiledPvm::new(code, bitmask, vec![], registers, memory, 1000)
             .expect("compilation should succeed");
-        let (exit, _gas) = pvm.run();
-        // After load_imm, registers[0] should be 123
+        let exit = pvm.run();
         assert_eq!(pvm.registers()[0], 123);
-        // Then trap
         assert_eq!(exit, ExitReason::Panic);
     }
 
     #[test]
     fn test_recompile_add64() {
-        // load_imm φ[0], 10; load_imm φ[1], 20; add64 φ[2] = φ[0] + φ[1]; ecalli 0
-        // add64 = opcode 200, reg_byte = 0|(1<<4) = 0x10, rd = 2
         let code = vec![
             51, 0, 10,     // load_imm φ[0], 10
             51, 1, 20,     // load_imm φ[1], 20
@@ -495,14 +670,13 @@ mod tests {
 
         let mut pvm = RecompiledPvm::new(code, bitmask, vec![], registers, memory, 1000)
             .expect("compilation should succeed");
-        let (exit, _gas) = pvm.run();
+        let exit = pvm.run();
         assert_eq!(pvm.registers()[2], 30);
         assert_eq!(exit, ExitReason::HostCall(0));
     }
 
     #[test]
     fn test_recompile_out_of_gas() {
-        // load_imm with only 0 gas
         let code = vec![51, 0, 42];
         let bitmask = vec![1, 0, 0];
         let registers = [0u64; 13];
@@ -510,7 +684,115 @@ mod tests {
 
         let mut pvm = RecompiledPvm::new(code, bitmask, vec![], registers, memory, 0)
             .expect("compilation should succeed");
-        let (exit, _gas) = pvm.run();
+        let exit = pvm.run();
         assert_eq!(exit, ExitReason::OutOfGas);
+    }
+
+    #[test]
+    #[ignore] // Requires /tmp/test_code_blob.bin — used for manual debugging only
+    fn test_compare_interpreter_recompiler() {
+        // Load the test code blob
+        let blob = match std::fs::read("/tmp/test_code_blob.bin") {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("Skipping comparison test: /tmp/test_code_blob.bin not found");
+                return;
+            }
+        };
+        let args = &[0u8, 0, 0, 0]; // 4-byte dummy args
+        let gas = 900_000u64;
+
+        // Initialize interpreter
+        let mut interp = crate::program::initialize_program(&blob, args, gas)
+            .expect("interpreter init failed");
+        interp.pc = 5;
+
+        // Initialize recompiler
+        let mut recomp = initialize_program_recompiled(&blob, args, gas)
+            .expect("recompiler init failed");
+        recomp.set_pc(5);
+
+        // Run both until first host call and compare
+        let mut step = 0;
+        loop {
+            step += 1;
+            let interp_exit = interp.run();
+            let recomp_exit = recomp.run();
+
+            let interp_exit_clone = interp_exit.0.clone();
+            let recomp_gas = recomp.gas();
+            let interp_gas = interp.gas;
+
+            eprintln!("Step {}: interp_exit={:?} recomp_exit={:?}", step, interp_exit_clone, recomp_exit);
+            eprintln!("  interp: gas={} pc={} regs={:?}", interp_gas, interp.pc, &interp.registers);
+            eprintln!("  recomp: gas={} pc={} regs={:?}", recomp_gas, recomp.pc(), recomp.registers());
+
+            // Check for mismatch and print trace if found
+            let gas_match = interp_gas == recomp_gas;
+            let exit_match = interp_exit_clone == recomp_exit;
+            let reg_match = (0..13).all(|i| interp.registers[i] == recomp.registers()[i]);
+
+            if !gas_match || !exit_match || !reg_match {
+                // Print interpreter trace before panicking
+                let trace = &interp.pc_trace;
+                eprintln!("Interpreter trace (first 100 PCs from tracing start):");
+                for (i, &(pc, op)) in trace.iter().take(165).enumerate() {
+                    let opname = crate::instruction::Opcode::from_byte(op)
+                        .map(|o| format!("{:?}", o))
+                        .unwrap_or_else(|| format!("?{}", op));
+                    eprintln!("  [{:3}] pc={:5} op={}", i, pc, opname);
+                }
+                if !gas_match {
+                    panic!("Gas mismatch at step {}: interp={} recomp={}", step, interp_gas, recomp_gas);
+                }
+                if !exit_match {
+                    panic!("Exit mismatch at step {}: interp={:?} recomp={:?}", step, interp_exit_clone, recomp_exit);
+                }
+                for i in 0..13 {
+                    if interp.registers[i] != recomp.registers()[i] {
+                        panic!("Register φ[{}] mismatch at step {}: interp=0x{:x} recomp=0x{:x}",
+                            i, step, interp.registers[i], recomp.registers()[i]);
+                    }
+                }
+            }
+
+            // After step 2, print interpreter trace
+            if step == 3 {
+                let trace = &interp.pc_trace;
+                eprintln!("Interpreter trace (first 50 PCs after step 2):");
+                for (i, &(pc, op)) in trace.iter().take(50).enumerate() {
+                    let opname = crate::instruction::Opcode::from_byte(op)
+                        .map(|o| format!("{:?}", o))
+                        .unwrap_or_else(|| format!("?{}", op));
+                    eprintln!("  [{:3}] pc={:5} op={}", i, pc, opname);
+                }
+            }
+
+            match interp_exit_clone {
+                ExitReason::Halt | ExitReason::Panic | ExitReason::OutOfGas | ExitReason::PageFault(_) => {
+                    eprintln!("Both exited with {:?} after {} steps", interp_exit_clone, step);
+                    break;
+                }
+                ExitReason::HostCall(id) => {
+                    // Simulate a simple host call: just set ω7 = WHAT (error)
+                    // and continue
+                    let what = u64::MAX - 2;
+                    interp.registers[7] = what;
+                    recomp.registers_mut()[7] = what;
+                    if id == 0 {
+                        // gas host call — return remaining gas
+                        interp.registers[7] = interp.gas;
+                        recomp.registers_mut()[7] = recomp.gas();
+                    }
+                    // Enable tracing to help debug divergences
+                    interp.tracing_enabled = true;
+                }
+            }
+
+            if step > 100 {
+                eprintln!("Reached 100 steps, stopping comparison");
+                break;
+            }
+        }
     }
 }

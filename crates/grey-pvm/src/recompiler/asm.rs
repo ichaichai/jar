@@ -232,11 +232,27 @@ impl Assembler {
         self.emit_u32(imm);
     }
 
+    /// mov r32, [base + disp32] — zero-extending 32-bit load
+    pub fn mov_load32(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.rex_opt(dst, base);
+        self.emit(0x8B);
+        self.modrm_mem_disp32(dst, base);
+        self.emit_i32(disp);
+    }
+
     /// mov r64, [base + disp32]
     pub fn mov_load64(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.rex_w(dst, base);
         self.emit(0x8B);
         self.modrm_mem_disp32(dst, base);
+        self.emit_i32(disp);
+    }
+
+    /// mov dword [base + disp32], r32 — 32-bit store
+    pub fn mov_store32(&mut self, base: Reg, disp: i32, src: Reg) {
+        self.rex_opt(src, base);
+        self.emit(0x89);
+        self.modrm_mem_disp32(src, base);
         self.emit_i32(disp);
     }
 
@@ -316,6 +332,7 @@ impl Assembler {
 
     pub fn add_ri32(&mut self, dst: Reg, imm: i32) { self.alu_ri32(0, dst, imm); }
     pub fn sub_ri32(&mut self, dst: Reg, imm: i32) { self.alu_ri32(5, dst, imm); }
+    pub fn cmp_ri32(&mut self, a: Reg, imm: i32) { self.alu_ri32(7, a, imm); }
 
     // -- IMUL --
 
