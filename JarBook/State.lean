@@ -3,19 +3,11 @@ import Jar.State
 
 open Verso.Genre Manual
 
-#doc (Manual) "State and Transitions" =>
+set_option verso.docstring.allowMissing true
 
-The block-level state transition function `Y(sigma, B) = sigma'` (GP eq 4.1).
+#doc (Manual) "State Transition" =>
 
-# State Structure
-
-{docstring Jar.State}
-
-{docstring Jar.RecentHistory}
-
-{docstring Jar.RecentBlockInfo}
-
-{docstring Jar.ActivityStatistics}
+The block-level state transition function `Υ(σ, B) = σ'` (GP eq 4.1).
 
 # Timekeeping
 
@@ -23,13 +15,65 @@ The block-level state transition function `Y(sigma, B) = sigma'` (GP eq 4.1).
 
 {docstring Jar.epochIndex}
 
+{docstring Jar.epochSlot}
+
 {docstring Jar.isEpochChange}
 
-# Header Validation (section 5)
+# Header Validation (§5)
 
 {docstring Jar.validateHeader}
 
 {docstring Jar.validateExtrinsic}
+
+# Recent History (§4.2)
+
+{docstring Jar.updateParentStateRoot}
+
+{docstring Jar.computeAccOutputRoot}
+
+{docstring Jar.collectReportedPackages}
+
+{docstring Jar.updateRecentHistory}
+
+# Entropy (§6.3)
+
+{docstring Jar.updateEntropy}
+
+# Validator Management (§6)
+
+{docstring Jar.filterOffenders}
+
+{docstring Jar.updateActiveValidators}
+
+{docstring Jar.updatePreviousValidators}
+
+# Judgments (§10)
+
+{docstring Jar.updateJudgments}
+
+# Reports (§11)
+
+{docstring Jar.reportsPostJudgment}
+
+{docstring Jar.reportsPostAssurance}
+
+{docstring Jar.reportsPostGuarantees}
+
+# Authorization Pool
+
+{docstring Jar.updateAuthPool}
+
+# Accumulation (§12)
+
+{docstring Jar.performAccumulation}
+
+# Preimages (§12.7)
+
+{docstring Jar.integratePreimages}
+
+# Statistics (§13)
+
+{docstring Jar.updateStatistics}
 
 # State Transition
 
