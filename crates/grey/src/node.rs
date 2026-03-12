@@ -11,10 +11,12 @@ use grey_codec::header_codec::compute_header_hash;
 use grey_consensus::authoring;
 use grey_consensus::genesis::ValidatorSecrets;
 use grey_network::service::{NetworkCommand, NetworkConfig, NetworkEvent};
+use grey_store::Store;
 use grey_types::config::Config;
 use grey_types::header::Block;
 use grey_types::state::State;
 use grey_types::{BandersnatchPublicKey, Hash, Timeslot};
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
@@ -31,6 +33,10 @@ pub struct NodeConfig {
     /// Base timeslot offset (Unix seconds at timeslot 0).
     /// For test networks, we use the current time.
     pub genesis_time: u64,
+    /// Database path for persistent storage.
+    pub db_path: String,
+    /// JSON-RPC server port (0 to disable).
+    pub rpc_port: u16,
 }
 
 /// Finality tracker: simplified finality (finalize after N block depth).
@@ -67,6 +73,12 @@ impl FinalityTracker {
 pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let protocol = &config.protocol_config;
 
+    // Open persistent store
+    let db_path = format!("{}/node-{}.redb", config.db_path, config.validator_index);
+    std::fs::create_dir_all(&config.db_path)?;
+    let store_raw = Store::open(&db_path)?;
+    tracing::info!("Opened database at {}", db_path);
+
     // Create genesis state and validator secrets
     let (genesis_state, all_secrets) = grey_consensus::genesis::create_genesis(protocol);
 
@@ -101,6 +113,24 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
         validator_index: config.validator_index,
     })
     .await?;
+
+    // Start RPC server
+    let store = std::sync::Arc::new(store_raw);
+    let mut rpc_rx = None;
+    let rpc_state;
+    if config.rpc_port > 0 {
+        let (state_arc, rx) = grey_rpc::create_rpc_channel(
+            store.clone(),
+            config.protocol_config.clone(),
+            config.validator_index,
+        );
+        rpc_state = Some(state_arc.clone());
+        let (_addr, _handle) =
+            grey_rpc::start_rpc_server(config.rpc_port, state_arc).await?;
+        rpc_rx = Some(rx);
+    } else {
+        rpc_state = None;
+    }
 
     // Initialize state
     let mut state = genesis_state;
@@ -172,6 +202,14 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 blocks_authored += 1;
                                 last_authored_slot = current_slot;
 
+                                // Persist block and metadata
+                                if let Err(e) = store.put_block(&block) {
+                                    tracing::error!("Failed to persist block: {}", e);
+                                }
+                                if let Err(e) = store.set_head(&header_hash, current_slot) {
+                                    tracing::error!("Failed to update head: {}", e);
+                                }
+
                                 tracing::info!(
                                     "Validator {} authored block #{} at slot {}, hash=0x{}",
                                     config.validator_index,
@@ -188,6 +226,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
 
                                 // Check finality
                                 if let Some(finalized) = finality.update(current_slot) {
+                                    if let Ok(fin_hash) = store.get_block_hash_by_slot(finalized) {
+                                        let _ = store.set_finalized(&fin_hash, finalized);
+                                    }
                                     tracing::info!(
                                         "Validator {} FINALIZED slot {}",
                                         config.validator_index,
@@ -224,8 +265,18 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         &[],
                                     ) {
                                         Ok((new_state, _)) => {
+                                            let import_hash = compute_header_hash(&block.header);
                                             state = new_state;
                                             blocks_imported += 1;
+
+                                            // Persist imported block
+                                            if let Err(e) = store.put_block(&block) {
+                                                tracing::error!("Failed to persist imported block: {}", e);
+                                            }
+                                            if let Err(e) = store.set_head(&import_hash, slot) {
+                                                tracing::error!("Failed to update head: {}", e);
+                                            }
+
                                             tracing::info!(
                                                 "Validator {} imported block at slot {} from peer {} (total imported: {})",
                                                 config.validator_index,
@@ -235,6 +286,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                             );
 
                                             if let Some(finalized) = finality.update(slot) {
+                                                if let Ok(fin_hash) = store.get_block_hash_by_slot(finalized) {
+                                                    let _ = store.set_finalized(&fin_hash, finalized);
+                                                }
                                                 tracing::info!(
                                                     "Validator {} FINALIZED slot {}",
                                                     config.validator_index,
@@ -266,6 +320,43 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         // Simplified: we don't process explicit finality votes yet
                     }
                 }
+            }
+
+            // Handle RPC commands
+            rpc_cmd = async {
+                match rpc_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(cmd) = rpc_cmd {
+                    match cmd {
+                        grey_rpc::RpcCommand::SubmitWorkPackage { data } => {
+                            let hash = grey_crypto::blake2b_256(&data);
+                            tracing::info!(
+                                "Validator {} received work package via RPC, hash=0x{}",
+                                config.validator_index,
+                                hex::encode(&hash.0[..8])
+                            );
+                            // TODO: queue for refinement in Phase 3
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update RPC status after each loop iteration
+        if let Some(ref rpc_st) = rpc_state {
+            let mut status = rpc_st.status.write().await;
+            status.head_slot = state.timeslot;
+            status.blocks_authored = blocks_authored;
+            status.blocks_imported = blocks_imported;
+            status.finalized_slot = finality.finalized_slot;
+            if let Ok((h, _)) = store.get_head() {
+                status.head_hash = hex::encode(h.0);
+            }
+            if let Ok((h, _)) = store.get_finalized() {
+                status.finalized_hash = hex::encode(h.0);
             }
         }
     }
@@ -319,8 +410,7 @@ fn decode_block_message(data: &[u8]) -> Option<(Block, Hash)> {
     // Decode the full header from the encoded data
     let header_data = &data[42..42 + header_len];
 
-    // Parse header fields manually (matching encode_header format)
-    let header = decode_header_from_bytes(header_data)?;
+    let header = grey_codec::header_codec::decode_header(header_data)?;
 
     let block = Block {
         header,
@@ -336,111 +426,3 @@ fn decode_block_message(data: &[u8]) -> Option<(Block, Hash)> {
     Some((block, Hash(header_hash)))
 }
 
-/// Parse a header from encoded bytes (matching encode_header format).
-fn decode_header_from_bytes(data: &[u8]) -> Option<grey_types::header::Header> {
-    use grey_types::*;
-
-    if data.len() < 32 + 32 + 32 + 4 {
-        return None;
-    }
-
-    let mut pos = 0;
-
-    // HP: parent_hash (32 bytes)
-    let mut parent_hash = [0u8; 32];
-    parent_hash.copy_from_slice(&data[pos..pos + 32]);
-    pos += 32;
-
-    // HR: state_root (32 bytes)
-    let mut state_root = [0u8; 32];
-    state_root.copy_from_slice(&data[pos..pos + 32]);
-    pos += 32;
-
-    // HX: extrinsic_hash (32 bytes)
-    let mut extrinsic_hash = [0u8; 32];
-    extrinsic_hash.copy_from_slice(&data[pos..pos + 32]);
-    pos += 32;
-
-    // E4(HT): timeslot (4 bytes LE)
-    let timeslot = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-    pos += 4;
-
-    // ¿HE: epoch_marker (discriminated)
-    if pos >= data.len() {
-        return None;
-    }
-    let epoch_marker = if data[pos] == 0 {
-        pos += 1;
-        None
-    } else {
-        pos += 1;
-        // Skip epoch marker data for now (we'd need to parse it properly)
-        // For empty extrinsics blocks in test network, this shouldn't occur frequently
-        None // Simplified: skip epoch marker parsing
-    };
-
-    // ¿HW: tickets_marker
-    if pos >= data.len() {
-        return None;
-    }
-    let tickets_marker = if data[pos] == 0 {
-        pos += 1;
-        None
-    } else {
-        pos += 1;
-        None // Simplified: skip tickets marker parsing
-    };
-
-    // E2(HI): author_index (2 bytes LE)
-    if pos + 2 > data.len() {
-        return None;
-    }
-    let author_index = u16::from_le_bytes([data[pos], data[pos + 1]]);
-    pos += 2;
-
-    // HV: vrf_signature (96 bytes)
-    if pos + 96 > data.len() {
-        return None;
-    }
-    let mut vrf_sig = [0u8; 96];
-    vrf_sig.copy_from_slice(&data[pos..pos + 96]);
-    pos += 96;
-
-    // ↕HO: offenders_marker (compact length + keys)
-    if pos >= data.len() {
-        return None;
-    }
-    // Read compact length
-    let mut decode_pos = pos;
-    let offenders_count = grey_codec::decode_compact_at(data, &mut decode_pos).unwrap_or(0);
-    pos = decode_pos;
-    let mut offenders = Vec::new();
-    for _ in 0..offenders_count {
-        if pos + 32 > data.len() {
-            break;
-        }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&data[pos..pos + 32]);
-        offenders.push(Ed25519PublicKey(key));
-        pos += 32;
-    }
-
-    // HS: seal (96 bytes) - only present in full header encoding
-    let mut seal = [0u8; 96];
-    if pos + 96 <= data.len() {
-        seal.copy_from_slice(&data[pos..pos + 96]);
-    }
-
-    Some(grey_types::header::Header {
-        parent_hash: Hash(parent_hash),
-        state_root: Hash(state_root),
-        extrinsic_hash: Hash(extrinsic_hash),
-        timeslot,
-        epoch_marker,
-        tickets_marker,
-        author_index,
-        vrf_signature: BandersnatchSignature(vrf_sig),
-        offenders_marker: offenders,
-        seal: BandersnatchSignature(seal),
-    })
-}

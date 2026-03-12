@@ -74,7 +74,7 @@ pub struct Block {
 
 /// Extrinsic data (Extrinsic in ASN, eq 4.3).
 /// Field ordering matches ASN: tickets, preimages, guarantees, assurances, disputes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Extrinsic {
     /// ET: Tickets for seal-key contest.
     pub tickets: TicketsExtrinsic,

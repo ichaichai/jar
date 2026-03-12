@@ -13,6 +13,8 @@ members = [
     "crates/grey-services",
     "crates/grey-network",
     "crates/grey-transpiler",
+    "crates/grey-store",
+    "crates/grey-rpc",
     "crates/grey-bench",
 ]
 exclude = [
@@ -37,6 +39,8 @@ grey-consensus = { path = "crates/grey-consensus" }
 grey-services = { path = "crates/grey-services" }
 grey-network = { path = "crates/grey-network" }
 grey-transpiler = { path = "crates/grey-transpiler" }
+grey-store = { path = "crates/grey-store" }
+grey-rpc = { path = "crates/grey-rpc" }
 
 # External dependencies
 blake2 = "0.10"
@@ -49,9 +53,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ark-vrf = { version = "0.2", features = ["bandersnatch", "ring"] }
 reed-solomon-simd = "3.1"
+redb = "3.1"
 tracing = "0.1"
 tracing-test = "0.2"
 tokio = { version = "1", features = ["full"] }
 libp2p = { version = "0.54", features = ["gossipsub", "noise", "tcp", "yamux", "tokio", "macros", "identify"] }
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
+jsonrpsee = { version = "0.24", features = ["server", "macros"] }

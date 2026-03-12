@@ -60,6 +60,8 @@ pub async fn run_testnet(
                 boot_peers: peers,
                 protocol_config: config_clone,
                 genesis_time,
+                db_path: format!("/tmp/grey-testnet-{}", genesis_time),
+                rpc_port: 0, // Disable RPC in testnet mode
             };
             // Run the node (will run indefinitely, we'll cancel it)
             let _ = crate::node::run_node(node_config).await;

@@ -48,6 +48,14 @@ struct Cli {
     /// Run a networked testnet for this many seconds
     #[arg(long)]
     testnet: Option<u64>,
+
+    /// Database path for persistent storage
+    #[arg(long, default_value = "./grey-db")]
+    db_path: String,
+
+    /// JSON-RPC server port (0 to disable)
+    #[arg(long, default_value_t = 9933)]
+    rpc_port: u16,
 }
 
 #[tokio::main]
@@ -156,6 +164,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         boot_peers: cli.peers,
         protocol_config: config,
         genesis_time,
+        db_path: cli.db_path,
+        rpc_port: cli.rpc_port,
     })
     .await
 }
