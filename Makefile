@@ -3,7 +3,11 @@ OUT_DIR  := _out/html-multi
 BRANCH   := gh-pages
 REMOTE   := origin
 
-.PHONY: book deploy clean
+TEST_BINS := cryptotest safrolejsontest historyjsontest statisticsjsontest \
+             authorizationsjsontest disputesjsontest preimagesjsontest \
+             assurancesjsontest reportsjsontest accumulatejsontest propertytest
+
+.PHONY: book deploy clean test
 
 book: $(BOOK_BIN)
 	$(BOOK_BIN)
@@ -25,6 +29,15 @@ deploy: book
 	git commit -m "Deploy JAR book from $$COMMIT" && \
 	git push $(REMOTE) $(BRANCH) && \
 	git checkout -
+
+test:
+	lake build $(TEST_BINS)
+	@fail=0; \
+	for bin in $(TEST_BINS); do \
+	  echo "── $$bin ──"; \
+	  .lake/build/bin/$$bin || fail=1; \
+	done; \
+	exit $$fail
 
 clean:
 	rm -rf _out
