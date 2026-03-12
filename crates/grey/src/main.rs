@@ -171,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         genesis_time,
         db_path: cli.db_path,
         rpc_port: cli.rpc_port,
+        genesis_state: None,
     })
     .await
 }

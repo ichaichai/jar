@@ -42,6 +42,9 @@ pub struct NodeConfig {
     pub db_path: String,
     /// JSON-RPC server port (0 to disable).
     pub rpc_port: u16,
+    /// Optional pre-configured genesis state (with services installed, etc.).
+    /// If None, the default genesis from create_genesis is used.
+    pub genesis_state: Option<State>,
 }
 
 // FinalityTracker replaced by GrandpaState (see finality.rs)
@@ -57,7 +60,8 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
     tracing::info!("Opened database at {}", db_path);
 
     // Create genesis state and validator secrets
-    let (genesis_state, all_secrets) = grey_consensus::genesis::create_genesis(protocol);
+    let (default_genesis, all_secrets) = grey_consensus::genesis::create_genesis(protocol);
+    let genesis_state = config.genesis_state.unwrap_or(default_genesis);
 
     tracing::info!(
         "Validator {} starting with V={}, C={}, E={}",
@@ -124,6 +128,8 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
     let mut audit_state = AuditState::new();
     // Ticket state: Safrole ticket generation and collection
     let mut ticket_state = TicketState::new();
+    // Track last slot where we submitted a work package (for pacing)
+    let mut last_wp_slot: Timeslot = 0;
 
     tracing::info!(
         "Validator {} node started, genesis_time={}",
@@ -223,6 +229,71 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 config.validator_index,
                                 new_tickets.len()
                             );
+                        }
+                    }
+
+                    // Validator 0: generate work packages if service 1000 is installed
+                    if config.validator_index == 0
+                        && state.services.contains_key(&1000)
+                        && current_slot >= 3
+                        && current_slot > last_wp_slot + 2
+                        && guarantor_state.pending_guarantees.is_empty()
+                    {
+                        let service_id: u32 = 1000;
+                        if let Some(svc) = state.services.get(&service_id) {
+                            let code_hash = svc.code_hash;
+                            let payload = format!("wp-slot-{}", current_slot).into_bytes();
+                            let pkg = create_demo_work_package(
+                                &state,
+                                service_id,
+                                code_hash,
+                                &payload,
+                                current_slot,
+                            );
+                            match guarantor::process_work_package(
+                                protocol,
+                                &pkg,
+                                &state,
+                                &store,
+                                config.validator_index,
+                                my_secrets,
+                                current_slot,
+                                &mut guarantor_state,
+                            ) {
+                                Ok(report_hash) => {
+                                    // Add a second guarantor co-signature (minimum 2 required)
+                                    let co_signer_idx = if config.validator_index == 0 { 1u16 } else { 0 };
+                                    let co_secrets = &all_secrets[co_signer_idx as usize];
+                                    let mut msg = Vec::with_capacity(13 + 32);
+                                    msg.extend_from_slice(b"jam_guarantee");
+                                    msg.extend_from_slice(&report_hash.0);
+                                    let co_sig = co_secrets.ed25519.sign(&msg);
+                                    for g in &mut guarantor_state.pending_guarantees {
+                                        g.credentials.push((co_signer_idx, co_sig));
+                                    }
+
+                                    tracing::info!(
+                                        "Validator {} created WP guarantee (2 signers), report_hash=0x{}",
+                                        config.validator_index,
+                                        hex::encode(&report_hash.0[..8])
+                                    );
+                                    // Broadcast guarantee to peers
+                                    for g in &guarantor_state.pending_guarantees {
+                                        let g_data = guarantor::encode_guarantee(g);
+                                        let _ = net_commands.send(NetworkCommand::BroadcastGuarantee {
+                                            data: g_data,
+                                        });
+                                    }
+                                    last_wp_slot = current_slot;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Validator {} WP processing failed: {}",
+                                        config.validator_index,
+                                        e
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -433,7 +504,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                 let Some(event) = event else { break };
                 match event {
                     NetworkEvent::BlockReceived { data, source } => {
-                        match decode_block_message(&data) {
+                        match decode_block_message(&data, protocol) {
                             Some((block, _hash)) => {
                                 let slot = block.header.timeslot;
                                 if slot > state.timeslot {
@@ -457,6 +528,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                             }
 
                                             // Register guarantees from imported block for auditing
+                                            // and mark cores as available for assurance generation
                                             for guarantee in &block.extrinsic.guarantees {
                                                 let report_hash = grey_crypto::blake2b_256(
                                                     &grey_codec::header_codec::encode_header(&block.header),
@@ -473,6 +545,11 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                                     guarantee.report.core_index,
                                                     slot,
                                                     Some(our_tranche),
+                                                );
+                                                // Mark core as available so we generate assurances
+                                                guarantor_state.available_cores.insert(
+                                                    guarantee.report.core_index,
+                                                    report_hash,
                                                 );
                                             }
 
@@ -736,55 +813,73 @@ fn compute_state_root(state: &State) -> Hash {
 }
 
 /// Encode a block for network transmission.
-/// Format: [4-byte length][header_hash (32 bytes)][encoded block]
+/// Format: [header_hash (32)][block_len (4)][JAM-encoded block (header + extrinsic)]
 fn encode_block_message(block: &Block, header_hash: &Hash) -> Vec<u8> {
-    let encoded_header = grey_codec::header_codec::encode_header(&block.header);
-    let mut msg = Vec::new();
-    // Header hash for quick identification
+    use grey_codec::Encode;
+    let encoded_block = block.encode();
+    let mut msg = Vec::with_capacity(32 + 4 + encoded_block.len());
     msg.extend_from_slice(&header_hash.0);
-    // Timeslot for quick filtering
-    msg.extend_from_slice(&block.header.timeslot.to_le_bytes());
-    // Author index
-    msg.extend_from_slice(&block.header.author_index.to_le_bytes());
-    // Encoded header length + data
-    let len = encoded_header.len() as u32;
-    msg.extend_from_slice(&len.to_le_bytes());
-    msg.extend_from_slice(&encoded_header);
+    msg.extend_from_slice(&(encoded_block.len() as u32).to_le_bytes());
+    msg.extend_from_slice(&encoded_block);
     msg
 }
 
 /// Decode a block message received from the network.
-/// Returns (block_header_partial, header_hash) for validation.
-fn decode_block_message(data: &[u8]) -> Option<(Block, Hash)> {
-    if data.len() < 32 + 4 + 2 + 4 {
+/// Returns (Block, header_hash) with full extrinsics.
+fn decode_block_message(data: &[u8], config: &Config) -> Option<(Block, Hash)> {
+    use grey_codec::decode::DecodeWithConfig;
+    if data.len() < 32 + 4 {
         return None;
     }
-
     let mut header_hash = [0u8; 32];
     header_hash.copy_from_slice(&data[..32]);
-    let timeslot = u32::from_le_bytes([data[32], data[33], data[34], data[35]]);
-    let author_index = u16::from_le_bytes([data[36], data[37]]);
-    let header_len = u32::from_le_bytes([data[38], data[39], data[40], data[41]]) as usize;
-
-    if data.len() < 42 + header_len {
+    let block_len = u32::from_le_bytes(data[32..36].try_into().ok()?) as usize;
+    if data.len() < 36 + block_len {
         return None;
     }
+    let block_data = &data[36..36 + block_len];
+    let (block, _consumed) = Block::decode_with_config(block_data, config).ok()?;
+    Some((block, Hash(header_hash)))
+}
 
-    // Decode the full header from the encoded data
-    let header_data = &data[42..42 + header_len];
+/// Create a demo work package for service testing.
+fn create_demo_work_package(
+    state: &State,
+    service_id: u32,
+    code_hash: Hash,
+    payload: &[u8],
+    timeslot: u32,
+) -> grey_types::work::WorkPackage {
+    use grey_types::work::*;
 
-    let header = grey_codec::header_codec::decode_header(header_data)?;
-
-    let block = Block {
-        header,
-        extrinsic: grey_types::header::Extrinsic {
-            tickets: vec![],
-            preimages: vec![],
-            guarantees: vec![],
-            assurances: vec![],
-            disputes: grey_types::header::DisputesExtrinsic::default(),
-        },
+    let (anchor, state_root, beefy_root) = if let Some(recent) = state.recent_blocks.headers.last() {
+        (recent.header_hash, recent.state_root, recent.accumulation_root)
+    } else {
+        (Hash::ZERO, Hash::ZERO, Hash::ZERO)
     };
 
-    Some((block, Hash(header_hash)))
+    WorkPackage {
+        auth_code_host: service_id,
+        auth_code_hash: code_hash,
+        context: RefinementContext {
+            anchor,
+            state_root,
+            beefy_root,
+            lookup_anchor: anchor,
+            lookup_anchor_timeslot: state.timeslot,
+            prerequisites: vec![],
+        },
+        authorization: vec![],
+        authorizer_config: vec![],
+        items: vec![WorkItem {
+            service_id,
+            code_hash,
+            gas_limit: 5_000_000,
+            accumulate_gas_limit: 1_000_000,
+            exports_count: 0,
+            payload: payload.to_vec(),
+            imports: vec![],
+            extrinsics: vec![],
+        }],
+    }
 }

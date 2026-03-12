@@ -319,66 +319,20 @@ impl Store {
 
 // ── Encoding helpers ────────────────────────────────────────────────────
 
-/// Encode a block to bytes for storage.
-/// Format: header_codec encoded header + JAM encoded extrinsic.
-/// For now we use a simple format: [header_len:u32][header_bytes][extrinsic_json]
+/// Encode a block to bytes for storage using JAM codec (header + extrinsic).
 fn encode_block(block: &Block) -> Vec<u8> {
-    let header_bytes = header_codec::encode_header(&block.header);
-    let extrinsic_bytes =
-        serde_json::to_vec(&serialize_extrinsic(&block.extrinsic)).unwrap_or_default();
-
-    let mut out = Vec::with_capacity(4 + header_bytes.len() + 4 + extrinsic_bytes.len());
-    out.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&header_bytes);
-    out.extend_from_slice(&(extrinsic_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&extrinsic_bytes);
-    out
+    use grey_codec::Encode;
+    block.encode()
 }
 
-/// Decode a block from storage bytes.
+/// Decode a block from storage bytes using JAM codec.
 fn decode_block(data: &[u8]) -> Option<Block> {
-    if data.len() < 8 {
-        return None;
-    }
-    let header_len = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
-    if data.len() < 4 + header_len + 4 {
-        return None;
-    }
-    let header_bytes = &data[4..4 + header_len];
-    let header = header_codec::decode_header(header_bytes)?;
-
-    let ext_offset = 4 + header_len;
-    let ext_len = u32::from_le_bytes(data[ext_offset..ext_offset + 4].try_into().ok()?) as usize;
-    let ext_bytes = &data[ext_offset + 4..ext_offset + 4 + ext_len];
-
-    let extrinsic = if ext_bytes.is_empty() {
-        grey_types::header::Extrinsic::default()
-    } else {
-        deserialize_extrinsic(ext_bytes).unwrap_or_default()
-    };
-
-    Some(Block { header, extrinsic })
-}
-
-/// Simple extrinsic serialization wrapper using serde_json.
-/// This is a placeholder — should use JAM codec once full block encoding is available.
-fn serialize_extrinsic(
-    ext: &grey_types::header::Extrinsic,
-) -> serde_json::Value {
-    // For now, serialize counts to verify round-trip works
-    // Full JAM codec encoding of extrinsics will replace this
-    serde_json::json!({
-        "tickets_count": ext.tickets.len(),
-        "preimages_count": ext.preimages.len(),
-        "guarantees_count": ext.guarantees.len(),
-        "assurances_count": ext.assurances.len(),
-    })
-}
-
-fn deserialize_extrinsic(_data: &[u8]) -> Option<grey_types::header::Extrinsic> {
-    // Placeholder — returns empty extrinsic
-    // Full JAM codec decoding will replace this
-    Some(grey_types::header::Extrinsic::default())
+    use grey_codec::decode::DecodeWithConfig;
+    // Use tiny config for storage decode — matches testnet parameters.
+    // For full config, the store would need to know the config.
+    let config = grey_types::config::Config::tiny();
+    let (block, _consumed) = Block::decode_with_config(data, &config).ok()?;
+    Some(block)
 }
 
 /// Encode state KV pairs for storage.

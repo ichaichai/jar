@@ -4,7 +4,8 @@ A JAM (Join-Accumulate Machine) blockchain node implementation in Rust, followin
 
 ## Highlights
 
-- **313 tests passing** across all crates, **101/101 conformance blocks**
+- **382+ tests passing** across all crates, **101/101 conformance blocks**
+- **Multi-node testnet** — 6 validators, GRANDPA finality, full work package pipeline
 - **PVM recompiler faster than polkavm's compiler** — grey's x86-64 JIT recompiler outperforms polkavm v0.30.0's compiler backend on both compute and host-call workloads (including compilation time in each iteration):
 
   | Benchmark | Grey Recompiler | PolkaVM Compiler | Result |
@@ -25,13 +26,95 @@ A JAM (Join-Accumulate Machine) blockchain node implementation in Rust, followin
 
 ## Building
 
+```bash
+cargo build --release
 ```
-cargo build
+
+## Running a Multi-Node Testnet
+
+Grey can run a local test network with 6 validators connected via libp2p gossipsub, demonstrating the complete JAM work package pipeline.
+
+### Quick Start
+
+```bash
+# Run multi-node testnet for 60 seconds
+cargo run --bin grey -- --testnet 60
 ```
+
+This spawns 6 validators (V=6, C=2, E=12) in a star topology on ports 19000-19005. Each validator:
+- Authors blocks when it's the slot leader (fallback key schedule, 6s slots)
+- Propagates blocks to all peers via gossipsub
+- Runs GRANDPA finality (prevote/precommit with 2/3+1 threshold)
+- Generates and broadcasts Safrole tickets
+- Processes work packages through the full pipeline
+
+### Work Package Pipeline
+
+The testnet includes a pre-installed PVM service (ID 1000) that demonstrates the complete JAM work package lifecycle:
+
+1. **Submit** — Validator 0 creates a work package with a payload
+2. **Refine** (Section 14) — The PVM executes the service's refine code (identity function)
+3. **Erasure code** (Appendix H) — Work package bundle is Reed-Solomon encoded into 6 chunks
+4. **Guarantee** — Validator 0 signs the work report with 2 guarantor credentials
+5. **Broadcast** — Guarantee is propagated to all validators via gossipsub
+6. **Assurance** — Each validator generates an availability assurance for the core
+7. **Accumulate** (Section 12) — When 5/6 assurances are collected, the PVM executes the service's accumulate code (writes to storage via `host_write`)
+8. **Finalize** — GRANDPA finalizes the block containing the accumulated result
+
+### Sequential Test (No Networking)
+
+```bash
+# Run a single-machine end-to-end test
+cargo run --bin grey -- --test
+
+# Customize block count
+cargo run --bin grey -- --test --test-blocks 30
+```
+
+This produces 20 blocks with 9 work packages submitted and accumulated, verifying the full pipeline without networking.
+
+### Running Individual Validators
+
+```bash
+# Start validator 0 (boot node)
+cargo run --bin grey -- -i 0 -p 9000
+
+# Start validator 1 (connects to boot node)
+cargo run --bin grey -- -i 1 -p 9001 -b /ip4/127.0.0.1/tcp/9000
+
+# Start more validators
+cargo run --bin grey -- -i 2 -p 9002 -b /ip4/127.0.0.1/tcp/9000
+```
+
+All validators on the same genesis time will form a network and begin block production.
+
+### CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-i, --validator-index` | 0 | Validator index (0 to V-1) |
+| `-p, --port` | 9000 | Network listen port |
+| `-b, --peers` | — | Boot peer multiaddresses (comma-separated) |
+| `--testnet <secs>` | — | Run networked testnet for N seconds |
+| `--test` | — | Run sequential block production test |
+| `--test-blocks` | 20 | Number of blocks in test mode |
+| `--rpc-port` | 9933 | JSON-RPC server port (0 to disable) |
+| `--db-path` | ./grey-db | Database path for persistent storage |
+| `--genesis-time` | current time | Unix timestamp for genesis (0 = now) |
+| `--info` | — | Show node configuration and exit |
+
+## Services
+
+Services are RISC-V programs compiled to PVM bytecode. Two example services are included:
+
+- `services/sample-service/` — Minimal service: echo refine + `host_write` accumulate
+- `services/counter-service/` — Counter service: writes to two storage keys during accumulate
+
+Services are cross-compiled to RISC-V and transpiled to PVM bytecode by `grey-transpiler`.
 
 ## Test Status
 
-**313 tests passing** across all crates.
+**382+ tests passing** across all crates.
 
 | Category | Crate | Tests | Status |
 |----------|-------|------:|--------|
@@ -89,9 +172,15 @@ crates/
   grey-merkle/       # Binary Patricia trie, MMR, state serialization (Appendices D & E)
   grey-erasure/      # Reed-Solomon erasure coding (Appendix H)
   grey-state/        # Chain state transitions (Sections 4–13)
-  grey-consensus/    # Safrole block production (Section 6)
+  grey-consensus/    # Safrole block production & authoring (Section 6)
   grey-services/     # Service accounts, accumulation (Sections 9, 12)
-  grey-network/      # P2P networking (scaffolded)
+  grey-network/      # P2P networking — gossipsub, request-response
+  grey-store/        # Persistent storage (redb backend)
+  grey-rpc/          # JSON-RPC server (jsonrpsee)
+  grey-transpiler/   # RISC-V ELF → PVM bytecode transpiler
+services/
+  sample-service/    # Minimal PVM service (echo refine, host_write accumulate)
+  counter-service/   # Counter PVM service (dual-key storage writes)
 ```
 
 ## License

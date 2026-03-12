@@ -15,16 +15,68 @@ use grey_types::{Ed25519Signature, Hash, ServiceId, Timeslot};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// Run the local test network.
+/// Run the local test network with work package processing demo.
 ///
-/// Launches V=6 validators, waits for blocks to be produced and finalized,
-/// then reports success or failure.
+/// Launches V=6 validators with a pre-installed PVM service,
+/// waits for blocks to be produced and finalized via GRANDPA,
+/// and reports results.
 pub async fn run_testnet(
     duration_secs: u64,
 ) -> Result<TestnetResult, Box<dyn std::error::Error + Send + Sync>> {
+    use grey_types::state::ServiceAccount;
+
     let config = Config::tiny();
     let v = config.validators_count;
     let base_port: u16 = 19000;
+
+    // Create shared genesis state with a PVM service installed
+    let (mut genesis_state, _secrets) = grey_consensus::genesis::create_genesis(&config);
+
+    let service_id: ServiceId = 1000;
+    let pvm_blob = match std::fs::read(grey_transpiler::SAMPLE_SERVICE_ELF_PATH) {
+        Ok(elf_data) => {
+            tracing::info!("Testnet: Using transpiled RISC-V service");
+            grey_transpiler::transpile_elf_service(&elf_data)
+                .expect("failed to transpile sample service ELF")
+        }
+        Err(_) => {
+            tracing::info!("Testnet: Using hand-assembled service");
+            grey_transpiler::assembler::build_sample_service_precise()
+        }
+    };
+    let code_hash = grey_crypto::blake2b_256(&pvm_blob);
+    let mut preimage_lookup = BTreeMap::new();
+    preimage_lookup.insert(code_hash, pvm_blob);
+
+    genesis_state.services.insert(service_id, ServiceAccount {
+        code_hash,
+        balance: 1_000_000_000,
+        min_accumulate_gas: 100_000,
+        min_on_transfer_gas: 0,
+        storage: BTreeMap::new(),
+        preimage_lookup,
+        preimage_info: BTreeMap::new(),
+        free_storage_offset: 0,
+        total_footprint: 0,
+        accumulation_counter: 0,
+        last_accumulation: 0,
+        last_activity: 0,
+        preimage_count: 0,
+    });
+
+    // Populate auth_pool with the service code_hash so guarantees pass the authorizer check.
+    // The refine pipeline computes authorizer_hash = blake2b_256(auth_code) = code_hash.
+    for core in 0..config.core_count as usize {
+        if genesis_state.auth_pool[core].is_empty() {
+            genesis_state.auth_pool[core].push(code_hash);
+        }
+    }
+
+    tracing::info!(
+        "Testnet: installed service {} (code_hash=0x{}), auth_pool configured",
+        service_id,
+        hex::encode(&code_hash.0[..8])
+    );
 
     // Use a shared genesis time for all validators
     let genesis_time = std::time::SystemTime::now()
@@ -33,9 +85,10 @@ pub async fn run_testnet(
         .as_secs();
 
     tracing::info!(
-        "Starting local testnet with {} validators, genesis_time={}",
+        "Starting local testnet with {} validators, genesis_time={}, duration={}s",
         v,
-        genesis_time
+        genesis_time,
+        duration_secs
     );
 
     // Build boot peer list: each validator connects to the first validator
@@ -52,6 +105,7 @@ pub async fn run_testnet(
             vec![first_peer.clone()]
         };
         let config_clone = config.clone();
+        let genesis_clone = genesis_state.clone();
 
         let handle = tokio::spawn(async move {
             let node_config = crate::node::NodeConfig {
@@ -61,9 +115,9 @@ pub async fn run_testnet(
                 protocol_config: config_clone,
                 genesis_time,
                 db_path: format!("/tmp/grey-testnet-{}", genesis_time),
-                rpc_port: 0, // Disable RPC in testnet mode
+                rpc_port: 0,
+                genesis_state: Some(genesis_clone),
             };
-            // Run the node (will run indefinitely, we'll cancel it)
             let _ = crate::node::run_node(node_config).await;
         });
 
@@ -84,6 +138,10 @@ pub async fn run_testnet(
     }
 
     tracing::info!("Testnet stopped after {}s", duration_secs);
+
+    // Clean up temp database files
+    let db_dir = format!("/tmp/grey-testnet-{}", genesis_time);
+    let _ = std::fs::remove_dir_all(&db_dir);
 
     Ok(TestnetResult {
         validators: v,
