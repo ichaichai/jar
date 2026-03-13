@@ -95,22 +95,26 @@ pub async fn run_testnet(
         );
     }
 
-    // Populate auth_pool so guarantees pass the authorizer check.
+    // Populate auth_pool and auth_queue so guarantees pass the authorizer check
+    // and auth_pool is replenished after each guarantee via rotation.
     // Core 0: demo service (1000), core 1: pixels service (2000), rest: demo.
     let pixels_code_hash = genesis_state
         .services
         .get(&pixels_service_id)
         .map(|s| s.code_hash);
     for core in 0..config.core_count as usize {
+        let hash_for_core = if core == 1 {
+            pixels_code_hash.unwrap_or(code_hash)
+        } else {
+            code_hash
+        };
         if genesis_state.auth_pool[core].is_empty() {
-            if core == 1 {
-                if let Some(ph) = pixels_code_hash {
-                    genesis_state.auth_pool[core].push(ph);
-                } else {
-                    genesis_state.auth_pool[core].push(code_hash);
-                }
-            } else {
-                genesis_state.auth_pool[core].push(code_hash);
+            genesis_state.auth_pool[core].push(hash_for_core);
+        }
+        // Fill auth_queue so rotation replenishes auth_pool after each guarantee
+        for slot in 0..config.auth_queue_size {
+            if slot < genesis_state.auth_queue.len() && core < genesis_state.auth_queue[slot].len() {
+                genesis_state.auth_queue[slot][core] = hash_for_core;
             }
         }
     }

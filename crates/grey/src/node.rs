@@ -388,6 +388,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 );
 
                                 // Register guarantees from this block for auditing
+                                // and mark cores as available for assurance generation
                                 for guarantee in &block.extrinsic.guarantees {
                                     let report_hash = grey_crypto::blake2b_256(
                                         &grey_codec::header_codec::encode_header(&block.header),
@@ -404,6 +405,11 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         guarantee.report.core_index,
                                         current_slot,
                                         Some(our_tranche),
+                                    );
+                                    // Mark core as available so we generate assurances
+                                    guarantor_state.available_cores.insert(
+                                        guarantee.report.core_index,
+                                        report_hash,
                                     );
                                 }
 

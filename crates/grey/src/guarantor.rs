@@ -243,11 +243,11 @@ pub fn decode_assurance(data: &[u8]) -> Option<Assurance> {
 }
 
 /// Handle a received guarantee from the network.
-/// Store the guarantee for potential co-signing or block inclusion.
+/// Decode and store the guarantee for block inclusion.
 pub fn handle_received_guarantee(
     data: &[u8],
     guarantor_state: &mut GuarantorState,
-    store: &Store,
+    _store: &Store,
 ) {
     // Decode: [report_hash(32)][timeslot(4)][cred_count(2)][creds...][report_len(4)][report...]
     if data.len() < 32 + 4 + 2 {
@@ -255,17 +255,92 @@ pub fn handle_received_guarantee(
         return;
     }
 
+    let mut pos = 0;
     let mut report_hash = [0u8; 32];
-    report_hash.copy_from_slice(&data[..32]);
-    let timeslot = u32::from_le_bytes([data[32], data[33], data[34], data[35]]);
+    report_hash.copy_from_slice(&data[pos..pos + 32]);
+    pos += 32;
+    let timeslot = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    pos += 4;
+    let cred_count = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+    pos += 2;
+
+    let mut credentials = Vec::with_capacity(cred_count);
+    for _ in 0..cred_count {
+        if pos + 2 + 64 > data.len() {
+            tracing::warn!("Received guarantee: truncated credentials");
+            return;
+        }
+        let idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+        pos += 2;
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(&data[pos..pos + 64]);
+        pos += 64;
+        credentials.push((idx, Ed25519Signature(sig)));
+    }
+
+    // Decode the work report
+    if pos + 4 > data.len() {
+        tracing::warn!("Received guarantee: missing report length");
+        return;
+    }
+    let report_len = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+    pos += 4;
+    if pos + report_len > data.len() {
+        tracing::warn!("Received guarantee: truncated report data");
+        return;
+    }
+    let report_data = &data[pos..pos + report_len];
+
+    use grey_codec::Decode;
+    let report = match WorkReport::decode(report_data) {
+        Ok((r, _)) => r,
+        Err(e) => {
+            tracing::warn!("Received guarantee: failed to decode report: {}", e);
+            return;
+        }
+    };
+
+    // Skip if we already have a pending guarantee for this report
+    let encoded = report.encode();
+    let computed_hash = grey_crypto::blake2b_256(&encoded);
+    if computed_hash.0 != report_hash {
+        tracing::warn!(
+            "Received guarantee: report hash mismatch (computed=0x{} vs claimed=0x{})",
+            hex::encode(&computed_hash.0[..8]),
+            hex::encode(&report_hash[..8])
+        );
+        return;
+    }
+
+    // Check for duplicate
+    for g in &guarantor_state.pending_guarantees {
+        let g_encoded = g.report.encode();
+        let g_hash = grey_crypto::blake2b_256(&g_encoded);
+        if g_hash == computed_hash {
+            return; // Already have this guarantee
+        }
+    }
 
     tracing::info!(
-        "Received guarantee: report_hash=0x{}, timeslot={}",
+        "Received guarantee: report_hash=0x{}, timeslot={}, creds={}, core={}",
         hex::encode(&report_hash[..8]),
-        timeslot
+        timeslot,
+        credentials.len(),
+        report.core_index,
     );
 
-    // Store chunk data if included (future: request missing chunks from peers)
+    // Store for block inclusion
+    guarantor_state.pending_guarantees.push(Guarantee {
+        report,
+        timeslot,
+        credentials,
+    });
+
+    // Mark core as available for assurance generation
+    guarantor_state.available_cores.insert(
+        guarantor_state.pending_guarantees.last().unwrap().report.core_index,
+        computed_hash,
+    );
 }
 
 /// Handle a received assurance from the network.
