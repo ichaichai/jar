@@ -5,25 +5,34 @@ open Jar Jar.Test.BlockTest
 
 def testVariants : Array JamConfig := #[JamVariant.gp072_tiny.toJamConfig]
 
-def traceNames : Array String := #["safrole"]
+/-- Traces where each block has full keyvals (independent per-block tests). -/
+def independentTraces : Array String := #["safrole", "fallback"]
+
+/-- Traces where only the first block has keyvals (sequential state threading). -/
+def sequentialTraces : Array String := #["conformance_no_forks", "conformance_forks"]
 
 def main (args : List String) : IO UInt32 := do
   let mut exitCode : UInt32 := 0
   match args with
   | [d] =>
-    -- Single directory mode
     for v in testVariants do
       letI := v
       IO.println s!"Running block tests ({v.name}) from: {d}"
       let code ← runBlockTestDir d
       if code != 0 then exitCode := code
   | _ =>
-    -- Run all trace directories
-    for trace in traceNames do
+    for trace in independentTraces do
       let dir := s!"tests/vectors/blocks/{trace}"
       for v in testVariants do
         letI := v
         IO.println s!"Running block tests ({v.name}) from: {dir}"
         let code ← runBlockTestDir dir
+        if code != 0 then exitCode := code
+    for trace in sequentialTraces do
+      let dir := s!"tests/vectors/blocks/{trace}"
+      for v in testVariants do
+        letI := v
+        IO.println s!"Running block tests ({v.name}, sequential) from: {dir}"
+        let code ← runBlockTestDirSeq dir
         if code != 0 then exitCode := code
   return exitCode

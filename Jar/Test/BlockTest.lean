@@ -510,4 +510,106 @@ def runBlockTestDir [JamConfig] (dir : String) : IO UInt32 := do
   IO.println s!"  Results: {passed} passed, {failed} failed, {skipped} skipped (of {sorted.size})"
   if failed > 0 then return 1 else return 0
 
+/-- Run block tests sequentially, threading state from block to block.
+    Used for conformance traces where only the first block has keyvals. -/
+def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
+  let dirPath : System.FilePath := dir
+  let entries ← dirPath.readDir
+  let suffix := s!".input.{JamConfig.name}.json"
+  let jsonFiles := entries.filter (fun e => e.fileName.endsWith suffix)
+  let sorted := jsonFiles.qsort (fun a b => a.fileName < b.fileName)
+
+  if sorted.size == 0 then
+    IO.println s!"  No test files found matching *{suffix} in {dir}"
+    return 1
+
+  IO.println s!"  Found {sorted.size} block tests (sequential mode)"
+
+  let mut passed : Nat := 0
+  let mut failed : Nat := 0
+  let mut currentState : Option (State × Array (ByteArray × ByteArray)) := none
+
+  for entry in sorted do
+    let name := entry.fileName
+    let inputContent ← IO.FS.readFile entry.path
+    let outputPath := entry.path.toString.replace ".input." ".output."
+    let outputContent ← IO.FS.readFile outputPath
+    let inputJson ← IO.ofExcept (Json.parse inputContent)
+    let outputJson ← IO.ofExcept (Json.parse outputContent)
+
+    -- Get state: from keyvals if available, otherwise from threaded state
+    let stateAndOpaque ← do
+      let preStateJson ← IO.ofExcept (inputJson.getObjVal? "pre_state")
+      match preStateJson.getObjVal? "keyvals" with
+      | .ok kvJson =>
+        match parseKeyvals kvJson with
+        | .ok kvs =>
+          match @StateSerialization.deserializeState _ kvs with
+          | some (s, od) => pure (some (s, od))
+          | none => pure currentState  -- fall back to threaded
+        | .error _ => pure currentState
+      | .error _ => pure currentState
+
+    match stateAndOpaque with
+    | none =>
+      IO.println s!"  SKIP {name}: no state available"
+      continue
+    | some (state, opaqueData) =>
+
+    -- Parse block
+    let block ← IO.ofExcept (do
+      let blockJson ← inputJson.getObjVal? "block"
+      blockFromTraceJson blockJson)
+
+    -- Check expected output
+    let isError := match outputJson.getObjVal? "error" with
+      | .ok _ => true
+      | .error _ => false
+
+    -- Run transition
+    let result := @stateTransitionNoSealCheck _ state block
+
+    match result with
+    | some postState =>
+      if isError then
+        IO.println s!"  FAIL {name}: expected error but transition succeeded"
+        failed := failed + 1
+        currentState := none
+      else
+        -- Check post_state root
+        let postStateJson ← IO.ofExcept (outputJson.getObjVal? "post_state")
+        let expectedPostRoot ← IO.ofExcept (@fromJson? Hash _ (← IO.ofExcept (postStateJson.getObjVal? "state_root")))
+        let postKvs := (@StateSerialization.serializeState _ postState).map fun (k, v) => (k.data, v)
+        let byteArrayLt (a b : ByteArray) : Bool :=
+          let len := min a.size b.size
+          Id.run do
+            for i in [:len] do
+              if a.get! i < b.get! i then return true
+              if a.get! i > b.get! i then return false
+            return a.size < b.size
+        let allPostKvs := (postKvs ++ opaqueData).qsort fun (k1, _) (k2, _) => byteArrayLt k1 k2
+        let computedRoot := Merkle.trieRoot (allPostKvs.map fun (k, v) => ((⟨k, sorry⟩ : OctetSeq 31), v))
+        if computedRoot == expectedPostRoot then
+          IO.println s!"  PASS {name}"
+          passed := passed + 1
+          currentState := some (postState, opaqueData)
+        else
+          IO.println s!"  FAIL {name}: post_state root mismatch"
+          IO.println s!"    expected: {bytesToHex expectedPostRoot.data}"
+          IO.println s!"    got:      {bytesToHex computedRoot.data}"
+          failed := failed + 1
+          currentState := none  -- stop threading on failure
+    | none =>
+      if isError then
+        IO.println s!"  PASS {name} (expected error)"
+        passed := passed + 1
+        -- State unchanged on rejected block
+      else
+        IO.println s!"  FAIL {name}: transition returned none but expected success"
+        failed := failed + 1
+        currentState := none
+
+  IO.println s!"  Results: {passed} passed, {failed} failed (of {sorted.size})"
+  if failed > 0 then return 1 else return 0
+
 end Jar.Test.BlockTest
