@@ -293,7 +293,7 @@ private def serializePendingReports (reports : Array (Option PendingReport)) : B
     | none => buf := buf ++ ByteArray.mk #[0]
     | some pr =>
       buf := buf ++ ByteArray.mk #[1]
-      buf := buf ++ encodeWorkReportState pr.report
+      buf := buf ++ Codec.encodeWorkReport pr.report
       buf := buf ++ encodeFixedNat 4 pr.timeslot.toNat
   return buf
 
@@ -370,7 +370,7 @@ private def serializeAccumulationQueue
   for slot in queue do
     buf := buf ++ encodeNat slot.size
     for (report, deps) in slot do
-      buf := buf ++ encodeWorkReportState report
+      buf := buf ++ Codec.encodeWorkReport report
       buf := buf ++ encodeNat deps.size
       for h in deps do
         buf := buf ++ h.data
@@ -626,11 +626,12 @@ private def deserializeWorkDigestStateD : Decoder WorkDigest := fun s => do
   let (payloadHash, s) ← decodeHashD s
   let (gasLimit, s) ← decodeFixedNatD 8 s
   let (result, s) ← decodeWorkResultD s
-  let (gasUsed, s) ← decodeFixedNatD 8 s
-  let (importsCount, s) ← decodeFixedNatD 2 s
-  let (extrinsicsCount, s) ← decodeFixedNatD 2 s
-  let (extrinsicsSize, s) ← decodeFixedNatD 4 s
-  let (exportsCount, s) ← decodeFixedNatD 2 s
+  -- RefineLoad fields: compact (standard block codec)
+  let (gasUsed, s) ← decodeNatD s
+  let (importsCount, s) ← decodeNatD s
+  let (extrinsicsCount, s) ← decodeNatD s
+  let (extrinsicsSize, s) ← decodeNatD s
+  let (exportsCount, s) ← decodeNatD s
   return ({
     serviceId := UInt32.ofNat serviceId
     codeHash, payloadHash
@@ -661,11 +662,11 @@ private def deserializeWorkReportStateD : Decoder WorkReport := fun s => do
   let context : RefinementContext := {
     anchorHash, anchorStateRoot, anchorBeefyRoot, lookupAnchorHash,
     lookupAnchorTimeslot := UInt32.ofNat lookupAnchorTimeslot, prerequisites }
-  -- core_index: E_2
-  let (coreIndexNat, s) ← decodeFixedNatD 2 s
+  -- core_index: compact (standard block codec)
+  let (coreIndexNat, s) ← decodeNatD s
   let (authorizerHash, s) ← decodeHashD s
-  -- auth_gas_used: E_8
-  let (authGasUsed, s) ← decodeFixedNatD 8 s
+  -- auth_gas_used: compact (standard block codec)
+  let (authGasUsed, s) ← decodeNatD s
   let (authOutput, s) ← decodeLengthPrefixedD s
   let (srlArr, s) ← decodeCountPrefixedArrayD (fun s => do
     let (k, s) ← decodeHashD s
