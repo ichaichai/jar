@@ -143,3 +143,11 @@ lean_exe jarstf where
     "-ljar_crypto_ffi",
     "-lpthread", "-ldl", "-lm"
   ]
+
+lean_exe codectest where
+  root := `Jar.Test.CodecTestMain
+  moreLinkArgs := #[
+    "-L", "crypto-ffi/target/release",
+    "-ljar_crypto_ffi",
+    "-lpthread", "-ldl", "-lm"
+  ]
