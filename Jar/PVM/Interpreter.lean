@@ -47,26 +47,30 @@ def run (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
             exitValue := if 7 < regs.size then regs[7]! else 0
             gas := gas'
             registers := regs
-            memory := mem }
+            memory := mem
+            lastPC := pc }
         | .panic =>
           { exitReason := .panic
             exitValue := if 7 < regs.size then regs[7]! else 0
             gas := gas'
             registers := regs
-            memory := mem }
+            memory := mem
+            lastPC := pc }
         | .fault addr =>
           { exitReason := .pageFault addr
             exitValue := if 7 < regs.size then regs[7]! else 0
             gas := gas'
             registers := regs
-            memory := mem }
+            memory := mem
+            lastPC := pc }
         | .hostCall id regs' mem' npc =>
           { exitReason := .hostCall id
             exitValue := if 7 < regs'.size then regs'[7]! else 0
             gas := gas'
             registers := regs'
             memory := mem'
-            nextPC := npc }
+            nextPC := npc
+            lastPC := pc }
         | .continue pc' regs' mem' =>
           go pc' regs' mem' gas' fuel'
   -- Use gas as fuel bound (can't execute more steps than gas available)
@@ -238,6 +242,53 @@ def runWithHostCalls (ctx : Type) [Inhabited ctx]
         | _ => (result', context')
       | _ => (result, context)
   go pc regs mem gas context (gas.toUInt64.toNat + 1)
+
+/-- Run PVM with host calls, returning (result, context, stepCount). -/
+def runWithHostCallsTraced (ctx : Type) [Inhabited ctx]
+    (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
+    (gas : Int64) (handler : HostCallHandler ctx) (context : ctx)
+    : InvocationResult × ctx × Nat :=
+  let rec go (pc : Nat) (regs : Registers) (mem : Memory) (gas : Int64)
+      (context : ctx) (fuel : Nat) (steps : Nat) : InvocationResult × ctx × Nat :=
+    match fuel with
+    | 0 =>
+      ({ exitReason := .outOfGas
+         exitValue := if 7 < regs.size then regs[7]! else 0
+         gas := gas, registers := regs, memory := mem }, context, steps)
+    | fuel' + 1 =>
+      let result := run prog pc regs mem gas
+      let newSteps := steps + (gas.toUInt64.toNat - result.gas.toUInt64.toNat)
+      match result.exitReason with
+      | .hostCall id =>
+        let resumePC := result.nextPC
+        let (result', context') := handler id result.gas.toUInt64 result.registers result.memory context
+        match result'.exitReason with
+        | .hostCall _ =>
+          go resumePC result'.registers result'.memory result'.gas context' fuel' newSteps
+        | _ => (result', context', newSteps)
+      | _ => (result, context, newSteps)
+  go pc regs mem gas context (gas.toUInt64.toNat + 1) 0
+
+/-- Run PVM single-stepping for trace, collecting first N PCs. -/
+def runTracePCs (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
+    (gas : Int64) (maxSteps : Nat) : Array Nat × ExitReason :=
+  let rec go (pc : Nat) (regs : Registers) (mem : Memory) (gas : Int64)
+      (pcs : Array Nat) (fuel : Nat) : Array Nat × ExitReason :=
+    if pcs.size >= maxSteps then (pcs, .outOfGas)
+    else match fuel with
+    | 0 => (pcs, .outOfGas)
+    | fuel' + 1 =>
+      if gas <= 0 then (pcs, .outOfGas)
+      else
+        let pcs' := pcs.push pc
+        let gas' := gas - 1
+        match executeStep prog pc regs mem with
+        | .halt => (pcs', .halt)
+        | .panic => (pcs', .panic)
+        | .fault addr => (pcs', .pageFault addr)
+        | .hostCall id _ _ _ => (pcs', .hostCall id)
+        | .continue pc' regs' mem' => go pc' regs' mem' gas' pcs' fuel'
+  go pc regs mem gas #[] (maxSteps + 1)
 
 -- ============================================================================
 -- Standard Invocations — GP Appendix B

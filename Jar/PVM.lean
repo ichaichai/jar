@@ -130,6 +130,8 @@ structure InvocationResult where
   memory : Memory
   /-- Next PC (valid after hostCall, for resumption). -/
   nextPC : Nat := 0
+  /-- Last PC before exit. -/
+  lastPC : Nat := 0
 
 -- ============================================================================
 -- Program Blob — Appendix A

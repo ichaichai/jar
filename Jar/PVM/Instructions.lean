@@ -230,9 +230,12 @@ def executeStep (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory
   let code := prog.code
   let skip := skipDistance prog.bitmask pc
   let npc := nextPC pc skip
-  -- Read opcode
+  -- Read opcode with bitmask validation (GP eq A.19)
+  let bitmaskValid := bitmaskGet prog.bitmask pc
   let opcode := if pc < code.size then code.get! pc |>.toNat else 0
-  -- (tracing removed)
+  -- If bitmask is not set at pc, treat as invalid instruction → panic
+  if !bitmaskValid then .panic
+  else
   match opcode with
   -- ========== No-arg (0-1) ==========
   | 0 => .panic  -- trap

@@ -98,6 +98,10 @@ structure AccOneOutput where
   yieldHash : Option Hash
   gasUsed : Gas
   provisions : Array (ServiceId × ByteArray)
+  /-- Debug: exit reason string for tracing. -/
+  exitReasonStr : String := ""
+  /-- Debug: host call log entries. -/
+  hostCallLog : Array String := #[]
 
 -- ============================================================================
 -- Host-Call Context for Accumulation
@@ -135,6 +139,8 @@ structure AccContext where
   items : Array ByteArray
   /-- Opaque data for fallback lookups (storage/preimage from initial keyvals). -/
   opaqueData : Array (ByteArray × ByteArray)
+  /-- Debug: host call log. -/
+  hostCallLog : Array String := #[]
 
 instance : Inhabited AccContext where
   default := {
@@ -155,6 +161,7 @@ instance : Inhabited AccContext where
     itemsBlob := ByteArray.empty
     items := #[]
     opaqueData := #[]
+    hostCallLog := #[]
   }
 
 -- ============================================================================
@@ -182,14 +189,20 @@ private def setReg (regs : PVM.Registers) (i : Nat) (v : UInt64) : PVM.Registers
       min_memo_gas(8) ‖ total_octets(8) ‖ items(4) ‖ deposit_offset(8) ‖
       created(4) ‖ last_acc(4) ‖ parent(4) = 96 bytes -/
 private def encodeAccountInfo (acct : ServiceAccount) : ByteArray :=
-  -- Compute items and bytes (storage + preimage entries)
-  let storageItems := acct.storage.size
-  let storageBytes := acct.storage.entries.foldl (init := 0) fun acc (k, v) => acc + k.size + v.size
-  let preimageItems := acct.preimages.size + acct.preimageInfo.size
-  let preimageBytes := acct.preimages.entries.foldl (init := 0) fun acc (k, v) => acc + 32 + v.size
-    + acct.preimageInfo.entries.foldl (init := 0) fun acc (_, v) => acc + 32 + 4 + v.size * 4
-  let totalItems := storageItems + preimageItems
-  let totalBytes := storageBytes + preimageBytes
+  -- Use actual storage/preimage maps if populated, otherwise fall back to
+  -- preserved serialized values (totalFootprint, created=itemCount).
+  let storageLen := acct.storage.size
+  let preimageInfoLen := acct.preimageInfo.size
+  let hasData := storageLen > 0 || preimageInfoLen > 0 || acct.preimages.size > 0
+  let totalItems := if hasData then
+      2 * preimageInfoLen + storageLen
+    else acct.created.toNat  -- preserved item count (a_i stored in 'created' field)
+  let totalBytes := if hasData then
+      acct.preimageInfo.entries.foldl (init := 0) fun acc ((_, len), _) =>
+        acc + 81 + len.toNat
+      + acct.storage.entries.foldl (init := 0) fun acc (k, v) =>
+        acc + 34 + k.size + v.size
+    else acct.totalFootprint
   -- Compute threshold: B_S + B_I * items + B_L * bytes - deposit_offset
   let minBal := B_S + B_I * totalItems + B_L * totalBytes
   let threshold := minBal - min acct.gratis.toNat minBal
@@ -201,15 +214,20 @@ private def encodeAccountInfo (acct : ServiceAccount) : ByteArray :=
     ++ Codec.encodeFixedNat 8 totalBytes                -- a_o
     ++ Codec.encodeFixedNat 4 totalItems                -- a_i
     ++ Codec.encodeFixedNat 8 acct.gratis.toNat         -- a_f
-    ++ Codec.encodeFixedNat 4 acct.created.toNat        -- a_r
-    ++ Codec.encodeFixedNat 4 acct.lastAccumulation.toNat -- a_a
-    ++ Codec.encodeFixedNat 4 acct.parent.toNat         -- a_p
+    -- Field mapping: JAR's ServiceAccount fields are named differently from GP:
+    -- JAR.lastAccumulation = serialized position r = creation timeslot (a_r)
+    -- JAR.parent = serialized position a = last accumulation timeslot (a_a)
+    -- JAR.preimageCount = serialized position p = parent service ID (a_p)
+    ++ Codec.encodeFixedNat 4 acct.lastAccumulation.toNat -- a_r: creation timeslot
+    ++ Codec.encodeFixedNat 4 acct.parent.toNat         -- a_a: last accumulation timeslot
+    ++ Codec.encodeFixedNat 4 acct.preimageCount        -- a_p: parent service ID
 
 /-- Dispatch a host call during accumulation. GP §12, Appendix B.
     Returns updated invocation result and context. -/
 def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
     (mem : PVM.Memory) (ctx : AccContext) : PVM.InvocationResult × AccContext :=
   let callNum := callId.toNat
+  let inputLog := s!"hc({callNum}) r7={getReg regs 7} r8={getReg regs 8} r9={getReg regs 9} r10={getReg regs 10}"
   let mkResult (regs' : PVM.Registers) (mem' : PVM.Memory) (gas' : Gas) : PVM.InvocationResult :=
     { exitReason := .hostCall callId  -- signals "continue" to the loop
       exitValue := if 7 < regs'.size then regs'[7]! else 0
@@ -218,7 +236,7 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       memory := mem' }
   let setR7 (r : PVM.Registers) (v : UInt64) := setReg r 7 v
   let gas' := if gas.toNat >= hostCallGas then gas - UInt64.ofNat hostCallGas else 0
-  match callNum with
+  let (result, ctx') : PVM.InvocationResult × AccContext := match callNum with
   -- ===== gas (0): Return remaining gas in reg[7] =====
   | 0 =>
     let regs' := setR7 regs gas'
@@ -849,6 +867,9 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   | _ =>
     let regs' := setR7 regs PVM.RESULT_WHAT
     (mkResult regs' mem gas', ctx)
+  let outR7 := if 7 < result.registers.size then result.registers[7]! else 0
+  let ctx'' := { ctx' with hostCallLog := ctx'.hostCallLog.push s!"{inputLog}->r7={outR7}" }
+  (result, ctx'')
 
 -- ============================================================================
 -- accone — Single-Service Accumulation — GP eq:accone
@@ -973,9 +994,11 @@ def accone (ps : PartialState) (serviceId : ServiceId)
         let codeKey := StateSerialization.stateKeyForServiceData serviceId
           (StateSerialization.preimageHashArg acct.codeHash)
         opaqueData.findSome? fun (k, v) => if k == codeKey.data then some v else none
+    let _ := ()
     match codeOpt with
     | none =>
       -- Code not available: service cannot accumulate
+      let _ := ()
       { postState := ps, deferredTransfers := #[], yieldHash := none,
         gasUsed := totalGas, provisions := #[] }
     | some codeBlob =>
@@ -987,16 +1010,26 @@ def accone (ps : PartialState) (serviceId : ServiceId)
       match PVM.initStandard codeBlob args with
       | none =>
         -- Invalid program blob: panic
+        let _ := ()
         { postState := ps, deferredTransfers := #[], yieldHash := none,
           gasUsed := totalGas, provisions := #[] }
       | some (prog, regs, mem) =>
-        let _ := ()
+        -- Verify args were written correctly to PVM memory
+        let argBase := PVM.getReg regs 7
+        let argLen := PVM.getReg regs 8
+        let argsReadback := match PVM.readByteArray mem argBase argLen.toNat with
+          | .ok bytes => bytes
+          | _ => ByteArray.empty
+        let _ := argsReadback
+        -- Trace first 30 PCs for debugging
+        let (tracePCs, _traceExit) := PVM.runTracePCs prog 5 regs mem (Int64.ofUInt64 totalGas) 50
         -- Run PVM with host-call dispatch via handleHostCall
-        let (result, ctx') := PVM.runWithHostCalls AccContext
+        let (result, ctx', steps) := PVM.runWithHostCallsTraced AccContext
           prog 5 regs mem (Int64.ofUInt64 totalGas)
           (fun callId gas regs' mem' c =>
             handleHostCall callId gas regs' mem' c)
           ctx
+        let _ := ()
         -- On halt: use accumulated state; on panic: revert to checkpoint
         let finalState := match result.exitReason with
           | .halt => ctx'.state
@@ -1005,18 +1038,37 @@ def accone (ps : PartialState) (serviceId : ServiceId)
             | some savedAccounts => { ctx'.state with accounts := savedAccounts }
             | none => ps  -- revert entirely
           | _ => ps  -- OOG/fault: revert
-        -- Update lastAccumulation timeslot
+        -- Update last accumulation timeslot (position a in serialized format)
+        -- JAR's `parent` field maps to serialized position a = last accumulation timeslot
         let finalState := match finalState.accounts.lookup serviceId with
           | some a =>
-            let a' := { a with lastAccumulation := timeslot }
+            let a' := { a with parent := UInt32.ofNat timeslot.toNat }
             { finalState with accounts := finalState.accounts.insert serviceId a' }
           | none => finalState
         let gasUsed := totalGas - result.gas.toUInt64
+        let traceStr := String.intercalate "," (tracePCs.toList.map toString)
+        let exitStr := match result.exitReason with
+          | .halt =>
+            let argsHex := Id.run do
+              let mut s := ""
+              for i in [:argsReadback.size] do
+                let b := argsReadback.get! i
+                let hi := b.toNat / 16; let lo := b.toNat % 16
+                let hexChar (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+                s := s ++ String.mk [hexChar hi, hexChar lo]
+              return s
+            s!"halt(exitValue={result.exitValue},steps={steps},gasUsed={gasUsed},lastPC={result.lastPC},argsHex={argsHex},argBase={argBase},argLen={argLen},traceSteps={tracePCs.size},pcs=[{traceStr}])"
+          | .panic => s!"panic(steps={steps},gasUsed={gasUsed},traceSteps={tracePCs.size},pcs=[{traceStr}])"
+          | .outOfGas => s!"oog(steps={steps},pcs=[{traceStr}])"
+          | .hostCall n => s!"hostcall({n},steps={steps})"
+          | .pageFault addr => s!"pageFault({addr},steps={steps},pcs=[{traceStr}])"
         { postState := finalState
           deferredTransfers := ctx'.transfers
           yieldHash := ctx'.yieldHash
           gasUsed
-          provisions := ctx'.provisions }
+          provisions := ctx'.provisions
+          exitReasonStr := exitStr
+          hostCallLog := ctx'.hostCallLog }
 
 -- ============================================================================
 -- accpar — Parallelized Accumulation — GP eq:accpar
@@ -1054,7 +1106,7 @@ def accpar (ps : PartialState) (reports : Array WorkReport)
     (transfers : Array DeferredTransfer) (freeGasMap : Dict ServiceId Gas)
     (timeslot : Timeslot) (entropy : Hash) (configBlob : ByteArray)
     (opaqueData : Array (ByteArray × ByteArray) := #[])
-    : PartialState × Array DeferredTransfer × Array (ServiceId × Hash) × Dict ServiceId Gas :=
+    : PartialState × Array DeferredTransfer × Array (ServiceId × Hash) × Dict ServiceId Gas × Array (ServiceId × String) :=
   let operandGroups := groupByService reports
   let transferGroups := groupTransfersByDest transfers
 
@@ -1062,9 +1114,9 @@ def accpar (ps : PartialState) (reports : Array WorkReport)
   let serviceIds := ((operandGroups.keys ++ transferGroups.keys).eraseDups).mergeSort (· < ·)
 
   -- Accumulate each service
-  let (ps', allTransfers, allYields, gasMap) := serviceIds.foldl
-    (init := (ps, #[], #[], Dict.empty (K := ServiceId) (V := Gas)))
-    fun (ps, xfers, yields, gm) sid =>
+  let (ps', allTransfers, allYields, gasMap, exitReasons) := serviceIds.foldl
+    (init := (ps, #[], #[], Dict.empty (K := ServiceId) (V := Gas), #[]))
+    fun (ps, xfers, yields, gm, exits) sid =>
       let ops := match operandGroups.lookup sid with | some o => o | none => #[]
       let txs := match transferGroups.lookup sid with | some t => t | none => #[]
       let freeGas := match freeGasMap.lookup sid with | some g => g | none => 0
@@ -1073,12 +1125,16 @@ def accpar (ps : PartialState) (reports : Array WorkReport)
         itemsBlob items opaqueData
       let ps' := result.postState
       let xfers' := xfers ++ result.deferredTransfers
+      let logStr := if result.hostCallLog.size > 0
+        then " hostCalls=[" ++ String.intercalate "; " result.hostCallLog.toList ++ "]"
+        else ""
+      let exits' := exits.push (sid, result.exitReasonStr ++ logStr)
       let yields' := match result.yieldHash with
         | some h => yields.push (sid, h)
         | none => yields
       let gm' := gm.insert sid (UInt64.ofNat result.gasUsed.toNat)
-      (ps', xfers', yields', gm')
-  (ps', allTransfers, allYields, gasMap)
+      (ps', xfers', yields', gm', exits')
+  (ps', allTransfers, allYields, gasMap, exitReasons)
 
 -- ============================================================================
 -- accseq — Sequential Accumulation — GP eq:accseq
@@ -1092,28 +1148,28 @@ def accseq (_gasLimit : Gas) (reports : Array WorkReport)
     (ps : PartialState) (freeGasMap : Dict ServiceId Gas)
     (timeslot : Timeslot) (entropy : Hash) (configBlob : ByteArray)
     (opaqueData : Array (ByteArray × ByteArray) := #[])
-    : Nat × PartialState × Array (ServiceId × Hash) × Dict ServiceId Gas :=
+    : Nat × PartialState × Array (ServiceId × Hash) × Dict ServiceId Gas × Array (ServiceId × String) :=
   -- Round 1: accumulate work-report operands + initial deferred transfers
-  let (ps1, newXfers1, yields1, gasMap1) := accpar ps reports initialTransfers freeGasMap timeslot entropy configBlob opaqueData
+  let (ps1, newXfers1, yields1, gasMap1, exits1) := accpar ps reports initialTransfers freeGasMap timeslot entropy configBlob opaqueData
 
   -- Round 2: process deferred transfers generated in round 1
   if newXfers1.size == 0 then
-    (reports.size, ps1, yields1, gasMap1)
+    (reports.size, ps1, yields1, gasMap1, exits1)
   else
-    let (ps2, newXfers2, yields2, gasMap2) := accpar ps1 #[] newXfers1 Dict.empty timeslot entropy configBlob opaqueData
+    let (ps2, newXfers2, yields2, gasMap2, exits2) := accpar ps1 #[] newXfers1 Dict.empty timeslot entropy configBlob opaqueData
     let allYields := yields1 ++ yields2
     let gasMapFinal := gasMap2.entries.foldl (init := gasMap1) fun acc (k, v) =>
       acc.insert k v
 
     -- Round 3: process any further deferred transfers (last round)
     if newXfers2.size == 0 then
-      (reports.size, ps2, allYields, gasMapFinal)
+      (reports.size, ps2, allYields, gasMapFinal, exits1 ++ exits2)
     else
-      let (ps3, _, yields3, gasMap3) := accpar ps2 #[] newXfers2 Dict.empty timeslot entropy configBlob opaqueData
+      let (ps3, _, yields3, gasMap3, exits3) := accpar ps2 #[] newXfers2 Dict.empty timeslot entropy configBlob opaqueData
       let finalYields := allYields ++ yields3
       let gasMapFinal' := gasMap3.entries.foldl (init := gasMapFinal) fun acc (k, v) =>
         acc.insert k v
-      (reports.size, ps3, finalYields, gasMapFinal')
+      (reports.size, ps3, finalYields, gasMapFinal', exits1 ++ exits2 ++ exits3)
 
 -- ============================================================================
 -- Top-Level Accumulation — GP §12
@@ -1133,6 +1189,8 @@ structure AccumulationResult where
   outputs : Array (ServiceId × Hash)
   /-- Per-service gas usage. -/
   gasUsage : Dict ServiceId Gas
+  /-- Debug: per-service exit reason strings. -/
+  exitReasons : Array (ServiceId × String) := #[]
 
 /-- Build the 134-byte protocol configuration blob for fetch mode 0.
     Format: E_8(B_I, B_L, B_S) ‖ E_2(C) ‖ E_4(D, E) ‖ E_8(G_A, G_I, G_R, G_T) ‖
@@ -1196,7 +1254,7 @@ def accumulate (state : State) (reports : Array WorkReport)
 
   let configBlob := buildConfigBlob
 
-  let (_, ps', outputs, gasUsage) := accseq
+  let (_, ps', outputs, gasUsage, exitReasons) := accseq
     (UInt64.ofNat G_T) reports #[] ps freeGasMap timeslot
     state.entropy.current configBlob opaqueData
 
@@ -1211,6 +1269,7 @@ def accumulate (state : State) (reports : Array WorkReport)
     authQueue := ps'.authQueue
     stagingKeys := ps'.stagingKeys
     outputs
-    gasUsage }
+    gasUsage
+    exitReasons }
 
 end Jar.Accumulation

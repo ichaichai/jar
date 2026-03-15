@@ -349,6 +349,7 @@ structure AccumulationResult where
   accQueue : Array (Array (WorkReport × Array Hash))
   accHistory : Array (Array Hash)
   accStats : Dict ServiceId ServiceStatistics
+  exitReasons : Array (ServiceId × String) := #[]
 
 /-- Perform accumulation of newly available work reports. GP §12.
     Delegates to the full accumulation pipeline in Jar.Accumulation. -/
@@ -403,7 +404,8 @@ def performAccumulation
     outputs := result.outputs
     accQueue := s.accQueue
     accHistory := accHistory'''
-    accStats := accStats }
+    accStats := accStats
+    exitReasons := result.exitReasons }
 
 -- ============================================================================
 -- §12.7 — Preimage Integration
