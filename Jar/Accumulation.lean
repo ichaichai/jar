@@ -972,8 +972,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
             let accounts' := ctx.state.accounts.erase sid
             let accounts' := accounts'.insert ctx.serviceId callerAcct'
             let state' := { ctx.state with accounts := accounts' }
+            -- Remove all opaque data entries belonging to the ejected service
+            let od := ctx.opaqueData.filter fun (k, _) =>
+              StateSerialization.extractServiceIdFromDataKey k != sid
             let regs' := setR7 regs PVM.RESULT_OK
-            (mkResult regs' mem gas', { ctx with state := state' })
+            (mkResult regs' mem gas', { ctx with state := state', opaqueData := od })
     | _ =>
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)

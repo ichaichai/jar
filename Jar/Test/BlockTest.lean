@@ -415,7 +415,7 @@ def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
     IO.println s!"    header.slot={h.timeslot.toNat} state.timeslot={state.timeslot.toNat} authorIdx={h.authorIndex.val}"
 
   match result with
-  | some (postState, _exitReasons, remainingOpaque) =>
+  | some (postState, exitReasons, remainingOpaque) =>
     if isError then
       IO.println s!"  FAIL {name}: expected error but transition succeeded"
       return .fail
@@ -470,12 +470,38 @@ def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
                   IO.println s!"    kv[{i}] idx={idx} VAL: exp_len={ev.size} got_len={ov.size}"
                   for j in [:min ev.size ov.size] do
                     if ev.get! j != ov.get! j then
-                      IO.println s!"      first diff at byte {j}"
+                      IO.println s!"      first diff at byte {j}: exp={ev.get! j} got={ov.get! j}"
+                      -- Show a few more diff bytes
+                      for k in [j+1:min (j+8) (min ev.size ov.size)] do
+                        if ev.get! k != ov.get! k then
+                          IO.println s!"      byte {k}: exp={ev.get! k} got={ov.get! k}"
                       break
+                  if idx == 255 then
+                    let sid := StateSerialization.extractServiceIdFromDataKey ek
+                    IO.println s!"      sid={sid} key={bytesToHex ek}"
                 diffCount := diffCount + 1
             if diffCount > 3 then
               IO.println s!"    ... {diffCount - 3} more diffs"
             IO.println s!"    expected {expectedKvs.size} kvs, got {ourKvs.size} kvs"
+            -- Show exit reasons for accumulated services
+            for (sid3, reason3) in exitReasons do
+              if reason3.length > 0 then
+                let short3 := if reason3.length > 3000 then String.mk (reason3.toList.take 3000) ++ "..." else reason3
+                IO.println s!"    acc svc={sid3}: {short3}"
+            -- Extra keys in our output
+            let preKeyvals := keyvals
+            for (k, v) in ourKvs do
+              if !expectedKvs.any (fun (ek, _) => ek == k) then
+                let sid := StateSerialization.extractServiceIdFromDataKey k
+                let inPre := preKeyvals.any (fun (pk, _) => pk == k)
+                let inPreVal := preKeyvals.findSome? (fun (pk, pv) => if pk == k then some pv else none)
+                let preValSame := match inPreVal with | some pv => pv == v | none => false
+                IO.println s!"    EXTRA KEY: {bytesToHex k} sid={sid} val_len={v.size} inPre={inPre} preValSame={preValSame} (opaque={filteredOpaque.any (fun (ok, _) => ok == k)})"
+            -- Missing keys from expected
+            for (k, v) in expectedKvs do
+              if !ourKvs.any (fun (ok, _) => ok == k) then
+                let sid := StateSerialization.extractServiceIdFromDataKey k
+                IO.println s!"    MISSING KEY: {bytesToHex k} sid={sid} val_len={v.size}"
           | .error _ => pure ()
         | .error _ => pure ()
         return .fail
@@ -693,6 +719,30 @@ def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
           IO.println s!"    expected: {bytesToHex expectedPostRoot.data}"
           IO.println s!"    got:      {bytesToHex computedRoot.data}"
           IO.println s!"    total KVs: {allPostKvs.size} (serialized={postKvs.size} opaque={filteredOpaque.size})"
+          -- Debug: when we have extra KVs, find which ones are not in expected
+          match postStateJson.getObjVal? "keyvals" with
+          | .ok kvJson2 =>
+            match parseKeyvals kvJson2 with
+            | .ok expectedKvs2 =>
+              let expKeySet := expectedKvs2.map Prod.fst
+              let ourKeySet := allPostKvs.map Prod.fst
+              -- Extra keys in our output
+              for (k, _v) in allPostKvs do
+                if !expKeySet.any (· == k) then
+                  let sid := StateSerialization.extractServiceIdFromDataKey k
+                  -- Determine entry type from hash arg
+                  IO.println s!"    EXTRA KEY: {bytesToHex k} sid={sid}"
+              -- Missing keys from expected
+              for (k, _v) in expectedKvs2 do
+                if !ourKeySet.any (· == k) then
+                  let sid := StateSerialization.extractServiceIdFromDataKey k
+                  IO.println s!"    MISSING KEY: {bytesToHex k} sid={sid}"
+              -- Show host call log from exit reasons
+              for (sid2, reason) in exitReasons do
+                if reason.length > 0 then
+                  IO.println s!"    acc svc={sid2}: {reason}"
+            | .error _ => pure ()
+          | .error _ => pure ()
           if false then
             let preSerKvs := (@StateSerialization.serializeState _ state).map fun (k, v) => (k.data, v)
             let preOpaqueKvs := (preSerKvs ++ opaqueData).qsort fun (k1, _) (k2, _) => byteArrayLt k1 k2
