@@ -233,12 +233,12 @@ crates/
 | storage_light | 100 | 100/100 |
 | preimages | 100 | 100/100 |
 | preimages_light | 100 | 100/100 |
-| fuzzy_light | 200 | 193/200 |
-| fuzzy | 200 | 101/200 |
+| fuzzy_light | 200 | 198/200 |
+| fuzzy | 200 | 102/200 |
 | conformance_no_forks | 100 | 66/100 (sequential) |
 | conformance_forks | 100 | 29/32 non-error |
 
-**7/10 traces fully pass. 989/1200 blocks pass (82%).**
+**7/10 traces fully pass. 995/1200 blocks pass (83%).**
 
 ### Known Issues
 - PVM execution divergence in some accumulation scenarios: Grey's PVM takes different code paths than JAR's for 7 fuzzy_light blocks and 99 fuzzy blocks. Root cause is likely in host call data that differs early in execution, cascading into different branches.
