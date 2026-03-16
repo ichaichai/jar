@@ -36,6 +36,13 @@ The transition is organized to minimize dependency depth for parallelism:
 namespace Jar
 variable [JamConfig]
 
+/-- Stable sort for accumulation outputs by service ID. -/
+private def stableSortOutputs (outputs : Array (ServiceId × Hash)) : Array (ServiceId × Hash) :=
+  let indexed := outputs.mapIdx fun i x => (i, x)
+  let sorted := indexed.qsort fun (i, (a, _)) (j, (b, _)) =>
+    if a.toNat != b.toNat then a.toNat < b.toNat else i < j
+  sorted.map Prod.snd
+
 -- ============================================================================
 -- §6.1 — Timekeeping
 -- ============================================================================
@@ -126,7 +133,7 @@ def keccakMerkleRoot (leaves : Array ByteArray) : Hash :=
 def computeAccumulateRoot (outputs : AccumulationOutputs) : Hash :=
   if outputs.size == 0 then Hash.zero
   else
-    let sorted := outputs.qsort fun (a, _) (b, _) => a.toNat < b.toNat
+    let sorted := stableSortOutputs outputs
     let leaves := sorted.map fun (sid, h) =>
       Codec.encodeFixedNat 4 sid.toNat ++ h.data
     keccakMerkleRoot leaves
@@ -1025,7 +1032,7 @@ def stateTransition (s : State) (b : Block) : Option State := do
   pure {
     authPool := alpha'
     recent := beta'
-    accOutputs := accResult.outputs.qsort fun (a, _) (b, _) => a.toNat < b.toNat
+    accOutputs := stableSortOutputs accResult.outputs
     safrole := Consensus.updateSafrole s.safrole ext.tickets eta' kappa'
                   (isEpochChange s.timeslot t') (epochSlot s.timeslot)
                   (epochIndex s.timeslot) (epochIndex t')
@@ -1125,7 +1132,7 @@ def stateTransitionWithOpaque (s : State) (b : Block)
   pure ({
     authPool := alpha'
     recent := beta'
-    accOutputs := accResult.outputs.qsort fun (a, _) (b, _) => a.toNat < b.toNat
+    accOutputs := stableSortOutputs accResult.outputs
     safrole := Consensus.updateSafrole s.safrole ext.tickets eta' kappa'
                   (isEpochChange s.timeslot t') (epochSlot s.timeslot)
                   (epochIndex s.timeslot) (epochIndex t')
@@ -1173,7 +1180,7 @@ def stateTransitionNoSealCheck (s : State) (b : Block)
   pure ({
     authPool := alpha'
     recent := beta'
-    accOutputs := accResult.outputs.qsort fun (a, _) (b, _) => a.toNat < b.toNat
+    accOutputs := stableSortOutputs accResult.outputs
     safrole := Consensus.updateSafrole s.safrole ext.tickets eta' kappa'
                   (isEpochChange s.timeslot t') (epochSlot s.timeslot)
                   (epochIndex s.timeslot) (epochIndex t')

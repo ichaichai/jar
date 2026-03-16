@@ -485,6 +485,10 @@ def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
                   if idx == 255 then
                     let sid := StateSerialization.extractServiceIdFromDataKey ek
                     IO.println s!"      sid={sid} key={bytesToHex ek}"
+                  else if idx >= 17 then
+                    -- Service data key: show SID and key hex
+                    let sid := StateSerialization.extractServiceIdFromDataKey ek
+                    IO.println s!"      sid={sid} key={bytesToHex ek}"
                 diffCount := diffCount + 1
             if diffCount > 3 then
               IO.println s!"    ... {diffCount - 3} more diffs"

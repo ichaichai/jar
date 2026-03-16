@@ -915,39 +915,84 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on memo read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== eject (21): Remove service account, transfer balance to caller =====
-  -- φ[7] = target service, φ[8] = hash_ptr (32 bytes read from memory)
+  -- ===== eject (21): Remove service account (GP eq ΩJ) =====
+  -- φ[7] = d (target service), φ[8] = o (hash_ptr, 32 bytes)
+  -- Full GP checks: code_hash, item count, preimage request, age
   | 21 =>
     let sid := UInt32.ofNat (getReg regs 7).toNat
     let hashPtr := getReg regs 8
-    -- Read hash from memory first (page fault → panic)
+    -- Read hash h from memory first (page fault → panic)
     match PVM.readByteArray mem hashPtr 32 with
-    | .ok _ =>
-      -- Can't eject self
+    | .ok hashBytes =>
+      let h : Hash := ⟨hashBytes, sorry⟩
+      -- Check: d != self AND d exists in accounts
       if sid == ctx.serviceId then
         let regs' := setR7 regs PVM.RESULT_WHO
         (mkResult regs' mem gas', ctx)
       else
-        match ctx.state.accounts.lookup sid with
+        -- Promote preimage info for the target from opaque data if needed
+        let (targetAcct, ctx) := match ctx.state.accounts.lookup sid with
+          | some acct => (some acct, ctx)
+          | none => (none, ctx)
+        match targetAcct with
         | none =>
           let regs' := setR7 regs PVM.RESULT_WHO
           (mkResult regs' mem gas', ctx)
         | some ejected =>
-          -- Transfer ejected balance to caller
-          match ctx.state.accounts.lookup ctx.serviceId with
-          | none =>
-            let regs' := setR7 regs PVM.RESULT_NONE
+          -- GP: Check d.codehash == encode[32](self_id)
+          let selfIdEncoded := Codec.encodeFixedNat 32 ctx.serviceId.toNat
+          let selfIdHash : Hash := ⟨selfIdEncoded, sorry⟩
+          if ejected.codeHash != selfIdHash then
+            let regs' := setR7 regs PVM.RESULT_WHO
             (mkResult regs' mem gas', ctx)
-          | some callerAcct =>
-            let callerAcct' := { callerAcct with balance := callerAcct.balance + ejected.balance }
-            let accounts' := ctx.state.accounts.erase sid
-            let accounts' := accounts'.insert ctx.serviceId callerAcct'
-            let state' := { ctx.state with accounts := accounts' }
-            -- Remove all opaque data entries belonging to the ejected service
-            let od := ctx.opaqueData.filter fun (k, _) =>
-              StateSerialization.extractServiceIdFromDataKey k != sid
-            let regs' := setR7 regs PVM.RESULT_OK
-            (mkResult regs' mem gas', { ctx with state := state', opaqueData := od })
+          else
+          -- GP: l = max(81, d.octets) - 81
+          let l := (max 81 ejected.totalFootprint) - 81
+          let blobLen := UInt32.ofNat l
+          -- Promote preimage info from opaque data if needed
+          let (ejected, ctx) :=
+            if (ejected.preimageInfo.lookup (h, blobLen)).isSome then (ejected, ctx)
+            else match promotePreimageInfo ejected ctx.opaqueData sid h blobLen with
+              | some (acct', opaqueData') => (acct', { ctx with opaqueData := opaqueData' })
+              | none => (ejected, ctx)
+          -- Update accounts with promoted info
+          let accounts' := ctx.state.accounts.insert sid ejected
+          let ctx := { ctx with state := { ctx.state with accounts := accounts' } }
+          -- GP: Check d.items == 2 AND (h, l) in d.requests
+          if ejected.created.toNat != 2 then
+            let regs' := setR7 regs PVM.RESULT_HUH
+            (mkResult regs' mem gas', ctx)
+          else
+          match ejected.preimageInfo.lookup (h, blobLen) with
+          | none =>
+            let regs' := setR7 regs PVM.RESULT_HUH
+            (mkResult regs' mem gas', ctx)
+          | some ts =>
+            -- GP: Check requests[(h,l)] = [x, y] with y < t - D_EXPUNGE
+            if ts.size != 2 then
+              let regs' := setR7 regs PVM.RESULT_HUH
+              (mkResult regs' mem gas', ctx)
+            else
+            let y := ts[1]!.toNat
+            if !(y + D_EXPUNGE < ctx.timeslot.toNat) then
+              let regs' := setR7 regs PVM.RESULT_HUH
+              (mkResult regs' mem gas', ctx)
+            else
+            -- All checks passed: eject the service
+            match ctx.state.accounts.lookup ctx.serviceId with
+            | none =>
+              let regs' := setR7 regs PVM.RESULT_NONE
+              (mkResult regs' mem gas', ctx)
+            | some callerAcct =>
+              let callerAcct' := { callerAcct with balance := callerAcct.balance + ejected.balance }
+              let accounts' := ctx.state.accounts.erase sid
+              let accounts' := accounts'.insert ctx.serviceId callerAcct'
+              let state' := { ctx.state with accounts := accounts' }
+              -- Remove all opaque data entries belonging to the ejected service
+              let od := ctx.opaqueData.filter fun (k, _) =>
+                StateSerialization.extractServiceIdFromDataKey k != sid
+              let regs' := setR7 regs PVM.RESULT_OK
+              (mkResult regs' mem gas', { ctx with state := state', opaqueData := od })
     | _ =>
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
