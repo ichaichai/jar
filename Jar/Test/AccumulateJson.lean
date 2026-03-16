@@ -22,39 +22,59 @@ variable [JamConfig]
 
 /-- Parse AvailabilitySpec from Grey's `package_spec` format. -/
 private def parseGreyAvailSpec (j : Json) : Except String AvailabilitySpec := do
+  -- Accept both Grey ("hash"/"length"/"exports_root"/"exports_count")
+  -- and JAR ("package_hash"/"bundle_length"/"segment_root"/"segment_count") field names
+  let getField (a b : String) : Except String Json :=
+    match j.getObjVal? a with | .ok v => .ok v | .error _ => j.getObjVal? b
   return {
-    packageHash := ← fromJson? (← j.getObjVal? "hash")
-    bundleLength := ← fromJson? (← j.getObjVal? "length")
+    packageHash := ← fromJson? (← getField "hash" "package_hash")
+    bundleLength := ← fromJson? (← getField "length" "bundle_length")
     erasureRoot := ← fromJson? (← j.getObjVal? "erasure_root")
-    segmentRoot := ← fromJson? (← j.getObjVal? "exports_root")
-    segmentCount := ← (← j.getObjVal? "exports_count").getNat?
+    segmentRoot := ← fromJson? (← getField "exports_root" "segment_root")
+    segmentCount := ← (← getField "exports_count" "segment_count").getNat?
   }
 
-/-- Parse RefinementContext from Grey's `context` format. -/
+/-- Parse RefinementContext from Grey or JAR format. -/
 private def parseGreyContext (j : Json) : Except String RefinementContext := do
+  let getField (a b : String) : Except String Json :=
+    match j.getObjVal? a with | .ok v => .ok v | .error _ => j.getObjVal? b
   return {
-    anchorHash := ← fromJson? (← j.getObjVal? "anchor")
-    anchorStateRoot := ← fromJson? (← j.getObjVal? "state_root")
-    anchorBeefyRoot := ← fromJson? (← j.getObjVal? "beefy_root")
-    lookupAnchorHash := ← fromJson? (← j.getObjVal? "lookup_anchor")
-    lookupAnchorTimeslot := ← fromJson? (← j.getObjVal? "lookup_anchor_slot")
+    anchorHash := ← fromJson? (← getField "anchor" "anchor_hash")
+    anchorStateRoot := ← fromJson? (← getField "state_root" "anchor_state_root")
+    anchorBeefyRoot := ← fromJson? (← getField "beefy_root" "anchor_beefy_root")
+    lookupAnchorHash := ← fromJson? (← getField "lookup_anchor" "lookup_anchor_hash")
+    lookupAnchorTimeslot := ← fromJson? (← getField "lookup_anchor_slot" "lookup_anchor_timeslot")
     prerequisites := ← fromJson? (← j.getObjVal? "prerequisites")
   }
 
-/-- Parse WorkDigest from Grey's `results` entry format. -/
+/-- Parse WorkDigest from Grey or JAR format.
+    Grey nests gas_used/imports/extrinsics/exports under `refine_load`.
+    JAR puts them flat with slightly different names. -/
 private def parseGreyDigest (j : Json) : Except String WorkDigest := do
-  let refineLoad ← j.getObjVal? "refine_load"
+  let getField (a b : String) : Except String Json :=
+    match j.getObjVal? a with | .ok v => .ok v | .error _ => j.getObjVal? b
+  -- Grey nests under "refine_load"; JAR puts them flat
+  let (gasUsed, importsCount, extrinsicsCount, extrinsicsSize, exportsCount) ←
+    match j.getObjVal? "refine_load" with
+    | .ok rl => do
+      pure (← fromJson? (← rl.getObjVal? "gas_used"),
+            ← (← rl.getObjVal? "imports").getNat?,
+            ← (← rl.getObjVal? "extrinsic_count").getNat?,
+            ← (← rl.getObjVal? "extrinsic_size").getNat?,
+            ← (← rl.getObjVal? "exports").getNat?)
+    | .error _ => do
+      pure (← fromJson? (← j.getObjVal? "gas_used"),
+            ← (← j.getObjVal? "imports_count").getNat?,
+            ← (← j.getObjVal? "extrinsics_count").getNat?,
+            ← (← j.getObjVal? "extrinsics_size").getNat?,
+            ← (← j.getObjVal? "exports_count").getNat?)
   return {
     serviceId := ← fromJson? (← j.getObjVal? "service_id")
     codeHash := ← fromJson? (← j.getObjVal? "code_hash")
     payloadHash := ← fromJson? (← j.getObjVal? "payload_hash")
-    gasLimit := ← fromJson? (← j.getObjVal? "accumulate_gas")
+    gasLimit := ← fromJson? (← getField "accumulate_gas" "gas_limit")
     result := ← fromJson? (← j.getObjVal? "result")
-    gasUsed := ← fromJson? (← refineLoad.getObjVal? "gas_used")
-    importsCount := ← (← refineLoad.getObjVal? "imports").getNat?
-    extrinsicsCount := ← (← refineLoad.getObjVal? "extrinsic_count").getNat?
-    extrinsicsSize := ← (← refineLoad.getObjVal? "extrinsic_size").getNat?
-    exportsCount := ← (← refineLoad.getObjVal? "exports").getNat?
+    gasUsed, importsCount, extrinsicsCount, extrinsicsSize, exportsCount
   }
 
 /-- Parse segment_root_lookup from Grey format: array of {work_package_hash, segment_tree_root}. -/
@@ -69,15 +89,22 @@ private def parseGreySegmentRootLookup (j : Json) : Except String (Dict Hash Has
     return ⟨entries.reverse⟩
   | _ => .error "expected array for segment_root_lookup"
 
-/-- Parse WorkReport from Grey format. -/
+/-- Parse WorkReport from Grey or JAR format. Accepts both field name conventions. -/
 private def parseGreyWorkReport (j : Json) : Except String WorkReport := do
-  let resultsJson ← j.getObjVal? "results"
+  -- Accept both "results" (Grey) and "digests" (JAR) field names
+  let resultsJson ← match j.getObjVal? "results" with
+    | .ok v => pure v
+    | .error _ => j.getObjVal? "digests"
   let digests ← match resultsJson with
     | Json.arr items => items.toList.mapM parseGreyDigest |>.map Array.mk
-    | _ => .error "expected array for results"
+    | _ => .error "expected array for results/digests"
   let coreIndexNat ← (← j.getObjVal? "core_index").getNat?
+  -- Accept both "package_spec" (Grey) and "avail_spec" (JAR) field names
+  let availSpecJson ← match j.getObjVal? "package_spec" with
+    | .ok v => pure v
+    | .error _ => j.getObjVal? "avail_spec"
   return {
-    availSpec := ← parseGreyAvailSpec (← j.getObjVal? "package_spec")
+    availSpec := ← parseGreyAvailSpec availSpecJson
     context := ← parseGreyContext (← j.getObjVal? "context")
     coreIndex := ⟨coreIndexNat, sorry⟩
     authorizerHash := ← fromJson? (← j.getObjVal? "authorizer_hash")
@@ -138,29 +165,33 @@ private def parseGreyServiceAccount (dataJson : Json) : Except String ServiceAcc
       pure (⟨entries.reverse⟩ : Dict (Hash × BlobLength) (Array Timeslot))
     | _ => .error "expected array for preimage_requests"
 
+  -- Accept both Grey and JAR field name conventions for service account fields
+  let svcField (a b : String) : Except String Json :=
+    match svc.getObjVal? a with | .ok v => .ok v | .error _ => svc.getObjVal? b
+  let svcFieldNat (a b : String) (default : Nat := 0) : Except String Nat :=
+    match svc.getObjVal? a with
+    | .ok v => match v.getNat? with | .ok n => .ok n | .error _ => .ok default
+    | .error _ => match svc.getObjVal? b with
+      | .ok v => match v.getNat? with | .ok n => .ok n | .error _ => .ok default
+      | .error _ => .ok default
   return {
     storage := storage
     preimages := preimages
     preimageInfo := preimageInfo
     gratis := match svc.getObjVal? "deposit_offset" with
       | .ok v => match @fromJson? UInt64 _ v with | .ok n => n | .error _ => 0
-      | .error _ => 0
+      | .error _ => match svc.getObjVal? "gratis" with
+        | .ok v => match @fromJson? UInt64 _ v with | .ok n => n | .error _ => 0
+        | .error _ => 0
     codeHash := ← fromJson? (← svc.getObjVal? "code_hash")
     balance := ← fromJson? (← svc.getObjVal? "balance")
-    minAccGas := ← fromJson? (← svc.getObjVal? "min_item_gas")
-    minOnTransferGas := ← fromJson? (← svc.getObjVal? "min_memo_gas")
-    -- GP field mapping:
-    -- JSON "items" = a_i (item count), JSON "creation_slot" = a_r (creation timeslot),
-    -- JSON "last_accumulation_slot" = a_a (last accumulation), JSON "parent_service" = a_p
-    itemCount := match svc.getObjVal? "items" with
-      | .ok v => match v.getNat? with | .ok n => UInt32.ofNat n | .error _ => 0
-      | .error _ => 0
-    creationSlot := ← fromJson? (← svc.getObjVal? "creation_slot")
-    lastAccumulation := ← fromJson? (← svc.getObjVal? "last_accumulation_slot")
-    parentServiceId := ← fromJson? (← svc.getObjVal? "parent_service")
-    totalFootprint := match svc.getObjVal? "bytes" with
-      | .ok v => match v.getNat? with | .ok n => n | .error _ => 0
-      | .error _ => 0
+    minAccGas := ← fromJson? (← svcField "min_item_gas" "min_acc_gas")
+    minOnTransferGas := ← fromJson? (← svcField "min_memo_gas" "min_on_transfer_gas")
+    itemCount := UInt32.ofNat (← svcFieldNat "items" "item_count")
+    creationSlot := ← fromJson? (← svcField "creation_slot" "creation_slot")
+    lastAccumulation := ← fromJson? (← svcField "last_accumulation_slot" "last_accumulation")
+    parentServiceId := ← svcFieldNat "parent_service" "parent_service_id"
+    totalFootprint := ← svcFieldNat "bytes" "total_footprint"
   }
 
 -- ============================================================================
@@ -325,10 +356,47 @@ private def toJsonGreyPrivileges (p : TAPrivileges) : Json :=
     ("always_acc", Json.arr (p.alwaysAcc.map fun (s, g) =>
       Json.arr #[toJson s, toJson g]))]
 
+private def toJsonGreyDigest (d : WorkDigest) : Json :=
+  Json.mkObj [
+    ("service_id", toJson d.serviceId),
+    ("code_hash", toJson d.codeHash),
+    ("payload_hash", toJson d.payloadHash),
+    ("accumulate_gas", toJson d.gasLimit),
+    ("result", toJson d.result),
+    ("refine_load", Json.mkObj [
+      ("gas_used", toJson d.gasUsed),
+      ("imports", Json.num d.importsCount),
+      ("extrinsic_count", Json.num d.extrinsicsCount),
+      ("extrinsic_size", Json.num d.extrinsicsSize),
+      ("exports", Json.num d.exportsCount)])]
+
+private def toJsonGreyWorkReport (wr : WorkReport) : Json :=
+  Json.mkObj [
+    ("package_spec", Json.mkObj [
+      ("hash", toJson wr.availSpec.packageHash),
+      ("length", toJson wr.availSpec.bundleLength),
+      ("erasure_root", toJson wr.availSpec.erasureRoot),
+      ("exports_root", toJson wr.availSpec.segmentRoot),
+      ("exports_count", Json.num wr.availSpec.segmentCount)]),
+    ("context", Json.mkObj [
+      ("anchor", toJson wr.context.anchorHash),
+      ("state_root", toJson wr.context.anchorStateRoot),
+      ("beefy_root", toJson wr.context.anchorBeefyRoot),
+      ("lookup_anchor", toJson wr.context.lookupAnchorHash),
+      ("lookup_anchor_slot", toJson wr.context.lookupAnchorTimeslot),
+      ("prerequisites", toJson wr.context.prerequisites)]),
+    ("core_index", toJson wr.coreIndex),
+    ("authorizer_hash", toJson wr.authorizerHash),
+    ("auth_output", toJson wr.authOutput),
+    ("segment_root_lookup", Json.arr (wr.segmentRootLookup.entries.map fun (k, v) =>
+      Json.mkObj [("work_package_hash", toJson k), ("segment_tree_root", toJson v)]).toArray),
+    ("results", Json.arr (wr.digests.map toJsonGreyDigest)),
+    ("auth_gas_used", toJson wr.authGasUsed)]
+
 def toJsonGreyState (s : TAState) : Json :=
   let readyQueueJson := Json.arr (s.readyQueue.map fun slot =>
     Json.arr (slot.map fun r => Json.mkObj [
-      ("report", toJson r.report),
+      ("report", toJsonGreyWorkReport r.report),
       ("dependencies", toJson r.dependencies)]))
   let accumulatedJson := Json.arr (s.accumulated.map fun slot =>
     Json.arr (slot.map fun h => toJson h))
