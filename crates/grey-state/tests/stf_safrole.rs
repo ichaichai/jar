@@ -2,7 +2,10 @@
 
 mod common;
 
-use common::{bandersnatch_from_hex, decode_hex, ed25519_from_hex, hash_from_hex, parse_validator};
+use common::{
+    bandersnatch_from_hex, decode_hex, discover_test_stems, ed25519_from_hex, hash_from_hex,
+    load_jar_test, parse_validator,
+};
 use grey_state::safrole::{self, SafroleError, SafroleInput, SafroleState};
 use grey_types::config::Config;
 use grey_types::header::{Ticket, TicketProof};
@@ -226,9 +229,9 @@ fn make_ring_vrf_verifier(
     }
 }
 
-fn run_safrole_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_safrole_test(dir: &str, stem: &str) {
+    let json = load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input = parse_input(&json["input"]);
     let pre_state = parse_state(&json["pre_state"]);
@@ -259,7 +262,7 @@ fn run_safrole_test(path: &str) {
             Ok(_) => panic!("expected error '{}' but got Ok in {}", expected_err, path),
         }
         // On error, state should be unchanged
-        assert_state_eq(&pre_state, &expected_post, path);
+        assert_state_eq(&pre_state, &expected_post, &path);
     } else {
         // Expected success
         let ok = &output["ok"];
@@ -363,15 +366,17 @@ fn run_safrole_test(path: &str) {
         }
 
         // Check post-state
-        assert_state_eq(&output_result.state, &expected_post, path);
+        assert_state_eq(&output_result.state, &expected_post, &path);
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/safrole";
+
 macro_rules! safrole_test {
-    ($name:ident, $path:expr) => {
+    ($name:ident, $stem:expr) => {
         #[test]
         fn $name() {
-            run_safrole_test($path);
+            run_safrole_test(DIR, $stem);
         }
     };
 }
@@ -379,89 +384,97 @@ macro_rules! safrole_test {
 // Non-ticket tests (no Ring VRF needed)
 safrole_test!(
     test_safrole_no_tickets_1,
-    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-1.json"
+    "enact-epoch-change-with-no-tickets-1"
 );
 safrole_test!(
     test_safrole_no_tickets_2,
-    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-2.json"
+    "enact-epoch-change-with-no-tickets-2"
 );
 safrole_test!(
     test_safrole_no_tickets_3,
-    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-3.json"
+    "enact-epoch-change-with-no-tickets-3"
 );
 safrole_test!(
     test_safrole_no_tickets_4,
-    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-no-tickets-4.json"
+    "enact-epoch-change-with-no-tickets-4"
 );
 safrole_test!(
     test_safrole_padding_1,
-    "../../res/testvectors/stf/safrole/tiny/enact-epoch-change-with-padding-1.json"
+    "enact-epoch-change-with-padding-1"
 );
 safrole_test!(
     test_safrole_skip_epochs_1,
-    "../../res/testvectors/stf/safrole/tiny/skip-epochs-1.json"
+    "skip-epochs-1"
 );
 safrole_test!(
     test_safrole_skip_epoch_tail_1,
-    "../../res/testvectors/stf/safrole/tiny/skip-epoch-tail-1.json"
+    "skip-epoch-tail-1"
 );
 
 // Ticket tests that fail before VRF (no Ring VRF needed)
 safrole_test!(
     test_safrole_bad_ticket_attempt,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-1.json"
+    "publish-tickets-no-mark-1"
 );
 safrole_test!(
     test_safrole_unexpected_ticket,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-7.json"
+    "publish-tickets-no-mark-7"
 );
 safrole_test!(
     test_safrole_no_tickets_in_sealing_phase,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-8.json"
+    "publish-tickets-no-mark-8"
 );
 
 // Ticket tests (with real Bandersnatch Ring VRF verification)
 safrole_test!(
     test_safrole_tickets_ok_1,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-2.json"
+    "publish-tickets-no-mark-2"
 );
 safrole_test!(
     test_safrole_tickets_duplicate,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-3.json"
+    "publish-tickets-no-mark-3"
 );
 safrole_test!(
     test_safrole_tickets_bad_order,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-4.json"
+    "publish-tickets-no-mark-4"
 );
 safrole_test!(
     test_safrole_tickets_bad_proof,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-5.json"
+    "publish-tickets-no-mark-5"
 );
 safrole_test!(
     test_safrole_tickets_ok_2,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-6.json"
+    "publish-tickets-no-mark-6"
 );
 safrole_test!(
     test_safrole_tickets_epoch_mark,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-no-mark-9.json"
+    "publish-tickets-no-mark-9"
 );
 safrole_test!(
     test_safrole_with_mark_1,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-1.json"
+    "publish-tickets-with-mark-1"
 );
 safrole_test!(
     test_safrole_with_mark_2,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-2.json"
+    "publish-tickets-with-mark-2"
 );
 safrole_test!(
     test_safrole_with_mark_3,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-3.json"
+    "publish-tickets-with-mark-3"
 );
 safrole_test!(
     test_safrole_with_mark_4,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-4.json"
+    "publish-tickets-with-mark-4"
 );
 safrole_test!(
     test_safrole_with_mark_5,
-    "../../res/testvectors/stf/safrole/tiny/publish-tickets-with-mark-5.json"
+    "publish-tickets-with-mark-5"
 );
+
+#[test]
+fn test_safrole_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_safrole_test(DIR, stem);
+    }
+}

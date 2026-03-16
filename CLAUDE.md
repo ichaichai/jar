@@ -203,13 +203,13 @@ crates/
 | 2 | `grey-pvm` | Complete — full ISA, arg decoding, VM execution, deblob, sbrk | 31 |
 | 3 | `grey-merkle` | Complete — binary Patricia trie, balanced tree, MMR, state serialization | 14 |
 | 3 | `grey-erasure` | Complete — RS encode/decode with k-independent symbol coding | 24 |
-| 4 | `grey-state` | Complete — 8-step state transition + Safrole + accumulation with PVM | 159 |
+| 4 | `grey-state` | Complete — 8-step state transition + Safrole + accumulation with PVM | 171 STF + 10 block traces |
 | 5 | `grey-consensus` | Complete — Safrole (entropy, keys, tickets, fallback) | 25 |
 | 6 | `grey-services` | Partial — accumulation pipeline structure | 11 |
 | 7 | `grey-network` | Scaffolded — API stubs only | 0 |
-| 7 | `grey` | Conformance target (`grey-conform`) + CLI entry point | 0 |
+| 7 | `grey` | Node executable (CLI entry point) | 0 |
 
-**Total: 311 tests passing across all crates. Conformance: 101/101 blocks passing.**
+**Test vectors from JAR (`res/spec` submodule → `https://github.com/bitarray/jar`).** JAR is authoritative.
 
 ### What's Implemented
 - Full PVM instruction set (~150 opcodes) with correct Gray Paper encoding
@@ -220,22 +220,32 @@ crates/
 - Safrole sub-transition with real Ring VRF ticket verification (21/21 test vectors)
 - Accumulation pipeline (Δ+, Δ*, Δ1) with PVM execution and host-call dispatch
 - State serialization T(σ) and deserialization (Appendix D.2)
-- Conformance target binary with fuzz-proto v1 protocol (101/101 blocks passing)
+- Block-level integration tests against JAR test vectors (10 traces, ~1200 blocks)
 - JAM codec decode for all compound types (Block, Header, Extrinsic)
 
-### Conformance Progress
-- All 101 blocks pass (0.7.2/no_forks trace)
-- Key bugs fixed: sbrk(0) heap query, accumulation dependency resolution, host-call check ordering, output hash sorting
-- See `docs/conformance-testing.md` for debugging methodology
+### Block Trace Status (JAR vectors, gp072_tiny)
+
+| Trace | Blocks | Status |
+|-------|--------|--------|
+| fallback | 100 | 100/100 |
+| safrole | 100 | 48/100 |
+| conformance_forks | 100 | 3/32 non-error |
+| conformance_no_forks | 100 | 3/100 (sequential) |
+| storage | 100 | 1/100 |
+| storage_light | 100 | 0/100 |
+| preimages | 100 | 0/100 |
+| preimages_light | 100 | 0/100 |
+| fuzzy | 200 | crashes (deserialize bug) |
+| fuzzy_light | 200 | crashes (deserialize bug) |
 
 ### Known Issues
-- `host_eject` (id=21): Basic implementation only — missing full GP logic (code_hash check, item count validation, preimage lookup age check per GP eq 4601-4621)
-- `host_provide` (id=26): Early WHO return for invalid service IDs before memory read (minor ordering issue)
-- Safrole sub-transition: Always fails with BadSlot in conformance tests (seal key verification). Success/failure paths produce identical state for non-epoch blocks without tickets.
+- State serialization uses fixed-width encoding for work reports in `deserialize_work_report` but the actual data uses standard compact encoding — causes fuzzy trace crashes
+- `host_eject` (id=21): Basic implementation only — missing full GP logic
+- Various accumulation bugs exposed by storage/preimage/fuzzy block traces
 
 ### What's Next
-- Run additional conformance traces (with_forks, larger traces)
-- Complete `host_eject` implementation per GP eq 4601-4621
+- Fix work report deserialization (compact vs fixed-width encoding)
+- Fix remaining block trace failures (storage, preimages, safrole)
 - P2P networking layer in `grey-network`
 - Node executable with genesis, block import, validator mode
 

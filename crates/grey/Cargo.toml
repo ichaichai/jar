@@ -9,10 +9,6 @@ description = "JAM (Join-Accumulate Machine) blockchain node implementation."
 name = "grey"
 path = "src/main.rs"
 
-[[bin]]
-name = "grey-conform"
-path = "src/conform.rs"
-
 [dependencies]
 grey-types = { workspace = true }
 grey-codec = { workspace = true }

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{decode_hex, ed25519_from_hex, hash_from_hex, parse_work_report, sig_from_hex};
+use common::{decode_hex, discover_test_stems, ed25519_from_hex, hash_from_hex, load_jar_test, parse_work_report, sig_from_hex};
 use grey_state::statistics;
 use grey_types::header::*;
 use grey_types::state::{ValidatorRecord, ValidatorStatistics};
@@ -116,9 +116,9 @@ fn validator_record_from_json(json: &serde_json::Value) -> ValidatorRecord {
 }
 
 /// Run a single statistics STF test vector.
-fn run_statistics_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_statistics_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input = &json["input"];
     let pre = &json["pre_state"];
@@ -183,17 +183,27 @@ fn run_statistics_test(path: &str) {
     );
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/statistics";
+
 #[test]
 fn test_stf_statistics_empty_extrinsic() {
-    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_empty_extrinsic-1.json");
+    run_statistics_test(DIR, "stats_with_empty_extrinsic-1");
 }
 
 #[test]
 fn test_stf_statistics_some_extrinsic() {
-    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_some_extrinsic-1.json");
+    run_statistics_test(DIR, "stats_with_some_extrinsic-1");
 }
 
 #[test]
 fn test_stf_statistics_epoch_change() {
-    run_statistics_test("../../res/testvectors/stf/statistics/tiny/stats_with_epoch_change-1.json");
+    run_statistics_test(DIR, "stats_with_epoch_change-1");
+}
+
+#[test]
+fn test_statistics_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_statistics_test(DIR, stem);
+    }
 }

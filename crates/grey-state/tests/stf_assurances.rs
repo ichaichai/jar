@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{decode_hex, hash_from_hex, parse_work_report, sig_from_hex};
+use common::{decode_hex, discover_test_stems, hash_from_hex, load_jar_test, parse_work_report, sig_from_hex};
 use grey_state::assurances::process_assurances;
 use grey_types::config::Config;
 use grey_types::header::Assurance;
@@ -26,9 +26,9 @@ fn parse_pending_reports(json: &serde_json::Value) -> Vec<Option<PendingReport>>
         .collect()
 }
 
-fn run_assurances_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_assurances_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input = &json["input"];
     let pre = &json["pre_state"];
@@ -132,68 +132,62 @@ fn run_assurances_test(path: &str) {
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/assurances";
+
 #[test]
 fn test_assurances_no_assurances() {
-    run_assurances_test("../../res/testvectors/stf/assurances/tiny/no_assurances-1.json");
+    run_assurances_test(DIR, "no_assurances-1");
 }
 
 #[test]
 fn test_assurances_some() {
-    run_assurances_test("../../res/testvectors/stf/assurances/tiny/some_assurances-1.json");
+    run_assurances_test(DIR, "some_assurances-1");
 }
 
 #[test]
 fn test_assurances_stale_report() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/no_assurances_with_stale_report-1.json",
-    );
+    run_assurances_test(DIR, "no_assurances_with_stale_report-1");
 }
 
 #[test]
 fn test_assurances_for_stale() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurances_for_stale_report-1.json",
-    );
+    run_assurances_test(DIR, "assurances_for_stale_report-1");
 }
 
 #[test]
 fn test_assurances_bad_signature() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurances_with_bad_signature-1.json",
-    );
+    run_assurances_test(DIR, "assurances_with_bad_signature-1");
 }
 
 #[test]
 fn test_assurances_bad_validator_index() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurances_with_bad_validator_index-1.json",
-    );
+    run_assurances_test(DIR, "assurances_with_bad_validator_index-1");
 }
 
 #[test]
 fn test_assurances_not_engaged_core() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurance_for_not_engaged_core-1.json",
-    );
+    run_assurances_test(DIR, "assurance_for_not_engaged_core-1");
 }
 
 #[test]
 fn test_assurances_bad_attestation_parent() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurance_with_bad_attestation_parent-1.json",
-    );
+    run_assurances_test(DIR, "assurance_with_bad_attestation_parent-1");
 }
 
 #[test]
 fn test_assurances_not_sorted_1() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurers_not_sorted_or_unique-1.json",
-    );
+    run_assurances_test(DIR, "assurers_not_sorted_or_unique-1");
 }
 
 #[test]
 fn test_assurances_not_sorted_2() {
-    run_assurances_test(
-        "../../res/testvectors/stf/assurances/tiny/assurers_not_sorted_or_unique-2.json",
-    );
+    run_assurances_test(DIR, "assurers_not_sorted_or_unique-2");
+}
+
+#[test]
+fn test_assurances_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_assurances_test(DIR, stem);
+    }
 }

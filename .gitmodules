@@ -1,6 +1,3 @@
-[submodule "test-vectors"]
-	path = res/testvectors
-	url = https://github.com/w3f/jamtestvectors
-[submodule "res/conformance"]
-	path = res/conformance
-	url = https://github.com/davxy/jam-conformance
+[submodule "res/spec"]
+	path = res/spec
+	url = https://github.com/bitarray/jar

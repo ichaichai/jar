@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{decode_hex, ed25519_from_hex, hash_from_hex, parse_validator, parse_work_report, sig_from_hex};
+use common::{decode_hex, discover_test_stems, ed25519_from_hex, hash_from_hex, load_jar_test, parse_validator, parse_work_report, sig_from_hex};
 use grey_state::reports::{
     process_reports, AvailAssignment, CoreStats, GuaranteeInput, RecentBlockEntry, ReportsState,
     ServiceInfo, ServiceStats,
@@ -70,10 +70,9 @@ fn parse_service_stats(v: &serde_json::Value) -> ServiceStats {
     }
 }
 
-fn run_reports_test(path: &str) {
-    let content = std::fs::read_to_string(path).unwrap_or_else(|_| panic!("failed to read {}", path));
-    let json: serde_json::Value =
-        serde_json::from_str(&content).unwrap_or_else(|_| panic!("failed to parse {}", path));
+fn run_reports_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input_json = &json["input"];
     let pre = &json["pre_state"];
@@ -377,111 +376,118 @@ fn run_reports_test(path: &str) {
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/reports";
+
 macro_rules! report_test {
-    ($name:ident, $file:expr) => {
+    ($name:ident, $stem:expr) => {
         #[test]
         fn $name() {
-            run_reports_test(&format!(
-                "../../res/testvectors/stf/reports/tiny/{}",
-                $file
-            ));
+            run_reports_test(DIR, $stem);
         }
     };
 }
 
-report_test!(test_anchor_not_recent, "anchor_not_recent-1.json");
-report_test!(test_bad_beefy_mmr, "bad_beefy_mmr-1.json");
-report_test!(test_bad_code_hash, "bad_code_hash-1.json");
-report_test!(test_bad_core_index, "bad_core_index-1.json");
-report_test!(test_bad_service_id, "bad_service_id-1.json");
-report_test!(test_bad_signature, "bad_signature-1.json");
-report_test!(test_bad_state_root, "bad_state_root-1.json");
-report_test!(test_bad_validator_index, "bad_validator_index-1.json");
-report_test!(test_banned_validator, "banned_validator_guarantee-1.json");
-report_test!(test_big_work_report_output, "big_work_report_output-1.json");
-report_test!(test_core_engaged, "core_engaged-1.json");
-report_test!(test_dependency_missing, "dependency_missing-1.json");
+report_test!(test_anchor_not_recent, "anchor_not_recent-1");
+report_test!(test_bad_beefy_mmr, "bad_beefy_mmr-1");
+report_test!(test_bad_code_hash, "bad_code_hash-1");
+report_test!(test_bad_core_index, "bad_core_index-1");
+report_test!(test_bad_service_id, "bad_service_id-1");
+report_test!(test_bad_signature, "bad_signature-1");
+report_test!(test_bad_state_root, "bad_state_root-1");
+report_test!(test_bad_validator_index, "bad_validator_index-1");
+report_test!(test_banned_validator, "banned_validator_guarantee-1");
+report_test!(test_big_work_report_output, "big_work_report_output-1");
+report_test!(test_core_engaged, "core_engaged-1");
+report_test!(test_dependency_missing, "dependency_missing-1");
 report_test!(
     test_different_core_same_guarantors,
-    "different_core_same_guarantors-1.json"
+    "different_core_same_guarantors-1"
 );
 report_test!(
     test_duplicate_package_in_recent_history,
-    "duplicate_package_in_recent_history-1.json"
+    "duplicate_package_in_recent_history-1"
 );
 report_test!(
     test_duplicated_package_in_report,
-    "duplicated_package_in_report-1.json"
+    "duplicated_package_in_report-1"
 );
-report_test!(test_future_report_slot, "future_report_slot-1.json");
-report_test!(test_high_work_report_gas, "high_work_report_gas-1.json");
-report_test!(test_many_dependencies, "many_dependencies-1.json");
-report_test!(test_multiple_reports, "multiple_reports-1.json");
-report_test!(test_no_enough_guarantees, "no_enough_guarantees-1.json");
-report_test!(test_not_authorized, "not_authorized-1.json");
-report_test!(test_not_authorized_2, "not_authorized-2.json");
-report_test!(test_not_sorted_guarantor, "not_sorted_guarantor-1.json");
+report_test!(test_future_report_slot, "future_report_slot-1");
+report_test!(test_high_work_report_gas, "high_work_report_gas-1");
+report_test!(test_many_dependencies, "many_dependencies-1");
+report_test!(test_multiple_reports, "multiple_reports-1");
+report_test!(test_no_enough_guarantees, "no_enough_guarantees-1");
+report_test!(test_not_authorized, "not_authorized-1");
+report_test!(test_not_authorized_2, "not_authorized-2");
+report_test!(test_not_sorted_guarantor, "not_sorted_guarantor-1");
 report_test!(
     test_out_of_order_guarantees,
-    "out_of_order_guarantees-1.json"
+    "out_of_order_guarantees-1"
 );
 report_test!(
     test_report_before_last_rotation,
-    "report_before_last_rotation-1.json"
+    "report_before_last_rotation-1"
 );
-report_test!(test_report_curr_rotation, "report_curr_rotation-1.json");
-report_test!(test_report_prev_rotation, "report_prev_rotation-1.json");
+report_test!(test_report_curr_rotation, "report_curr_rotation-1");
+report_test!(test_report_prev_rotation, "report_prev_rotation-1");
 report_test!(
     test_report_with_no_results,
-    "report_with_no_results-1.json"
+    "report_with_no_results-1"
 );
 report_test!(
     test_reports_with_dependencies_1,
-    "reports_with_dependencies-1.json"
+    "reports_with_dependencies-1"
 );
 report_test!(
     test_reports_with_dependencies_2,
-    "reports_with_dependencies-2.json"
+    "reports_with_dependencies-2"
 );
 report_test!(
     test_reports_with_dependencies_3,
-    "reports_with_dependencies-3.json"
+    "reports_with_dependencies-3"
 );
 report_test!(
     test_reports_with_dependencies_4,
-    "reports_with_dependencies-4.json"
+    "reports_with_dependencies-4"
 );
 report_test!(
     test_reports_with_dependencies_5,
-    "reports_with_dependencies-5.json"
+    "reports_with_dependencies-5"
 );
 report_test!(
     test_reports_with_dependencies_6,
-    "reports_with_dependencies-6.json"
+    "reports_with_dependencies-6"
 );
 report_test!(
     test_segment_root_lookup_invalid_1,
-    "segment_root_lookup_invalid-1.json"
+    "segment_root_lookup_invalid-1"
 );
 report_test!(
     test_segment_root_lookup_invalid_2,
-    "segment_root_lookup_invalid-2.json"
+    "segment_root_lookup_invalid-2"
 );
 report_test!(
     test_service_item_gas_too_low,
-    "service_item_gas_too_low-1.json"
+    "service_item_gas_too_low-1"
 );
 report_test!(
     test_too_big_work_report_output,
-    "too_big_work_report_output-1.json"
+    "too_big_work_report_output-1"
 );
 report_test!(
     test_too_high_work_report_gas,
-    "too_high_work_report_gas-1.json"
+    "too_high_work_report_gas-1"
 );
-report_test!(test_too_many_dependencies, "too_many_dependencies-1.json");
+report_test!(test_too_many_dependencies, "too_many_dependencies-1");
 report_test!(
     test_with_avail_assignments,
-    "with_avail_assignments-1.json"
+    "with_avail_assignments-1"
 );
-report_test!(test_wrong_assignment, "wrong_assignment-1.json");
+report_test!(test_wrong_assignment, "wrong_assignment-1");
+
+#[test]
+fn test_reports_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_reports_test(DIR, stem);
+    }
+}

@@ -2,14 +2,14 @@
 
 mod common;
 
-use common::hash_from_hex;
+use common::{discover_test_stems, hash_from_hex, load_jar_test};
 use grey_state::authorizations::{update_authorizations, AuthorizationInput};
 use grey_types::config::Config;
 use grey_types::Hash;
 
-fn run_authorizations_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_authorizations_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input_json = &json["input"];
     let pre = &json["pre_state"];
@@ -92,23 +92,27 @@ fn run_authorizations_test(path: &str) {
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/authorizations";
+
 #[test]
 fn test_stf_authorizations_1() {
-    run_authorizations_test(
-        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-1.json",
-    );
+    run_authorizations_test(DIR, "progress_authorizations-1");
 }
 
 #[test]
 fn test_stf_authorizations_2() {
-    run_authorizations_test(
-        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-2.json",
-    );
+    run_authorizations_test(DIR, "progress_authorizations-2");
 }
 
 #[test]
 fn test_stf_authorizations_3() {
-    run_authorizations_test(
-        "../../res/testvectors/stf/authorizations/tiny/progress_authorizations-3.json",
-    );
+    run_authorizations_test(DIR, "progress_authorizations-3");
+}
+
+#[test]
+fn test_authorizations_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_authorizations_test(DIR, stem);
+    }
 }

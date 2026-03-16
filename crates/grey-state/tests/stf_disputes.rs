@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{ed25519_from_hex, hash_from_hex, sig_from_hex};
+use common::{discover_test_stems, ed25519_from_hex, hash_from_hex, load_jar_test, sig_from_hex};
 use grey_state::disputes::{process_disputes, DisputeError};
 use grey_types::config::Config;
 use grey_types::header::*;
@@ -101,9 +101,9 @@ fn parse_pending_reports(json: &serde_json::Value) -> Vec<Option<PendingReport>>
         .collect()
 }
 
-fn run_disputes_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_disputes_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input_json = &json["input"];
     let pre = &json["pre_state"];
@@ -211,75 +211,82 @@ fn run_disputes_test(path: &str) {
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/disputes";
+
 // Generate test functions for all dispute test vectors
 macro_rules! dispute_test {
-    ($name:ident, $file:expr) => {
+    ($name:ident, $stem:expr) => {
         #[test]
         fn $name() {
-            run_disputes_test(&format!(
-                "../../res/testvectors/stf/disputes/tiny/{}",
-                $file
-            ));
+            run_disputes_test(DIR, $stem);
         }
     };
 }
 
-dispute_test!(test_disputes_verdicts_1, "progress_with_verdicts-1.json");
-dispute_test!(test_disputes_verdicts_2, "progress_with_verdicts-2.json");
-dispute_test!(test_disputes_verdicts_3, "progress_with_verdicts-3.json");
-dispute_test!(test_disputes_verdicts_4, "progress_with_verdicts-4.json");
-dispute_test!(test_disputes_verdicts_5, "progress_with_verdicts-5.json");
-dispute_test!(test_disputes_verdicts_6, "progress_with_verdicts-6.json");
+dispute_test!(test_disputes_verdicts_1, "progress_with_verdicts-1");
+dispute_test!(test_disputes_verdicts_2, "progress_with_verdicts-2");
+dispute_test!(test_disputes_verdicts_3, "progress_with_verdicts-3");
+dispute_test!(test_disputes_verdicts_4, "progress_with_verdicts-4");
+dispute_test!(test_disputes_verdicts_5, "progress_with_verdicts-5");
+dispute_test!(test_disputes_verdicts_6, "progress_with_verdicts-6");
 
-dispute_test!(test_disputes_culprits_1, "progress_with_culprits-1.json");
-dispute_test!(test_disputes_culprits_2, "progress_with_culprits-2.json");
-dispute_test!(test_disputes_culprits_3, "progress_with_culprits-3.json");
-dispute_test!(test_disputes_culprits_4, "progress_with_culprits-4.json");
-dispute_test!(test_disputes_culprits_5, "progress_with_culprits-5.json");
-dispute_test!(test_disputes_culprits_6, "progress_with_culprits-6.json");
-dispute_test!(test_disputes_culprits_7, "progress_with_culprits-7.json");
+dispute_test!(test_disputes_culprits_1, "progress_with_culprits-1");
+dispute_test!(test_disputes_culprits_2, "progress_with_culprits-2");
+dispute_test!(test_disputes_culprits_3, "progress_with_culprits-3");
+dispute_test!(test_disputes_culprits_4, "progress_with_culprits-4");
+dispute_test!(test_disputes_culprits_5, "progress_with_culprits-5");
+dispute_test!(test_disputes_culprits_6, "progress_with_culprits-6");
+dispute_test!(test_disputes_culprits_7, "progress_with_culprits-7");
 
-dispute_test!(test_disputes_faults_1, "progress_with_faults-1.json");
-dispute_test!(test_disputes_faults_2, "progress_with_faults-2.json");
-dispute_test!(test_disputes_faults_3, "progress_with_faults-3.json");
-dispute_test!(test_disputes_faults_4, "progress_with_faults-4.json");
-dispute_test!(test_disputes_faults_5, "progress_with_faults-5.json");
-dispute_test!(test_disputes_faults_6, "progress_with_faults-6.json");
-dispute_test!(test_disputes_faults_7, "progress_with_faults-7.json");
+dispute_test!(test_disputes_faults_1, "progress_with_faults-1");
+dispute_test!(test_disputes_faults_2, "progress_with_faults-2");
+dispute_test!(test_disputes_faults_3, "progress_with_faults-3");
+dispute_test!(test_disputes_faults_4, "progress_with_faults-4");
+dispute_test!(test_disputes_faults_5, "progress_with_faults-5");
+dispute_test!(test_disputes_faults_6, "progress_with_faults-6");
+dispute_test!(test_disputes_faults_7, "progress_with_faults-7");
 
 dispute_test!(
     test_disputes_bad_signatures_1,
-    "progress_with_bad_signatures-1.json"
+    "progress_with_bad_signatures-1"
 );
 dispute_test!(
     test_disputes_bad_signatures_2,
-    "progress_with_bad_signatures-2.json"
+    "progress_with_bad_signatures-2"
 );
 
 dispute_test!(
     test_disputes_invalid_keys_1,
-    "progress_with_invalid_keys-1.json"
+    "progress_with_invalid_keys-1"
 );
 dispute_test!(
     test_disputes_invalid_keys_2,
-    "progress_with_invalid_keys-2.json"
+    "progress_with_invalid_keys-2"
 );
 
 dispute_test!(
     test_disputes_no_verdicts_1,
-    "progress_with_no_verdicts-1.json"
+    "progress_with_no_verdicts-1"
 );
 
 dispute_test!(
     test_disputes_prev_set_sigs_1,
-    "progress_with_verdict_signatures_from_previous_set-1.json"
+    "progress_with_verdict_signatures_from_previous_set-1"
 );
 dispute_test!(
     test_disputes_prev_set_sigs_2,
-    "progress_with_verdict_signatures_from_previous_set-2.json"
+    "progress_with_verdict_signatures_from_previous_set-2"
 );
 
 dispute_test!(
     test_disputes_invalidates_avail_1,
-    "progress_invalidates_avail_assignments-1.json"
+    "progress_invalidates_avail_assignments-1"
 );
+
+#[test]
+fn test_disputes_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_disputes_test(DIR, stem);
+    }
+}

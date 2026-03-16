@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::hash_from_hex;
+use common::{discover_test_stems, hash_from_hex, load_jar_test};
 use grey_state::history::{update_history, HistoryInput};
 use grey_types::Hash;
 use grey_types::state::{RecentBlockInfo, RecentBlocks};
@@ -54,9 +54,9 @@ fn recent_blocks_from_json(json: &serde_json::Value) -> RecentBlocks {
 }
 
 /// Run a single history STF test vector.
-fn run_history_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_history_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let input_json = &json["input"];
     let pre = &json["pre_state"]["beta"];
@@ -132,22 +132,32 @@ fn run_history_test(path: &str) {
     );
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/history";
+
 #[test]
 fn test_stf_history_1() {
-    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-1.json");
+    run_history_test(DIR, "progress_blocks_history-1");
 }
 
 #[test]
 fn test_stf_history_2() {
-    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-2.json");
+    run_history_test(DIR, "progress_blocks_history-2");
 }
 
 #[test]
 fn test_stf_history_3() {
-    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-3.json");
+    run_history_test(DIR, "progress_blocks_history-3");
 }
 
 #[test]
 fn test_stf_history_4() {
-    run_history_test("../../res/testvectors/stf/history/tiny/progress_blocks_history-4.json");
+    run_history_test(DIR, "progress_blocks_history-4");
+}
+
+#[test]
+fn test_history_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_history_test(DIR, stem);
+    }
 }

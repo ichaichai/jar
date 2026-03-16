@@ -68,7 +68,7 @@ fn run_recover_test(params: &ErasureParams, json_str: &str) {
 fn test_tiny_ec_3_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-3.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-3.gp072_tiny.json"),
     );
 }
 
@@ -76,7 +76,7 @@ fn test_tiny_ec_3_encode() {
 fn test_tiny_ec_32_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-32.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-32.gp072_tiny.json"),
     );
 }
 
@@ -84,7 +84,7 @@ fn test_tiny_ec_32_encode() {
 fn test_tiny_ec_100_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-100.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-100.gp072_tiny.json"),
     );
 }
 
@@ -92,7 +92,7 @@ fn test_tiny_ec_100_encode() {
 fn test_tiny_ec_4096_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-4096.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4096.gp072_tiny.json"),
     );
 }
 
@@ -100,7 +100,7 @@ fn test_tiny_ec_4096_encode() {
 fn test_tiny_ec_4104_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-4104.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4104.gp072_tiny.json"),
     );
 }
 
@@ -108,7 +108,7 @@ fn test_tiny_ec_4104_encode() {
 fn test_tiny_ec_10000_encode() {
     run_encode_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-10000.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-10000.gp072_tiny.json"),
     );
 }
 
@@ -118,7 +118,7 @@ fn test_tiny_ec_10000_encode() {
 fn test_full_ec_3_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-3.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-3.gp072_full.json"),
     );
 }
 
@@ -126,7 +126,7 @@ fn test_full_ec_3_encode() {
 fn test_full_ec_32_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-32.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-32.gp072_full.json"),
     );
 }
 
@@ -134,7 +134,7 @@ fn test_full_ec_32_encode() {
 fn test_full_ec_100_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-100.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-100.gp072_full.json"),
     );
 }
 
@@ -142,7 +142,7 @@ fn test_full_ec_100_encode() {
 fn test_full_ec_4096_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-4096.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4096.gp072_full.json"),
     );
 }
 
@@ -150,7 +150,7 @@ fn test_full_ec_4096_encode() {
 fn test_full_ec_4104_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-4104.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4104.gp072_full.json"),
     );
 }
 
@@ -158,7 +158,7 @@ fn test_full_ec_4104_encode() {
 fn test_full_ec_10000_encode() {
     run_encode_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-10000.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-10000.gp072_full.json"),
     );
 }
 
@@ -168,7 +168,7 @@ fn test_full_ec_10000_encode() {
 fn test_tiny_ec_3_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-3.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-3.gp072_tiny.json"),
     );
 }
 
@@ -176,7 +176,7 @@ fn test_tiny_ec_3_recover() {
 fn test_tiny_ec_32_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-32.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-32.gp072_tiny.json"),
     );
 }
 
@@ -184,7 +184,7 @@ fn test_tiny_ec_32_recover() {
 fn test_tiny_ec_100_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-100.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-100.gp072_tiny.json"),
     );
 }
 
@@ -192,7 +192,7 @@ fn test_tiny_ec_100_recover() {
 fn test_tiny_ec_4096_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-4096.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4096.gp072_tiny.json"),
     );
 }
 
@@ -200,7 +200,7 @@ fn test_tiny_ec_4096_recover() {
 fn test_tiny_ec_4104_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-4104.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4104.gp072_tiny.json"),
     );
 }
 
@@ -208,7 +208,7 @@ fn test_tiny_ec_4104_recover() {
 fn test_tiny_ec_10000_recover() {
     run_recover_test(
         &ErasureParams::TINY,
-        include_str!("../../../res/testvectors/erasure/tiny/ec-10000.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-10000.gp072_tiny.json"),
     );
 }
 
@@ -218,7 +218,7 @@ fn test_tiny_ec_10000_recover() {
 fn test_full_ec_3_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-3.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-3.gp072_full.json"),
     );
 }
 
@@ -226,7 +226,7 @@ fn test_full_ec_3_recover() {
 fn test_full_ec_32_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-32.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-32.gp072_full.json"),
     );
 }
 
@@ -234,7 +234,7 @@ fn test_full_ec_32_recover() {
 fn test_full_ec_100_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-100.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-100.gp072_full.json"),
     );
 }
 
@@ -242,7 +242,7 @@ fn test_full_ec_100_recover() {
 fn test_full_ec_4096_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-4096.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4096.gp072_full.json"),
     );
 }
 
@@ -250,7 +250,7 @@ fn test_full_ec_4096_recover() {
 fn test_full_ec_4104_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-4104.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-4104.gp072_full.json"),
     );
 }
 
@@ -258,6 +258,6 @@ fn test_full_ec_4104_recover() {
 fn test_full_ec_10000_recover() {
     run_recover_test(
         &ErasureParams::FULL,
-        include_str!("../../../res/testvectors/erasure/full/ec-10000.json"),
+        include_str!("../../../res/spec/tests/vectors/erasure/ec-10000.gp072_full.json"),
     );
 }

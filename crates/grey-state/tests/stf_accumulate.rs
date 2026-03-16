@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{decode_hex, hash_from_hex, parse_work_report};
+use common::{decode_hex, discover_test_stems, hash_from_hex, load_jar_test, parse_work_report};
 use grey_state::accumulate::{
     AccPrivileges, AccServiceAccount, AccServiceStats, AccumulateInput, AccumulateState,
     ReadyRecord, process_accumulate,
@@ -184,9 +184,9 @@ fn parse_input(v: &serde_json::Value) -> AccumulateInput {
     }
 }
 
-fn run_accumulate_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_accumulate_test(dir: &str, stem: &str) {
+    let json = load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     let config = Config::tiny();
     let input = parse_input(&json["input"]);
@@ -338,184 +338,193 @@ fn run_accumulate_test(path: &str) {
     }
 }
 
-const TV: &str = "../../res/testvectors/stf/accumulate/tiny";
+const DIR: &str = "../../res/spec/tests/vectors/accumulate";
 
 #[traced_test]
 #[test]
 fn test_no_available_reports_1() {
-    run_accumulate_test(&format!("{TV}/no_available_reports-1.json"));
+    run_accumulate_test(DIR, "no_available_reports-1");
 }
 
 #[traced_test]
 #[test]
 fn test_queues_are_shifted_1() {
-    run_accumulate_test(&format!("{TV}/queues_are_shifted-1.json"));
+    run_accumulate_test(DIR, "queues_are_shifted-1");
 }
 
 #[traced_test]
 #[test]
 fn test_queues_are_shifted_2() {
-    run_accumulate_test(&format!("{TV}/queues_are_shifted-2.json"));
+    run_accumulate_test(DIR, "queues_are_shifted-2");
 }
 
 #[traced_test]
 #[test]
 fn test_process_one_immediate_report_1() {
-    run_accumulate_test(&format!("{TV}/process_one_immediate_report-1.json"));
+    run_accumulate_test(DIR, "process_one_immediate_report-1");
 }
 
 #[traced_test]
 #[test]
 fn test_ready_queue_editing_1() {
-    run_accumulate_test(&format!("{TV}/ready_queue_editing-1.json"));
+    run_accumulate_test(DIR, "ready_queue_editing-1");
 }
 
 #[traced_test]
 #[test]
 fn test_ready_queue_editing_2() {
-    run_accumulate_test(&format!("{TV}/ready_queue_editing-2.json"));
+    run_accumulate_test(DIR, "ready_queue_editing-2");
 }
 
 #[traced_test]
 #[test]
 fn test_ready_queue_editing_3() {
-    run_accumulate_test(&format!("{TV}/ready_queue_editing-3.json"));
+    run_accumulate_test(DIR, "ready_queue_editing-3");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_simple_1() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_simple-1.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_simple-1");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_simple_2() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_simple-2.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_simple-2");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_1() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain-1.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain-1");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_2() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain-2.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain-2");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_3() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain-3.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain-3");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_4() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain-4.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain-4");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_self_referential_1() {
-    run_accumulate_test(&format!("{TV}/enqueue_self_referential-1.json"));
+    run_accumulate_test(DIR, "enqueue_self_referential-1");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_self_referential_2() {
-    run_accumulate_test(&format!("{TV}/enqueue_self_referential-2.json"));
+    run_accumulate_test(DIR, "enqueue_self_referential-2");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_self_referential_3() {
-    run_accumulate_test(&format!("{TV}/enqueue_self_referential-3.json"));
+    run_accumulate_test(DIR, "enqueue_self_referential-3");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_self_referential_4() {
-    run_accumulate_test(&format!("{TV}/enqueue_self_referential-4.json"));
+    run_accumulate_test(DIR, "enqueue_self_referential-4");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_with_sr_lookup_1() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_with_sr_lookup-1.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_with_sr_lookup-1");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_with_sr_lookup_2() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_with_sr_lookup-2.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_with_sr_lookup-2");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_wraps_1() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain_wraps-1.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain_wraps-1");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_wraps_2() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain_wraps-2.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain_wraps-2");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_wraps_3() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain_wraps-3.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain_wraps-3");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_wraps_4() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain_wraps-4.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain_wraps-4");
 }
 
 #[traced_test]
 #[test]
 fn test_enqueue_and_unlock_chain_wraps_5() {
-    run_accumulate_test(&format!("{TV}/enqueue_and_unlock_chain_wraps-5.json"));
+    run_accumulate_test(DIR, "enqueue_and_unlock_chain_wraps-5");
 }
 
 #[traced_test]
 #[test]
 fn test_accumulate_ready_queued_reports_1() {
-    run_accumulate_test(&format!("{TV}/accumulate_ready_queued_reports-1.json"));
+    run_accumulate_test(DIR, "accumulate_ready_queued_reports-1");
 }
 
 #[traced_test]
 #[test]
 fn test_same_code_different_services_1() {
-    run_accumulate_test(&format!("{TV}/same_code_different_services-1.json"));
+    run_accumulate_test(DIR, "same_code_different_services-1");
 }
 
 #[traced_test]
 #[test]
 fn test_work_for_ejected_service_1() {
-    run_accumulate_test(&format!("{TV}/work_for_ejected_service-1.json"));
+    run_accumulate_test(DIR, "work_for_ejected_service-1");
 }
 
 #[traced_test]
 #[test]
 fn test_work_for_ejected_service_2() {
-    run_accumulate_test(&format!("{TV}/work_for_ejected_service-2.json"));
+    run_accumulate_test(DIR, "work_for_ejected_service-2");
 }
 
 #[traced_test]
 #[test]
 fn test_work_for_ejected_service_3() {
-    run_accumulate_test(&format!("{TV}/work_for_ejected_service-3.json"));
+    run_accumulate_test(DIR, "work_for_ejected_service-3");
 }
 
 #[traced_test]
 #[test]
 fn test_transfer_for_ejected_service_1() {
-    run_accumulate_test(&format!("{TV}/transfer_for_ejected_service-1.json"));
+    run_accumulate_test(DIR, "transfer_for_ejected_service-1");
+}
+
+#[traced_test]
+#[test]
+fn test_accumulate_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_accumulate_test(DIR, stem);
+    }
 }

@@ -2,14 +2,14 @@
 
 mod common;
 
-use common::{decode_hex, hash_from_hex};
+use common::{decode_hex, discover_test_stems, hash_from_hex, load_jar_test};
 use grey_state::preimages::{process_preimages, PreimageAccountData, PreimageServiceRecord};
 use grey_types::{Hash, ServiceId, Timeslot};
 use std::collections::BTreeMap;
 
-fn run_preimages_test(path: &str) {
-    let content = std::fs::read_to_string(path).expect("failed to read test vector");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("failed to parse JSON");
+fn run_preimages_test(dir: &str, stem: &str) {
+    let json = common::load_jar_test(dir, stem);
+    let path = format!("{dir}/{stem}");
 
     // Parse input
     let input_json = &json["input"];
@@ -155,23 +155,30 @@ fn run_preimages_test(path: &str) {
     }
 }
 
+const DIR: &str = "../../res/spec/tests/vectors/preimages";
+
 macro_rules! preimage_test {
-    ($name:ident, $file:expr) => {
+    ($name:ident, $stem:expr) => {
         #[test]
         fn $name() {
-            run_preimages_test(&format!(
-                "../../res/testvectors/stf/preimages/full/{}",
-                $file
-            ));
+            run_preimages_test(DIR, $stem);
         }
     };
 }
 
-preimage_test!(test_preimage_needed_1, "preimage_needed-1.json");
-preimage_test!(test_preimage_needed_2, "preimage_needed-2.json");
-preimage_test!(test_preimage_not_needed_1, "preimage_not_needed-1.json");
-preimage_test!(test_preimage_not_needed_2, "preimage_not_needed-2.json");
-preimage_test!(test_preimages_order_check_1, "preimages_order_check-1.json");
-preimage_test!(test_preimages_order_check_2, "preimages_order_check-2.json");
-preimage_test!(test_preimages_order_check_3, "preimages_order_check-3.json");
-preimage_test!(test_preimages_order_check_4, "preimages_order_check-4.json");
+preimage_test!(test_preimage_needed_1, "preimage_needed-1");
+preimage_test!(test_preimage_needed_2, "preimage_needed-2");
+preimage_test!(test_preimage_not_needed_1, "preimage_not_needed-1");
+preimage_test!(test_preimage_not_needed_2, "preimage_not_needed-2");
+preimage_test!(test_preimages_order_check_1, "preimages_order_check-1");
+preimage_test!(test_preimages_order_check_2, "preimages_order_check-2");
+preimage_test!(test_preimages_order_check_3, "preimages_order_check-3");
+preimage_test!(test_preimages_order_check_4, "preimages_order_check-4");
+
+#[test]
+fn test_preimages_discover_all() {
+    let stems = discover_test_stems(DIR);
+    for stem in &stems {
+        run_preimages_test(DIR, stem);
+    }
+}

@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_decode_refine_context_roundtrip() {
-        let bin = include_bytes!("../../../res/testvectors/codec/tiny/refine_context.bin");
+        let bin = include_bytes!("../../../res/spec/tests/vectors/codec/refine_context.gp072_tiny.bin");
         let (ctx, consumed) = RefinementContext::decode(bin).unwrap();
         assert_eq!(consumed, bin.len());
         let re_encoded = ctx.encode();
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_decode_work_report_roundtrip() {
-        let bin = include_bytes!("../../../res/testvectors/codec/tiny/work_report.bin");
+        let bin = include_bytes!("../../../res/spec/tests/vectors/codec/work_report.gp072_tiny.bin");
         let (report, consumed) = WorkReport::decode(bin).unwrap();
         assert_eq!(consumed, bin.len());
         let re_encoded = report.encode();
@@ -732,8 +732,8 @@ mod tests {
     fn test_decode_header_tiny_roundtrip() {
         let config = Config::tiny();
         for (name, bin) in [
-            ("header_0", include_bytes!("../../../res/testvectors/codec/tiny/header_0.bin").as_slice()),
-            ("header_1", include_bytes!("../../../res/testvectors/codec/tiny/header_1.bin").as_slice()),
+            ("header_0", include_bytes!("../../../res/spec/tests/vectors/codec/header_0.gp072_tiny.bin").as_slice()),
+            ("header_1", include_bytes!("../../../res/spec/tests/vectors/codec/header_1.gp072_tiny.bin").as_slice()),
         ] {
             let (header, consumed) = Header::decode_with_config(bin, &config).unwrap();
             assert_eq!(consumed, bin.len(), "{name}: consumed mismatch");
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn test_decode_extrinsic_tiny_roundtrip() {
         let config = Config::tiny();
-        let bin = include_bytes!("../../../res/testvectors/codec/tiny/extrinsic.bin");
+        let bin = include_bytes!("../../../res/spec/tests/vectors/codec/extrinsic.gp072_tiny.bin");
         let (ext, consumed) = Extrinsic::decode_with_config(bin, &config).unwrap();
         assert_eq!(consumed, bin.len());
         let re_encoded = ext.encode();
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn test_decode_block_tiny_roundtrip() {
         let config = Config::tiny();
-        let block_bin = include_bytes!("../../../res/testvectors/codec/tiny/block.bin");
+        let block_bin = include_bytes!("../../../res/spec/tests/vectors/codec/block.gp072_tiny.bin");
         let (block, consumed) = Block::decode_with_config(block_bin, &config).unwrap();
         assert_eq!(consumed, block_bin.len());
         let re_encoded = block.encode();

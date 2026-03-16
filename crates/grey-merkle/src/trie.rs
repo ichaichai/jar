@@ -177,7 +177,7 @@ mod tests {
             output: String,
         }
 
-        let data = include_str!("../../../res/testvectors/trie/trie.json");
+        let data = include_str!("../../../res/spec/tests/vectors/trie/trie.json");
         let cases: Vec<TrieTestCase> =
             serde_json::from_str(data).expect("failed to parse trie test vectors");
 

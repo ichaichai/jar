@@ -120,6 +120,49 @@ pub fn parse_work_report(json: &serde_json::Value) -> WorkReport {
     }
 }
 
+/// Load a JAR split-format test vector pair into a merged JSON value.
+/// JAR vectors are split into `{stem}.input.gp072_tiny.json` (containing `{input, pre_state}`)
+/// and `{stem}.output.gp072_tiny.json` (containing `{output, post_state}`).
+/// Returns a Value with all four keys at top level, matching the W3F single-file format.
+pub fn load_jar_test(dir: &str, stem: &str) -> serde_json::Value {
+    let variant = "gp072_tiny";
+    let input_path = format!("{dir}/{stem}.input.{variant}.json");
+    let output_path = format!("{dir}/{stem}.output.{variant}.json");
+
+    let input_content = std::fs::read_to_string(&input_path)
+        .unwrap_or_else(|e| panic!("failed to read {input_path}: {e}"));
+    let output_content = std::fs::read_to_string(&output_path)
+        .unwrap_or_else(|e| panic!("failed to read {output_path}: {e}"));
+
+    let mut input_json: serde_json::Value =
+        serde_json::from_str(&input_content).unwrap_or_else(|e| panic!("failed to parse {input_path}: {e}"));
+    let output_json: serde_json::Value =
+        serde_json::from_str(&output_content).unwrap_or_else(|e| panic!("failed to parse {output_path}: {e}"));
+
+    let map = input_json.as_object_mut().unwrap();
+    for (k, v) in output_json.as_object().unwrap() {
+        map.insert(k.clone(), v.clone());
+    }
+
+    input_json
+}
+
+/// Discover all test stems for a given category directory (gp072_tiny variant).
+/// Returns stems sorted alphabetically.
+pub fn discover_test_stems(dir: &str) -> Vec<String> {
+    let variant = "gp072_tiny";
+    let suffix = format!(".input.{variant}.json");
+    let mut stems = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("failed to read dir {dir}: {e}")) {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        if let Some(stem) = name.strip_suffix(&suffix) {
+            stems.push(stem.to_string());
+        }
+    }
+    stems.sort();
+    stems
+}
+
 /// Parse a ValidatorKey from a JSON value.
 pub fn parse_validator(v: &serde_json::Value) -> ValidatorKey {
     let bandersnatch = bandersnatch_from_hex(v["bandersnatch"].as_str().unwrap());
