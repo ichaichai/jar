@@ -263,33 +263,4 @@ def constDepthMerkleRoot (items : Array Hash) (depth : Nat) : Hash :=
   else items.extract 0 targetSize
   binaryMerkleRoot padded
 
--- ============================================================================
--- Merkle Mountain Range — Appendix E
--- ============================================================================
-
-/-- MMR peak computation. GP Appendix E eq (E.7).
-    A Merkle Mountain Range is a collection of perfect binary trees
-    (peaks) whose sizes correspond to the binary representation of n. -/
-structure MerkleMountainRange where
-  /-- The peaks of the MMR, each a hash. -/
-  peaks : Array Hash
-
-/-- Append a leaf to an MMR. GP Appendix E eq (E.8). -/
-def MerkleMountainRange.append (mmr : MerkleMountainRange) (leaf : Hash) : MerkleMountainRange :=
-  let rec merge (peaks : Array Hash) (h : Hash) : Array Hash :=
-    -- If last peak can be merged (same height), combine and continue
-    if peaks.size == 0 then #[h]
-    else
-      -- Simplified: in a real MMR, we track heights and merge same-height peaks
-      peaks.push h
-  { peaks := merge mmr.peaks leaf }
-
-/-- Bag the peaks of an MMR to get a single root hash. GP Appendix E eq (E.9). -/
-def MerkleMountainRange.root (mmr : MerkleMountainRange) : Hash :=
-  match mmr.peaks.size with
-  | 0 => Hash.zero
-  | 1 => mmr.peaks[0]!
-  | _ => mmr.peaks.foldl (init := Hash.zero) fun acc peak =>
-    Crypto.blake2b (acc.data ++ peak.data)
-
 end Jar.Merkle
