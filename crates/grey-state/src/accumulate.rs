@@ -715,6 +715,7 @@ fn handle_host_call(
         _ => "unknown",
     };
 
+
     let result = match id {
         0 => host_gas(pvm, regular),
         1 => host_fetch(pvm, fetch_ctx),
@@ -1146,13 +1147,26 @@ fn host_eject(pvm: &mut PvmInstance, ctx: &mut AccContext, timeslot: Timeslot, c
     // Step 4: Compute l = max(81, d_o) - 81 (preimage data length from total footprint)
     let l = ejected.bytes.max(81) - 81;
 
-    // Step 5: HUH if d.items ≠ 2 OR (h, l) ∉ d.preimage_info
+    // Step 5: HUH if d.items ≠ 2
     if ejected.items != 2 {
         pvm.set_reg(7, HOST_HUH);
         return true;
     }
 
     let info_key = (h, l as u32);
+    // Promote preimage_info from opaque if needed
+    if !ejected.preimage_info.contains_key(&info_key) {
+        let state_key = grey_merkle::state_serial::compute_preimage_info_state_key(d, &h, l as u32);
+        if let Some(account) = ctx.accounts.get_mut(&d) {
+            if let Some(v) = account.opaque_data.remove(&state_key) {
+                let timeslots = decode_preimage_info_timeslots(&v);
+                account.preimage_info.insert(info_key, timeslots);
+            }
+        }
+    }
+
+    // Re-borrow after mutable promotion
+    let ejected = ctx.accounts.get(&d).unwrap();
     let timeslots = match ejected.preimage_info.get(&info_key) {
         Some(ts) => ts,
         None => {
@@ -1166,7 +1180,7 @@ fn host_eject(pvm: &mut PvmInstance, ctx: &mut AccContext, timeslot: Timeslot, c
         let y = timeslots[1];
         if y < timeslot.saturating_sub(config.preimage_expunge_period) {
             // Success: remove target, transfer balance to caller
-            let ejected_balance = ejected.balance;
+            let ejected_balance = ctx.accounts.get(&d).unwrap().balance;
             ctx.accounts.remove(&d);
             if let Some(self_acc) = ctx.accounts.get_mut(&ctx.service_id) {
                 self_acc.balance = self_acc.balance.saturating_add(ejected_balance);
