@@ -291,6 +291,125 @@ def runTracePCs (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory
   go pc regs mem gas #[] (maxSteps + 1)
 
 -- ============================================================================
+-- Instruction-Level Tracing
+-- ============================================================================
+
+/-- Single instruction trace entry: PC, opcode number, register snapshot. -/
+structure InstrTraceEntry where
+  pc : Nat
+  opcode : Nat
+  regs : Array UInt64  -- snapshot of all 13 registers before execution
+  deriving Inhabited
+
+/-- Format a trace entry as a compact string. -/
+def InstrTraceEntry.toString (e : InstrTraceEntry) : String :=
+  let regStr := Id.run do
+    let mut s := ""
+    for i in [:e.regs.size] do
+      if i > 0 then s := s ++ " "
+      s := s ++ s!"r{i}={e.regs[i]!}"
+    return s
+  s!"pc={e.pc} op={e.opcode}({Jar.PVM.opcodeName e.opcode}) {regStr}"
+
+instance : ToString InstrTraceEntry := ⟨InstrTraceEntry.toString⟩
+
+/-- Run PVM single-stepping with instruction trace. Captures an InstrTraceEntry
+    for each instruction executed. Stops at host call, halt, panic, OOG, or fault. -/
+def runWithInstrTrace (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
+    (gas : Int64) : InvocationResult × Array InstrTraceEntry :=
+  let rec go (pc : Nat) (regs : Registers) (mem : Memory)
+      (gas : Int64) (trace : Array InstrTraceEntry) (fuel : Nat)
+      : InvocationResult × Array InstrTraceEntry :=
+    match fuel with
+    | 0 =>
+      ({ exitReason := .outOfGas
+         exitValue := if 7 < regs.size then regs[7]! else 0
+         gas := gas, registers := regs, memory := mem }, trace)
+    | fuel' + 1 =>
+      if gas <= 0 then
+        ({ exitReason := .outOfGas
+           exitValue := if 7 < regs.size then regs[7]! else 0
+           gas := gas, registers := regs, memory := mem }, trace)
+      else
+        let code := prog.code
+        let opcode := if pc < code.size then code.get! pc |>.toNat else 0
+        let entry : InstrTraceEntry := {
+          pc := pc
+          opcode := opcode
+          regs := regs  -- snapshot registers before execution
+        }
+        let trace' := trace.push entry
+        let gas' := gas - 1
+        match executeStep prog pc regs mem with
+        | .halt =>
+          ({ exitReason := .halt
+             exitValue := if 7 < regs.size then regs[7]! else 0
+             gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
+        | .panic =>
+          ({ exitReason := .panic
+             exitValue := if 7 < regs.size then regs[7]! else 0
+             gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
+        | .fault addr =>
+          ({ exitReason := .pageFault addr
+             exitValue := if 7 < regs.size then regs[7]! else 0
+             gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
+        | .hostCall id regs' mem' npc =>
+          ({ exitReason := .hostCall id
+             exitValue := if 7 < regs'.size then regs'[7]! else 0
+             gas := gas', registers := regs', memory := mem',
+             nextPC := npc, lastPC := pc }, trace')
+        | .continue pc' regs' mem' =>
+          go pc' regs' mem' gas' trace' fuel'
+  go pc regs mem gas #[] (gas.toUInt64.toNat + 1)
+
+/-- Configuration for instruction-level tracing in host-call loops.
+    When enabled, traces all instructions between host calls traceAfterCall..traceBeforeCall. -/
+structure InstrTraceConfig where
+  /-- Enable instruction tracing. -/
+  enabled : Bool := false
+  /-- Start tracing after this host call number (0-indexed). -/
+  traceAfterCall : Nat := 0
+  /-- Stop tracing before this host call number (exclusive). -/
+  traceBeforeCall : Nat := 0
+
+/-- Run PVM with host calls, with optional instruction-level tracing between
+    specific host call numbers. Returns (result, context, stepCount, instrTrace). -/
+def runWithHostCallsInstrTrace (ctx : Type) [Inhabited ctx]
+    (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
+    (gas : Int64) (handler : HostCallHandler ctx) (context : ctx)
+    (traceConfig : InstrTraceConfig := {})
+    : InvocationResult × ctx × Nat × Array InstrTraceEntry :=
+  let rec go (pc : Nat) (regs : Registers) (mem : Memory) (gas : Int64)
+      (context : ctx) (fuel : Nat) (steps : Nat) (callCount : Nat)
+      (instrTrace : Array InstrTraceEntry)
+      : InvocationResult × ctx × Nat × Array InstrTraceEntry :=
+    match fuel with
+    | 0 =>
+      ({ exitReason := .outOfGas
+         exitValue := if 7 < regs.size then regs[7]! else 0
+         gas := gas, registers := regs, memory := mem }, context, steps, instrTrace)
+    | fuel' + 1 =>
+      -- Decide whether to use instruction tracing for this segment
+      let useTrace := traceConfig.enabled &&
+        callCount >= traceConfig.traceAfterCall &&
+        callCount < traceConfig.traceBeforeCall
+      let (result, segTrace) :=
+        if useTrace then runWithInstrTrace prog pc regs mem gas
+        else (run prog pc regs mem gas, #[])
+      let instrTrace' := instrTrace ++ segTrace
+      let newSteps := steps + (gas.toUInt64.toNat - result.gas.toUInt64.toNat)
+      match result.exitReason with
+      | .hostCall id =>
+        let resumePC := result.nextPC
+        let (result', context') := handler id result.gas.toUInt64 result.registers result.memory context
+        match result'.exitReason with
+        | .hostCall _ =>
+          go resumePC result'.registers result'.memory result'.gas context' fuel' newSteps (callCount + 1) instrTrace'
+        | _ => (result', context', newSteps, instrTrace')
+      | _ => (result, context, newSteps, instrTrace')
+  go pc regs mem gas context (gas.toUInt64.toNat + 1) 0 0 #[]
+
+-- ============================================================================
 -- Standard Invocations — GP Appendix B
 -- ============================================================================
 

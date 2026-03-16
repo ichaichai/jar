@@ -146,6 +146,8 @@ structure AccContext where
   exports : Array ByteArray := #[]
   /-- Debug: host call log. -/
   hostCallLog : Array String := #[]
+  /-- Debug: extra info for current host call (reset each call). -/
+  debugExtra : String := ""
 
 instance : Inhabited AccContext where
   default := {
@@ -168,6 +170,7 @@ instance : Inhabited AccContext where
     opaqueData := #[]
     exports := #[]
     hostCallLog := #[]
+    debugExtra := ""
   }
 
 -- ============================================================================
@@ -257,6 +260,15 @@ def hostCallGas : Nat := 10
 -- ============================================================================
 
 /-- Get register value safely. -/
+private def dbgHex (ba : ByteArray) : String := Id.run do
+  let mut s := ""
+  for i in [:ba.size] do
+    let b := ba.get! i
+    let hi := b.toNat / 16; let lo := b.toNat % 16
+    let hexChar (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+    s := s ++ String.mk [hexChar hi, hexChar lo]
+  return s
+
 private def getReg (regs : PVM.Registers) (i : Nat) : UInt64 :=
   if i < regs.size then regs[i]! else 0
 
@@ -298,7 +310,7 @@ private def encodeAccountInfo (acct : ServiceAccount) : ByteArray :=
 def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
     (mem : PVM.Memory) (ctx : AccContext) : PVM.InvocationResult × AccContext :=
   let callNum := callId.toNat
-  let inputLog := s!"hc({callNum}) r7={getReg regs 7} r8={getReg regs 8} r9={getReg regs 9} r10={getReg regs 10}"
+  let inputLog := s!"hc({callNum}) r7={getReg regs 7} r8={getReg regs 8} r9={getReg regs 9} r10={getReg regs 10} r11={getReg regs 11} r12={getReg regs 12}"
   let mkResult (regs' : PVM.Registers) (mem' : PVM.Memory) (gas' : Gas) : PVM.InvocationResult :=
     { exitReason := .hostCall callId  -- signals "continue" to the loop
       exitValue := if 7 < regs'.size then regs'[7]! else 0
@@ -454,7 +466,8 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
           -- Update accounts with promoted storage
           let accounts' := ctx.state.accounts.insert targetSid acct
           let state' := { ctx.state with accounts := accounts' }
-          let ctx' := { ctx with state := state' }
+          let valSnip := if val.size > 32 then dbgHex (val.extract 0 32) ++ s!"..({val.size}B)" else dbgHex val
+          let ctx' := { ctx with state := state', debugExtra := s!" read_svc={targetSid} read_key={dbgHex keyBytes} read_val={valSnip}" }
           let vLen := val.size
           let f := min offset vLen
           let l := min maxLen (vLen - f)
@@ -478,6 +491,16 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   -- φ[7]=key_ptr, φ[8]=key_len, φ[9]=val_ptr, φ[10]=val_len
   -- Returns: φ'[7] = old value length (or NONE if key didn't exist)
   | 4 =>
+    -- Dump 600 bytes of PVM memory at address 207200 for service 4050946909
+    let memDump := if ctx.serviceId.toNat == 4050946909 then
+        let part1 := match PVM.readByteArray mem (UInt64.ofNat 207200) 600 with
+          | .ok bytes => s!" MEM207200={dbgHex bytes}"
+          | _ => " MEM207200=READ_FAIL"
+        let part2 := match PVM.readByteArray mem (UInt64.ofNat 207072) 16 with
+          | .ok bytes => s!" MEM207072={dbgHex bytes}"
+          | _ => " MEM207072=READ_FAIL"
+        part1 ++ part2
+      else ""
     let keyPtr := getReg regs 7
     let keyLen := (getReg regs 8).toNat
     let valPtr := getReg regs 9
@@ -541,7 +564,16 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
             let accounts' := ctx.state.accounts.insert ctx.serviceId acct'
             let state' := { ctx.state with accounts := accounts' }
             let regs' := setR7 regs oldLen
-            (mkResult regs' mem gas', { ctx with state := state' })
+            -- Dump all 13 registers at write for target service debugging
+            let regDump := if ctx.serviceId == 4050946909 then Id.run do
+                let mut s := " REGDUMP["
+                for i in [:13] do
+                  if i > 0 then s := s ++ ","
+                  s := s ++ s!"r{i}={getReg regs i}"
+                return s ++ "]"
+              else ""
+            let ctxD := { ctx with debugExtra := s!" write_key={dbgHex keyBytes} write_val={dbgHex valBytes}{regDump}{memDump}" }
+            (mkResult regs' mem gas', { ctxD with state := state' })
           | _ =>
             -- Page fault on value read → panic (GP: ⚡)
             (mkPanic regs mem gas', ctx)
@@ -566,6 +598,7 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       (mkResult regs' mem gas', ctx)
     | some acct =>
       let info := encodeAccountInfo acct
+      let ctxD := { ctx with debugExtra := s!" info_target={targetSid} info_hex={dbgHex info}" }
       let dataLen := info.size
       let f := min offset dataLen
       let l := min maxLen (dataLen - f)
@@ -574,13 +607,13 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
         match PVM.writeByteArray mem outPtr src with
         | .ok mem' =>
           let regs' := setR7 regs (UInt64.ofNat dataLen)
-          (mkResult regs' mem' gas', ctx)
+          (mkResult regs' mem' gas', ctxD)
         | _ =>
           -- Page fault on write → panic (GP: ⚡)
-          (mkPanic regs mem gas', ctx)
+          (mkPanic regs mem gas', ctxD)
       else
         let regs' := setR7 regs (UInt64.ofNat dataLen)
-        (mkResult regs' mem gas', ctx)
+        (mkResult regs' mem gas', ctxD)
 
   -- Host calls 6-13 (historical_lookup, export, machine, peek, poke, pages, invoke,
   -- expunge) are refine-only (GP eq:refinemutator). They are NOT available in the
@@ -1264,7 +1297,9 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
     let regs' := setR7 regs PVM.RESULT_WHAT
     (mkResult regs' mem gas', ctx)
   let outR7 := if 7 < result.registers.size then result.registers[7]! else 0
-  let ctx'' := { ctx' with hostCallLog := ctx'.hostCallLog.push s!"{inputLog}->r7={outR7}" }
+  let extra := ctx'.debugExtra
+  let gasAfter := result.gas.toUInt64
+  let ctx'' := { ctx' with hostCallLog := ctx'.hostCallLog.push s!"{inputLog}->r7={outR7} gas={gasAfter}{extra}", debugExtra := "" }
   (result, ctx'')
 
 -- ============================================================================
@@ -1427,11 +1462,18 @@ def accone (ps : PartialState) (serviceId : ServiceId)
         -- Trace first 30 PCs for debugging
         let (tracePCs, _traceExit) := PVM.runTracePCs prog 5 regs mem (Int64.ofUInt64 totalGas) 50
         -- Run PVM with host-call dispatch via handleHostCall
-        let (result, ctx', steps) := PVM.runWithHostCallsTraced AccContext
+        -- For target service 4050946909, enable instruction tracing between
+        -- host calls 26 and 27 (the first read(key=05) → write(key=05) span).
+        -- Host call indices (0-based): read key=05 is at index 26, write key=05 at 27.
+        let traceConfig : PVM.InstrTraceConfig :=
+          if serviceId == 4050946909 then
+            { enabled := true, traceAfterCall := 26, traceBeforeCall := 27 }
+          else {}
+        let (result, ctx', steps, instrTrace) := PVM.runWithHostCallsInstrTrace AccContext
           prog 5 regs mem (Int64.ofUInt64 totalGas)
           (fun callId gas regs' mem' c =>
             handleHostCall callId gas regs' mem' c)
-          ctx
+          ctx traceConfig
         let _ := ()
         -- On halt: use accumulated state; on panic/OOG: revert to checkpoint
         -- GP: regular dimension (x) on halt, exceptional dimension (y) on panic/OOG/fault
@@ -1482,6 +1524,17 @@ def accone (ps : PartialState) (serviceId : ServiceId)
           | .outOfGas => s!"oog(steps={steps},pcs=[{traceStr}])"
           | .hostCall n => s!"hostcall({n},steps={steps})"
           | .pageFault addr => s!"pageFault({addr},steps={steps},pcs=[{traceStr}])"
+        -- Build instruction trace string: only last 20 entries (near write host call)
+        -- and first 5 entries, to keep output manageable
+        let instrTraceStr := if instrTrace.size > 0 then
+            let total := instrTrace.size
+            let first5 := (instrTrace.toList.take 5).map PVM.InstrTraceEntry.toString
+            let last20 := (instrTrace.toList.drop (total - min 20 total)).map PVM.InstrTraceEntry.toString
+            s!",ITRACE_COUNT={total},ITRACE_FIRST=[" ++
+              String.intercalate "|" first5 ++ s!"],ITRACE_LAST=[" ++
+              String.intercalate "|" last20 ++ "]"
+          else ""
+        let exitStr := exitStr ++ instrTraceStr
         -- Opaque data is already set correctly in the tuple above:
         -- halt → ctx'.opaqueData, panic → checkpoint opaque or pre-PVM, OOG → pre-PVM
         let finalOpaqueData := revertedOpaque

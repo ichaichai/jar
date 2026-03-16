@@ -496,7 +496,7 @@ def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
             -- Show exit reasons for accumulated services
             for (sid3, reason3) in exitReasons do
               if reason3.length > 0 then
-                let short3 := if reason3.length > 3000 then String.mk (reason3.toList.take 3000) ++ "..." else reason3
+                let short3 := if reason3.length > 20000 then String.mk (reason3.toList.take 20000) ++ "..." else reason3
                 IO.println s!"    acc svc={sid3}: {short3}"
             -- Extra keys in our output
             let preKeyvals := keyvals
@@ -728,9 +728,12 @@ def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
           -- Print exit reasons for blocks with accumulation
           if exitReasons.size > 0 then
             for (sid, reason) in exitReasons do
-              -- Only show first 100 chars of reason
-              let short := if reason.length > 100 then (reason.toList.take 100 |> String.mk) ++ "..." else reason
-              IO.println s!"    acc svc={sid}: {short}"
+              -- Show full reason for target service with instruction trace, truncate others
+              if reason.length > 200 then
+                IO.println s!"    acc svc={sid}: {reason}"
+              else
+                let short := if reason.length > 100 then (reason.toList.take 100 |> String.mk) ++ "..." else reason
+                IO.println s!"    acc svc={sid}: {short}"
             for (sid, acct) in postState.services.entries.toArray do
               IO.println s!"    svc {sid}: storage={acct.storage.size} items={acct.created} footprint={acct.totalFootprint}"
           pure ()
