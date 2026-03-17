@@ -160,7 +160,7 @@ fn compute_core_statistics(
 /// For each service s in the union of {services from incoming digests} ∪ {services from preimages} ∪ {services from accumulation}:
 ///   R(s) = (count, gas_used, imports, extrinsic_count, extrinsic_size, exports) summed from incoming digests
 ///   p = (count, size) from preimage extrinsic entries
-///   a = accumulation results (currently always (0, 0) since accumulation not implemented)
+///   a = accumulation results: (gas_used, item_count) per service from the accumulation pipeline
 fn compute_service_statistics(
     stats: &mut ValidatorStatistics,
     extrinsic: &Extrinsic,
