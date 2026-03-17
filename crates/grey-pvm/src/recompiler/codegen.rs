@@ -526,9 +526,9 @@ impl Compiler {
                     self.asm.push(SCRATCH); // push value
 
                     self.save_caller_saved();
-                    // Stack: [8 saved] [value] [addr]
-                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 64); // value
-                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 72); // addr
+                    // Stack: [7 caller-saved (56)] [value (8)] [addr (8)]
+                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 56); // value
+                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // addr
                     self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
                     self.asm.mov_ri64(Reg::RAX, fn_addr);
                     self.asm.call_reg(Reg::RAX);
@@ -659,8 +659,9 @@ impl Compiler {
                     self.asm.mov_ri64(SCRATCH, *imm_y);
                     self.asm.push(SCRATCH);
                     self.save_caller_saved();
-                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 64); // value
-                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 72); // addr
+                    // Stack: [7 caller-saved (56)] [value (8)] [addr (8)]
+                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 56); // value
+                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // addr
                     self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
                     self.asm.mov_ri64(Reg::RAX, fn_addr);
                     self.asm.call_reg(Reg::RAX);
@@ -2050,9 +2051,10 @@ impl Compiler {
         self.asm.push(REG_MAP[ra]);
 
         self.save_caller_saved();
+        // Stack: [7 caller-saved (56)] [ra_value (8)] [saved_scratch (8)]
         // Args: RDI = ctx, RSI = size
         self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
-        self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // ra value from stack
+        self.asm.mov_load64(Reg::RSI, Reg::RSP, 56); // ra value from stack
         self.asm.mov_ri64(Reg::RAX, fn_addr);
         self.asm.call_reg(Reg::RAX);
         self.asm.mov_rr(SCRATCH, Reg::RAX);
