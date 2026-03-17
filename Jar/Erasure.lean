@@ -105,6 +105,16 @@ def buildExpLog : Array UInt16 × Array UInt16 := Id.run do
   if x == 0 then 0
   else expTable[addMod (logTable[x.toNat]!) logM |>.toNat]!
 
+/-- Multiply two GF(2^16) elements. -/
+@[inline] def gfMul (x y : UInt16) : UInt16 :=
+  if x == 0 || y == 0 then 0
+  else expTable[addMod (logTable[x.toNat]!) (logTable[y.toNat]!) |>.toNat]!
+
+/-- Multiplicative inverse in GF(2^16). Returns 0 for input 0. -/
+@[inline] def gfInv (x : UInt16) : UInt16 :=
+  if x == 0 then 0
+  else expTable[(65535 - (logTable[x.toNat]!).toNat) % 65535]!
+
 /-- Build the skew factor table used in FFT/IFFT butterflies.
     The skew table has 65535 entries (indexed 0..65534). -/
 def buildSkew : Array UInt16 := Id.run do
@@ -311,8 +321,119 @@ def erasureCode (_k : Nat) (data : ByteArray) : Array ByteArray := Id.run do
     Input: at least dataShards (chunk, index) pairs.
     Output: reconstructed data of original length.
     (Not yet implemented — recovery requires IFFT-based decoding.) -/
-def erasureRecover (_k : Nat) (_chunks : Array (ByteArray × Nat)) : Option ByteArray :=
-  none  -- TODO: implement recovery
+def erasureRecover (_k : Nat) (chunks : Array (ByteArray × Nat)) : Option ByteArray := Id.run do
+  let ds := dataShards
+  let rs := recoveryShards
+
+  -- Need at least dataShards chunks
+  if chunks.size < ds then return none
+  let chunks := chunks.extract 0 ds
+
+  -- Derive k from chunk byte size
+  let chunkBytes := chunks[0]!.1.size
+  if chunkBytes < 2 || chunkBytes % 2 != 0 then return none
+  let k := chunkBytes / 2
+
+  -- Validate all chunks have same size
+  for (c, _) in chunks do
+    if c.size != chunkBytes then return none
+
+  -- Fast path: if all data shard indices 0..ds-1 are present, just reorder
+  let receivedIndices := chunks.map (·.2)
+  let allDataPresent := (List.range ds).all fun i => receivedIndices.any (· == i)
+  if allDataPresent then
+    let mut result := ByteArray.empty
+    for i in [:ds] do
+      let (c, _) := (chunks.find? fun (_, idx) => idx == i).get!
+      result := result ++ c
+    return some result
+
+  -- Build parity matrix P[rs × ds] by encoding unit vectors
+  -- P_transposed[j] = encodeRS(e_j), so P_transposed[j][i] = P[i][j]
+  let mut pT : Array (Array UInt16) := #[]
+  for j in [:ds] do
+    let mut ej := Array.replicate ds (0 : UInt16)
+    ej := ej.set! j 1
+    let col := encodeRS ds rs ej
+    pT := pT.push col
+
+  -- Build submatrix A[ds × ds] for received chunk indices
+  let mut A : Array (Array UInt16) := #[]
+  for (_, idx) in chunks do
+    if idx < ds then
+      -- Identity row: row[j] = δ(idx, j)
+      let row := Array.ofFn (n := ds) fun ⟨j, _⟩ =>
+        if idx == j then (1 : UInt16) else 0
+      A := A.push row
+    else
+      -- Parity row: row[j] = P[idx - ds][j] = pT[j][idx - ds]
+      let parityIdx := idx - ds
+      let row := Array.ofFn (n := ds) fun ⟨j, _⟩ =>
+        pT[j]![parityIdx]!
+      A := A.push row
+
+  -- Gauss-Jordan elimination on [A | I] to compute A⁻¹
+  let n := ds
+  -- Build augmented matrix: each row is A_row ++ I_row
+  let mut aug : Array (Array UInt16) := Array.ofFn (n := n) fun ⟨i, _⟩ =>
+    let left := A[i]!
+    let right := Array.ofFn (n := n) fun ⟨j, _⟩ => if i == j then (1 : UInt16) else 0
+    left ++ right
+
+  for col in [:n] do
+    -- Find pivot row
+    let mut pivotRow : Option Nat := none
+    for row in [col:n] do
+      if aug[row]![col]! != 0 then
+        pivotRow := some row
+        break
+    match pivotRow with
+    | none => return none  -- Singular matrix (shouldn't happen with valid RS)
+    | some pr =>
+      -- Swap pivot row into position
+      if pr != col then
+        let tmp := aug[col]!
+        aug := aug.set! col (aug[pr]!)
+        aug := aug.set! pr tmp
+      -- Scale pivot row so A[col][col] = 1
+      let pivotVal := aug[col]![col]!
+      let inv := gfInv pivotVal
+      aug := aug.set! col (aug[col]!.map (gfMul · inv))
+      -- Eliminate all other rows
+      for row in [:n] do
+        if row != col then
+          let factor := aug[row]![col]!
+          if factor != 0 then
+            let pivotRowData := aug[col]!
+            aug := aug.set! row (Array.zipWith (fun a b => a ^^^ gfMul b factor) aug[row]! pivotRowData)
+
+  -- Extract A⁻¹ from right half of augmented matrix
+  let Ainv : Array (Array UInt16) := Array.ofFn (n := n) fun ⟨i, _⟩ =>
+    aug[i]!.extract n (2 * n)
+
+  -- For each symbol position, recover data symbols
+  let mut result : Array ByteArray := Array.replicate ds ByteArray.empty
+  for j in [:ds] do
+    result := result.set! j (ByteArray.mk (Array.replicate chunkBytes 0))
+
+  for symPos in [:k] do
+    -- Extract received GF16 values at this symbol position
+    let y : Array UInt16 := chunks.map fun (chunkData, _) =>
+      let lo := chunkData.get! (symPos * 2)
+      let hi := chunkData.get! (symPos * 2 + 1)
+      lo.toUInt16 ||| (hi.toUInt16 <<< 8)
+
+    -- Compute data = Ainv · y
+    for j in [:ds] do
+      let mut val : UInt16 := 0
+      for i in [:ds] do
+        val := val ^^^ gfMul (Ainv[j]![i]!) (y[i]!)
+      -- Write to result[j] at position symPos
+      result := result.modify j fun chunk =>
+        chunk.set! (symPos * 2) (val &&& 0xFF).toUInt8
+          |>.set! (symPos * 2 + 1) ((val >>> 8) &&& 0xFF).toUInt8
+
+  some (result.foldl (· ++ ·) ByteArray.empty)
 
 -- ============================================================================
 -- Segment-Level Functions — Appendix H

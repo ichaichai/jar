@@ -121,6 +121,84 @@ private def runFile [JamConfig] (path : String) : IO (Nat × Nat) := do
     else
       return (0, 1)
 
+/-- Run recovery tests for a single test vector file. Returns (passed, failed). -/
+private def runRecoveryFile [JamConfig] (path : String) : IO (Nat × Nat) := do
+  let contents ← IO.FS.readFile path
+  let json ← match Lean.Json.parse contents with
+    | .ok j => pure j
+    | .error e => IO.println s!"  Failed to parse JSON: {e}"; return (0, 1)
+  match parseTestVector json with
+  | .error e =>
+    IO.println s!"  PARSE ERROR: {e}"
+    return (0, 1)
+  | .ok tv =>
+    let numShards := tv.shards.size
+    if numShards == 0 then return (0, 1)
+    let shardSize := tv.shards[0]!.size
+    let k := shardSize / 2
+    if k == 0 then return (0, 1)
+    let ds := @Erasure.dataShards _
+
+    -- Zero-pad original data to match what recovery will produce
+    let ps := @Erasure.pieceSize _
+    let paddedLen := if tv.data.size == 0 then ps
+                     else ((tv.data.size + ps - 1) / ps) * ps
+    let mut padded := tv.data
+    while padded.size < paddedLen do
+      padded := padded.push 0
+
+    let mut passed := 0
+    let mut failed := 0
+
+    -- Test 1: All data shards (fast path)
+    let dataChunks : Array (ByteArray × Nat) := Array.ofFn (n := ds) fun ⟨i, _⟩ =>
+      (tv.shards[i]!, i)
+    match @Erasure.erasureRecover _ k dataChunks with
+    | some recovered =>
+      if recovered == padded then
+        passed := passed + 1
+      else
+        IO.println s!"  FAIL recover(data): len exp={padded.size} got={recovered.size}"
+        failed := failed + 1
+    | none =>
+      IO.println s!"  FAIL recover(data): returned none"
+      failed := failed + 1
+
+    -- Test 2: Last dataShards shards (all recovery)
+    let lastChunks : Array (ByteArray × Nat) := Array.ofFn (n := ds) fun ⟨i, _⟩ =>
+      let idx := numShards - ds + i
+      (tv.shards[idx]!, idx)
+    match @Erasure.erasureRecover _ k lastChunks with
+    | some recovered =>
+      if recovered == padded then
+        passed := passed + 1
+      else
+        IO.println s!"  FAIL recover(last): mismatch at data={tv.data.size}B"
+        failed := failed + 1
+    | none =>
+      IO.println s!"  FAIL recover(last): returned none"
+      failed := failed + 1
+
+    -- Test 3: Mixed — first shard data, rest recovery
+    let mut mixedChunks : Array (ByteArray × Nat) := #[(tv.shards[0]!, 0)]
+    for i in [1:ds] do
+      let idx := ds + i - 1
+      mixedChunks := mixedChunks.push (tv.shards[idx]!, idx)
+    match @Erasure.erasureRecover _ k mixedChunks with
+    | some recovered =>
+      if recovered == padded then
+        passed := passed + 1
+      else
+        IO.println s!"  FAIL recover(mixed): mismatch at data={tv.data.size}B"
+        failed := failed + 1
+    | none =>
+      IO.println s!"  FAIL recover(mixed): returned none"
+      failed := failed + 1
+
+    if failed == 0 then
+      IO.println s!"PASS [data={tv.data.size}B, k={k}, 3 recovery tests]"
+    return (passed, failed)
+
 /-- Test file names (data sizes). -/
 private def testDataSizes : Array String := #["3", "32", "100", "4096", "4104", "10000"]
 
@@ -168,14 +246,23 @@ def runAll : IO UInt32 := do
     valid := Params.full_valid
   }
   let (fp, ff, fs) ← @runAllForConfig fullJamConfig "gp072_full"
-  let totalPassed := tp + fp
-  let totalFailed := tf + ff
+  -- Recovery tests (tiny only — full config recovery is slow for large data sizes)
+  IO.println s!"Running erasure recovery tests (gp072_tiny):"
+  let mut rp := 0
+  let mut rf := 0
+  for sz in testDataSizes do
+    let path := s!"tests/vectors/erasure/ec-{sz}.gp072_tiny.json"
+    let exists_ ← do try let _ ← IO.FS.readFile path; pure true catch _ => pure false
+    if exists_ then
+      IO.print s!"  {path}: "
+      let (p, f) ← @runRecoveryFile tinyJamConfig path
+      rp := rp + p
+      rf := rf + f
+  IO.println s!"Recovery tests: {rp} passed, {rf} failed"
+  let totalPassed := tp + fp + rp
+  let totalFailed := tf + ff + rf
   let totalSkipped := ts + fs
   IO.println s!"Erasure tests: {totalPassed} passed, {totalFailed} failed, {totalSkipped} skipped"
-  -- If everything was skipped (not implemented), report success with a note
-  if totalFailed == 0 && totalPassed == 0 then
-    IO.println "Note: erasureCode is not yet implemented; all tests skipped."
-    return 0
   return if totalFailed == 0 then 0 else 1
 
 end Jar.Test.ErasureTest
