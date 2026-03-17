@@ -713,6 +713,7 @@ fn handle_host_call(
     }
     pvm.set_gas(pvm.gas() - host_gas_cost);
 
+
     let name = match id {
         0 => "gas", 1 => "fetch", 2 => "lookup", 3 => "read", 4 => "write", 5 => "info",
         14 => "bless", 15 => "assign", 16 => "designate", 17 => "checkpoint",
