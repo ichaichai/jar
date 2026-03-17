@@ -97,13 +97,22 @@ def refine
     | .outOfGas => (.err .outOfGas, gasLimit)
     | _ => (.err .panic, gasUsed)
 
+/-- Import segment resolver: given a segment root hash and index,
+    returns the reconstructed segment data (4104 bytes).
+    In a full node, this retrieves erasure-coded chunks from the DA layer
+    and reconstructs via Reed-Solomon. GP §14.2. -/
+abbrev ImportResolver := Hash → Nat → Option ByteArray
+
 /-- Ξ(p, c) : Work-report computation. GP eq (14.12).
     Given a work-package p and context c, computes the work-report
-    by running authorization and then refining each work-item. -/
+    by running authorization and then refining each work-item.
+    `resolveImport` provides segment data for work-item imports —
+    requires guarantor-level DA infrastructure (not yet implemented). -/
 def computeWorkReport
     (pkg : WorkPackage)
     (context : RefinementContext)
-    (services : Dict ServiceId ServiceAccount) : Option (WorkReport × Gas) :=
+    (services : Dict ServiceId ServiceAccount)
+    (resolveImport : ImportResolver := fun _ _ => none) : Option (WorkReport × Gas) :=
   -- Look up authorizer code from auth code host's preimage store
   let authCode := match services.lookup pkg.authCodeHost with
     | some acct => acct.preimages.lookup (OctetSeq.mk! pkg.authCodeHash.data 32)
@@ -133,7 +142,8 @@ def computeWorkReport
             extrinsicsSize := 0
             exportsCount := item.exportsCount : WorkDigest }
         | some code =>
-          let importData := item.imports.map fun _ => ByteArray.empty  -- Segments resolved externally
+          let importData := item.imports.map fun (hash, idx) =>
+            (resolveImport hash idx).getD ByteArray.empty
           let (result, gasUsed) := refine code item.payload item.gasLimit importData
           { serviceId := item.serviceId
             codeHash := item.codeHash
