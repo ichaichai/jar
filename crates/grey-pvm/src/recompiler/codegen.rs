@@ -27,8 +27,7 @@ use crate::instruction::Opcode;
 use std::collections::HashMap;
 
 /// Map PVM register index (0..12) to x86-64 register.
-/// phi[12] is SPILLED — it lives in context memory, not in a register.
-/// RCX is freed as SCRATCH2 for the permission check fast path.
+/// All 13 PVM registers live in x86 registers.
 const REG_MAP: [Reg; 13] = [
     Reg::RBX,  // φ[0]
     Reg::RBP,  // φ[1]
@@ -42,23 +41,17 @@ const REG_MAP: [Reg; 13] = [
     Reg::R10,  // φ[9]
     Reg::R11,  // φ[10]
     Reg::RAX,  // φ[11]
-    Reg::RCX,  // φ[12] — SPILLED: load/store from ctx on use, RCX is scratch between uses
+    Reg::RCX,  // φ[12]
 ];
-
-/// Index of the spilled PVM register (phi[12]).
-const SPILLED_REG: usize = 12;
 
 /// Scratch register (not mapped to any PVM register).
 const SCRATCH: Reg = Reg::RDX;
-/// Second scratch register (freed by spilling phi[12]).
-const SCRATCH2: Reg = Reg::RCX;
 /// R15 = base of guest memory (flat buffer). JitContext is at negative offset.
 const CTX: Reg = Reg::R15;
 
 /// Caller-saved PVM registers that need saving around helper calls.
-/// RCX is excluded — it's scratch, not a live PVM register.
-const CALLER_SAVED: [Reg; 7] = [
-    Reg::RSI, Reg::RDI, Reg::R8, Reg::R9, Reg::R10, Reg::R11, Reg::RAX,
+const CALLER_SAVED: [Reg; 8] = [
+    Reg::RSI, Reg::RDI, Reg::R8, Reg::R9, Reg::R10, Reg::R11, Reg::RAX, Reg::RCX,
 ];
 
 /// JitContext field offsets — all NEGATIVE from R15 (guest memory base).
@@ -247,59 +240,7 @@ impl Compiler {
         (self.asm.finalize(), dispatch_table)
     }
 
-    /// Load spilled phi[12] from context into RCX (before reading it).
-    fn load_spilled(&mut self) {
-        self.asm.mov_load64(SCRATCH2, CTX, CTX_REGS + (SPILLED_REG as i32) * 8);
-    }
-
-    /// Store RCX to context as phi[12] (after writing it).
-    fn store_spilled(&mut self) {
-        self.asm.mov_store64(CTX, CTX_REGS + (SPILLED_REG as i32) * 8, SCRATCH2);
-    }
-
-    /// Get the x86 register for a PVM register, emitting a load if spilled.
-    /// Returns the register. Caller must call `finish_pvm_write(idx)` after writing.
-    fn pvm_reg_read(&mut self, idx: usize) -> Reg {
-        if idx == SPILLED_REG {
-            self.load_spilled();
-        }
-        REG_MAP[idx]
-    }
-
-    /// Emit a store-back if the PVM register is spilled.
-    fn pvm_reg_written(&mut self, idx: usize) {
-        if idx == SPILLED_REG {
-            self.store_spilled();
-        }
-    }
-
-    /// Read two PVM registers safely. If both are the spilled register (12),
-    /// they both get RCX. If only one is 12, it gets loaded into RCX.
-    /// Returns the x86 register for each.
-    fn pvm_read_two(&mut self, a: usize, b: usize) -> (Reg, Reg) {
-        // If either is spilled, load it. Both being 12 is fine - same value.
-        if a == SPILLED_REG {
-            self.load_spilled();
-        } else if b == SPILLED_REG {
-            self.load_spilled();
-        }
-        (REG_MAP[a], REG_MAP[b])
-    }
-
-    /// Read three PVM registers (ra, rb, rd) safely for three-register instructions.
-    /// For ThreeReg ops: ra and rb are READ, rd is the destination (WRITTEN).
-    /// If any read register is spilled, loads it. Returns (ra_reg, rb_reg, rd_reg).
-    fn pvm_read_three_for_alu(&mut self, ra: usize, rb: usize, rd: usize) -> (Reg, Reg, Reg) {
-        // We need to load spilled reg if ra or rb is 12 (reads).
-        // rd might also be 12 but it's a write target; we handle that with pvm_reg_written.
-        if ra == SPILLED_REG || rb == SPILLED_REG {
-            self.load_spilled();
-        }
-        (REG_MAP[ra], REG_MAP[rb], REG_MAP[rd])
-    }
-
     /// Save caller-saved registers (PVM registers in caller-saved x86-64 regs).
-    /// RCX is NOT saved — it's scratch, not a live PVM register.
     fn save_caller_saved(&mut self) {
         for &reg in &CALLER_SAVED {
             self.asm.push(reg);
@@ -372,9 +313,9 @@ impl Compiler {
         self.asm.push(SCRATCH);
         self.asm.push(val_reg);
         self.save_caller_saved();
-        // Stack: [7 caller-saved regs (56 bytes)] [value] [addr]
-        self.asm.mov_load64(Reg::RDX, Reg::RSP, 56);  // value (7 regs * 8 = 56)
-        self.asm.mov_load64(Reg::RSI, Reg::RSP, 64);  // addr
+        // Stack: [8 caller-saved regs (64 bytes)] [value] [addr]
+        self.asm.mov_load64(Reg::RDX, Reg::RSP, 64);  // value (8 regs * 8 = 64)
+        self.asm.mov_load64(Reg::RSI, Reg::RSP, 72);  // addr
         self.emit_ctx_ptr(Reg::RDI);
         self.asm.mov_ri64(Reg::RAX, fn_addr);
         self.asm.call_reg(Reg::RAX);
@@ -405,17 +346,18 @@ impl Compiler {
         };
 
         // SCRATCH (RDX) = guest address (32-bit clean)
-        // Uses SCRATCH2 (RCX) as temp — no push/pop needed.
+        // Uses push/pop RAX (phi[11]) as temp for permission check.
         let done_label = self.asm.new_label();
         let fault_label = self.asm.new_label();
 
         // Permission check: cmp byte [R15 + page_index - PERMS_OFFSET], 1
-        self.asm.mov_rr(SCRATCH2, SCRATCH);          // ecx = guest addr
-        self.asm.shr_ri32(SCRATCH2, 12);             // ecx = page index
-        self.asm.cmp_byte_sib_disp32(CTX, SCRATCH2, -PERMS_OFFSET, 1);
+        self.asm.push(Reg::RAX);                     // save phi[11]
+        self.asm.mov_rr(Reg::RAX, SCRATCH);          // eax = guest addr
+        self.asm.shr_ri32(Reg::RAX, 12);             // eax = page index
+        self.asm.cmp_byte_sib_disp32(CTX, Reg::RAX, -PERMS_OFFSET, 1);
         self.asm.jcc_label(Cc::B, fault_label);
 
-        // Direct load: [R15 + guest_addr]
+        // Direct load: [R15 + guest_addr] — result in dst
         match _w {
             1 => self.asm.movzx_load8_sib(dst, CTX, SCRATCH),
             2 => self.asm.movzx_load16_sib(dst, CTX, SCRATCH),
@@ -423,10 +365,17 @@ impl Compiler {
             8 => self.asm.mov_load64_sib(dst, CTX, SCRATCH),
             _ => unreachable!(),
         }
+        if dst == Reg::RAX {
+            // dst overwrote RAX; discard the saved phi[11] (it's the old value)
+            self.asm.add_ri(Reg::RSP, 8);
+        } else {
+            self.asm.pop(Reg::RAX);                  // restore phi[11]
+        }
         self.asm.jmp_label(done_label);
 
         // Fault path
         self.asm.bind_label(fault_label);
+        self.asm.pop(Reg::RAX);                      // restore phi[11]
         self.asm.mov_store32_imm(CTX, CTX_EXIT_REASON, EXIT_PAGE_FAULT as i32);
         self.asm.mov_store32(CTX, CTX_EXIT_ARG, SCRATCH);
         self.asm.jmp_label(self.exit_label);
@@ -444,24 +393,39 @@ impl Compiler {
         let done_label = self.asm.new_label();
         let fault_label = self.asm.new_label();
 
-        // Permission check (>= 2 for write) using SCRATCH2 (RCX)
-        self.asm.mov_rr(SCRATCH2, SCRATCH);
-        self.asm.shr_ri32(SCRATCH2, 12);
-        self.asm.cmp_byte_sib_disp32(CTX, SCRATCH2, -PERMS_OFFSET, 2);
+        // Permission check (>= 2 for write) using push/pop RAX (phi[11])
+        self.asm.push(Reg::RAX);                     // save phi[11]
+        self.asm.mov_rr(Reg::RAX, SCRATCH);          // eax = guest addr
+        self.asm.shr_ri32(Reg::RAX, 12);             // eax = page index
+        self.asm.cmp_byte_sib_disp32(CTX, Reg::RAX, -PERMS_OFFSET, 2);
         self.asm.jcc_label(Cc::B, fault_label);
 
         // Direct store: [R15 + guest_addr]
-        match w {
-            1 => self.asm.mov_store8_sib(CTX, SCRATCH, val_reg),
-            2 => self.asm.mov_store16_sib(CTX, SCRATCH, val_reg),
-            4 => self.asm.mov_store32_sib(CTX, SCRATCH, val_reg),
-            8 => self.asm.mov_store64_sib(CTX, SCRATCH, val_reg),
-            _ => unreachable!(),
+        if val_reg == Reg::RAX {
+            // val_reg is RAX (phi[11]) which we pushed — reload from stack
+            self.asm.mov_load64(Reg::RAX, Reg::RSP, 0);  // reload value from stack
+            match w {
+                1 => self.asm.mov_store8_sib(CTX, SCRATCH, Reg::RAX),
+                2 => self.asm.mov_store16_sib(CTX, SCRATCH, Reg::RAX),
+                4 => self.asm.mov_store32_sib(CTX, SCRATCH, Reg::RAX),
+                8 => self.asm.mov_store64_sib(CTX, SCRATCH, Reg::RAX),
+                _ => unreachable!(),
+            }
+        } else {
+            match w {
+                1 => self.asm.mov_store8_sib(CTX, SCRATCH, val_reg),
+                2 => self.asm.mov_store16_sib(CTX, SCRATCH, val_reg),
+                4 => self.asm.mov_store32_sib(CTX, SCRATCH, val_reg),
+                8 => self.asm.mov_store64_sib(CTX, SCRATCH, val_reg),
+                _ => unreachable!(),
+            }
         }
+        self.asm.pop(Reg::RAX);                      // restore phi[11]
         self.asm.jmp_label(done_label);
 
         // Fault path
         self.asm.bind_label(fault_label);
+        self.asm.pop(Reg::RAX);                      // restore phi[11]
         self.asm.mov_store32_imm(CTX, CTX_EXIT_REASON, EXIT_PAGE_FAULT as i32);
         self.asm.mov_store32(CTX, CTX_EXIT_ARG, SCRATCH);
         self.asm.jmp_label(self.exit_label);
@@ -495,7 +459,6 @@ impl Compiler {
             Opcode::LoadImm64 => {
                 if let Args::RegExtImm { ra, imm } = args {
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
-                    self.pvm_reg_written(*ra);
                 }
             }
 
@@ -526,9 +489,9 @@ impl Compiler {
                     self.asm.push(SCRATCH); // push value
 
                     self.save_caller_saved();
-                    // Stack: [7 caller-saved (56)] [value (8)] [addr (8)]
-                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 56); // value
-                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // addr
+                    // Stack: [8 caller-saved (64)] [value (8)] [addr (8)]
+                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 64); // value
+                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 72); // addr
                     self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
                     self.asm.mov_ri64(Reg::RAX, fn_addr);
                     self.asm.call_reg(Reg::RAX);
@@ -554,15 +517,12 @@ impl Compiler {
             // === A.5.6: One register + one immediate ===
             Opcode::JumpInd => {
                 if let Args::RegImm { ra, imm } = args {
-                    // emit_dynamic_jump reads ra
-                    self.pvm_reg_read(*ra);
                     self.emit_dynamic_jump(*ra, *imm, pc);
                 }
             }
             Opcode::LoadImm => {
                 if let Args::RegImm { ra, imm } = args {
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
-                    self.pvm_reg_written(*ra);
                 }
             }
             Opcode::LoadU8 | Opcode::LoadI8 | Opcode::LoadU16 | Opcode::LoadI16 |
@@ -571,7 +531,6 @@ impl Compiler {
                     let addr = *imm as u32;
                     let fn_addr = self.read_fn_for(opcode);
                     self.asm.mov_ri64(SCRATCH, addr as u64);
-                    // emit_mem_read clobbers SCRATCH2; ra is only written (dest), not read
                     let ra_reg = REG_MAP[*ra];
                     self.emit_mem_read(ra_reg, SCRATCH, fn_addr);
                     // Sign-extend for signed load variants
@@ -581,7 +540,6 @@ impl Compiler {
                         Opcode::LoadI32 => self.asm.movsxd(ra_reg, ra_reg),
                         _ => {}
                     }
-                    self.pvm_reg_written(*ra);
                 }
             }
             Opcode::StoreU8 | Opcode::StoreU16 | Opcode::StoreU32 | Opcode::StoreU64 => {
@@ -592,46 +550,10 @@ impl Compiler {
                         self.emit_exit(EXIT_PAGE_FAULT, addr);
                         return;
                     }
-                    if *ra == SPILLED_REG {
-                        // val_reg would be RCX which emit_mem_write clobbers.
-                        // Use custom inline sequence.
-                        self.load_spilled();
-                        self.asm.push(SCRATCH2); // save value
-                        self.asm.mov_ri64(SCRATCH, addr as u64);
-                        let w = match opcode {
-                            Opcode::StoreU8 => 1u32,
-                            Opcode::StoreU16 => 2,
-                            Opcode::StoreU32 => 4,
-                            Opcode::StoreU64 => 8,
-                            _ => unreachable!(),
-                        };
-                        let done_label = self.asm.new_label();
-                        let fault_label = self.asm.new_label();
-                        self.asm.mov_rr(SCRATCH2, SCRATCH);
-                        self.asm.shr_ri32(SCRATCH2, 12);
-                        self.asm.cmp_byte_sib_disp32(CTX, SCRATCH2, -PERMS_OFFSET, 2);
-                        self.asm.jcc_label(Cc::B, fault_label);
-                        self.asm.pop(SCRATCH2); // restore value
-                        match w {
-                            1 => self.asm.mov_store8_sib(CTX, SCRATCH, SCRATCH2),
-                            2 => self.asm.mov_store16_sib(CTX, SCRATCH, SCRATCH2),
-                            4 => self.asm.mov_store32_sib(CTX, SCRATCH, SCRATCH2),
-                            8 => self.asm.mov_store64_sib(CTX, SCRATCH, SCRATCH2),
-                            _ => unreachable!(),
-                        }
-                        self.asm.jmp_label(done_label);
-                        self.asm.bind_label(fault_label);
-                        self.asm.add_ri(Reg::RSP, 8);
-                        self.asm.mov_store32_imm(CTX, CTX_EXIT_REASON, EXIT_PAGE_FAULT as i32);
-                        self.asm.mov_store32(CTX, CTX_EXIT_ARG, SCRATCH);
-                        self.asm.jmp_label(self.exit_label);
-                        self.asm.bind_label(done_label);
-                    } else {
-                        let ra_reg = REG_MAP[*ra];
-                        let fn_addr = self.write_fn_for(opcode);
-                        self.asm.mov_ri64(SCRATCH, addr as u64);
-                        self.emit_mem_write(true, ra_reg, fn_addr);
-                    }
+                    let ra_reg = REG_MAP[*ra];
+                    let fn_addr = self.write_fn_for(opcode);
+                    self.asm.mov_ri64(SCRATCH, addr as u64);
+                    self.emit_mem_write(true, ra_reg, fn_addr);
                 }
             }
 
@@ -639,7 +561,7 @@ impl Compiler {
             Opcode::StoreImmIndU8 | Opcode::StoreImmIndU16 | Opcode::StoreImmIndU32 | Opcode::StoreImmIndU64 => {
                 if let Args::RegTwoImm { ra, imm_x, imm_y } = args {
                     // addr = φ[ra] + imm_x
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.mov_rr(SCRATCH, ra_reg);
                     if *imm_x as i32 != 0 {
                         self.asm.add_ri(SCRATCH, *imm_x as i32);
@@ -659,9 +581,9 @@ impl Compiler {
                     self.asm.mov_ri64(SCRATCH, *imm_y);
                     self.asm.push(SCRATCH);
                     self.save_caller_saved();
-                    // Stack: [7 caller-saved (56)] [value (8)] [addr (8)]
-                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 56); // value
-                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // addr
+                    // Stack: [8 caller-saved (64)] [value (8)] [addr (8)]
+                    self.asm.mov_load64(Reg::RDX, Reg::RSP, 64); // value
+                    self.asm.mov_load64(Reg::RSI, Reg::RSP, 72); // addr
                     self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
                     self.asm.mov_ri64(Reg::RAX, fn_addr);
                     self.asm.call_reg(Reg::RAX);
@@ -680,67 +602,66 @@ impl Compiler {
             Opcode::LoadImmJump => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
-                    self.pvm_reg_written(*ra);
                     self.emit_static_branch(*offset as u32, true, next_pc, pc);
                 }
             }
             Opcode::BranchEqImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::E, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchNeImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::NE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLtUImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::B, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLeUImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::BE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGeUImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::AE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGtUImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::A, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLtSImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::L, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLeSImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::LE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGeSImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::GE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGtSImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.emit_branch_imm(ra_reg, *imm, Cc::G, *offset as u32, next_pc, pc);
                 }
             }
@@ -748,61 +669,59 @@ impl Compiler {
             // === A.5.9: Two registers ===
             Opcode::MoveReg => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.mov_rr(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::Sbrk => {
                 if let Args::TwoReg { rd, ra } = args {
-                    self.pvm_reg_read(*ra);
                     self.emit_sbrk(*rd, *ra);
-                    self.pvm_reg_written(*rd);
                 }
             }
             Opcode::CountSetBits64 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.popcnt64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::CountSetBits32 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     // Zero-extend to 32 bits first, then popcnt
                     self.asm.movzx_32_64(SCRATCH, ra_reg);
                     self.asm.popcnt64(REG_MAP[*rd], SCRATCH);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::LeadingZeroBits64 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.lzcnt64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::LeadingZeroBits32 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.movzx_32_64(SCRATCH, ra_reg);
                     // lzcnt on 64-bit value then subtract 32
                     self.asm.lzcnt64(REG_MAP[*rd], SCRATCH);
                     self.asm.sub_ri(REG_MAP[*rd], 32);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::TrailingZeroBits64 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.tzcnt64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::TrailingZeroBits32 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     // Set bit 32 to ensure tzcnt doesn't return 64 for zero input
                     self.asm.mov_rr(SCRATCH, ra_reg);
                     self.asm.movzx_32_64(SCRATCH, SCRATCH);
@@ -813,119 +732,61 @@ impl Compiler {
                     self.asm.pop(REG_MAP[*rd]);
                     self.asm.or_rr(REG_MAP[*rd], tmp);
                     self.asm.tzcnt64(REG_MAP[*rd], REG_MAP[*rd]);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::SignExtend8 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.movsx_8_64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::SignExtend16 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.movsx_16_64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::ZeroExtend16 => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     self.asm.movzx_16_64(REG_MAP[*rd], ra_reg);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::ReverseBytes => {
                 if let Args::TwoReg { rd, ra } = args {
-                    let ra_reg = self.pvm_reg_read(*ra);
+                    let ra_reg = REG_MAP[*ra];
                     if *rd != *ra {
                         self.asm.mov_rr(REG_MAP[*rd], ra_reg);
                     }
                     self.asm.bswap64(REG_MAP[*rd]);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
 
             // === A.5.10: Two registers + one immediate ===
             Opcode::StoreIndU8 | Opcode::StoreIndU16 | Opcode::StoreIndU32 | Opcode::StoreIndU64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    // For stores, ra is READ (value), rb is READ (address base).
-                    // emit_mem_write clobbers SCRATCH2 (RCX) for permission check.
-                    // If ra==12, the value is in context memory. We need it AFTER
-                    // the permission check. Strategy: compute address, do permission
-                    // check (clobbers RCX), then reload phi[12] from context for the
-                    // actual store.
-                    if *ra == SPILLED_REG {
-                        // Load rb (for address computation). If rb==12 too, load spilled.
-                        let rb_reg = self.pvm_reg_read(*rb);
-                        // Compute address in SCRATCH
-                        self.asm.mov_rr(SCRATCH, rb_reg);
-                        if *imm as i32 != 0 {
-                            self.asm.add_ri(SCRATCH, *imm as i32);
-                        }
-                        self.asm.movzx_32_64(SCRATCH, SCRATCH);
-                        // Now load phi[12] value from context into SCRATCH2.
-                        // emit_mem_write will clobber SCRATCH2 during permission check,
-                        // but val_reg is used AFTER the check. Since val_reg==RCX==SCRATCH2,
-                        // we need to reload it after the permission check.
-                        // Instead, push the value and use a stack-relative approach.
-                        // Actually, let's reload from context AFTER the permission check
-                        // by using a custom inline sequence.
-                        self.load_spilled();
-                        // Save to stack - the permission check will clobber RCX
-                        self.asm.push(SCRATCH2);
-                        // Do the permission check manually (inline write)
-                        let w = match opcode {
-                            Opcode::StoreIndU8 => 1u32,
-                            Opcode::StoreIndU16 => 2,
-                            Opcode::StoreIndU32 => 4,
-                            Opcode::StoreIndU64 => 8,
-                            _ => unreachable!(),
-                        };
-                        let done_label = self.asm.new_label();
-                        let fault_label = self.asm.new_label();
-                        self.asm.mov_rr(SCRATCH2, SCRATCH);
-                        self.asm.shr_ri32(SCRATCH2, 12);
-                        self.asm.cmp_byte_sib_disp32(CTX, SCRATCH2, -PERMS_OFFSET, 2);
-                        self.asm.jcc_label(Cc::B, fault_label);
-                        // Pop the saved value into SCRATCH2 (RCX) for the store
-                        self.asm.pop(SCRATCH2);
-                        match w {
-                            1 => self.asm.mov_store8_sib(CTX, SCRATCH, SCRATCH2),
-                            2 => self.asm.mov_store16_sib(CTX, SCRATCH, SCRATCH2),
-                            4 => self.asm.mov_store32_sib(CTX, SCRATCH, SCRATCH2),
-                            8 => self.asm.mov_store64_sib(CTX, SCRATCH, SCRATCH2),
-                            _ => unreachable!(),
-                        }
-                        self.asm.jmp_label(done_label);
-                        self.asm.bind_label(fault_label);
-                        self.asm.add_ri(Reg::RSP, 8); // discard pushed value
-                        self.asm.mov_store32_imm(CTX, CTX_EXIT_REASON, EXIT_PAGE_FAULT as i32);
-                        self.asm.mov_store32(CTX, CTX_EXIT_ARG, SCRATCH);
-                        self.asm.jmp_label(self.exit_label);
-                        self.asm.bind_label(done_label);
-                    } else {
-                        // ra != 12: val_reg won't be clobbered by permission check
-                        let ra_reg = REG_MAP[*ra];
-                        let rb_reg = self.pvm_reg_read(*rb);
-                        // addr = φ[rb] + imm, value = φ[ra]
-                        self.asm.mov_rr(SCRATCH, rb_reg);
-                        if *imm as i32 != 0 {
-                            self.asm.add_ri(SCRATCH, *imm as i32);
-                        }
-                        self.asm.movzx_32_64(SCRATCH, SCRATCH);
-                        let fn_addr = self.write_fn_for(opcode);
-                        self.emit_mem_write(true, ra_reg, fn_addr);
+                    let ra_reg = REG_MAP[*ra];
+                    let rb_reg = REG_MAP[*rb];
+                    // addr = φ[rb] + imm, value = φ[ra]
+                    self.asm.mov_rr(SCRATCH, rb_reg);
+                    if *imm as i32 != 0 {
+                        self.asm.add_ri(SCRATCH, *imm as i32);
                     }
+                    self.asm.movzx_32_64(SCRATCH, SCRATCH);
+                    let fn_addr = self.write_fn_for(opcode);
+                    self.emit_mem_write(true, ra_reg, fn_addr);
                 }
             }
             Opcode::LoadIndU8 | Opcode::LoadIndI8 | Opcode::LoadIndU16 | Opcode::LoadIndI16 |
             Opcode::LoadIndU32 | Opcode::LoadIndI32 | Opcode::LoadIndU64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    // Read rb BEFORE emit_mem_read clobbers SCRATCH2
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    // Read rb BEFORE emit_mem_read (which uses push/pop RAX)
+                    let rb_reg = REG_MAP[*rb];
                     // addr = φ[rb] + imm
                     self.asm.mov_rr(SCRATCH, rb_reg);
                     if *imm as i32 != 0 {
@@ -942,21 +803,21 @@ impl Compiler {
                         Opcode::LoadIndI32 => self.asm.movsxd(ra_reg, ra_reg),
                         _ => {}
                     }
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::AddImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.add_ri32(REG_MAP[*ra], *imm as i32);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::AddImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     if *imm as i32 == 1 {
                         self.asm.inc64(REG_MAP[*ra]);
@@ -965,143 +826,143 @@ impl Compiler {
                     } else {
                         self.asm.add_ri(REG_MAP[*ra], *imm as i32);
                     }
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::AndImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.and_ri(REG_MAP[*ra], *imm as i32);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::XorImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.xor_ri(REG_MAP[*ra], *imm as i32);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::OrImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.or_ri(REG_MAP[*ra], *imm as i32);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::MulImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.imul_rri32(REG_MAP[*ra], rb_reg, *imm as i32);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::MulImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.imul_rri(REG_MAP[*ra], rb_reg, *imm as i32);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SetLtUImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.mov_ri64(SCRATCH, *imm);
                     self.asm.cmp_rr(rb_reg, SCRATCH);
                     self.asm.setcc(Cc::B, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SetLtSImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.mov_ri64(SCRATCH, *imm);
                     self.asm.cmp_rr(rb_reg, SCRATCH);
                     self.asm.setcc(Cc::L, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SetGtUImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.mov_ri64(SCRATCH, *imm);
                     self.asm.cmp_rr(rb_reg, SCRATCH);
                     self.asm.setcc(Cc::A, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SetGtSImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.mov_ri64(SCRATCH, *imm);
                     self.asm.cmp_rr(rb_reg, SCRATCH);
                     self.asm.setcc(Cc::G, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloLImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.shl_ri32(REG_MAP[*ra], (*imm as u8) & 31);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloRImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.movzx_32_64(REG_MAP[*ra], REG_MAP[*ra]);
                     self.asm.shr_ri32(REG_MAP[*ra], (*imm as u8) & 31);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SharRImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.sar_ri32(REG_MAP[*ra], (*imm as u8) & 31);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloLImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.shl_ri64(REG_MAP[*ra], (*imm as u8) & 63);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloRImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.shr_ri64(REG_MAP[*ra], (*imm as u8) & 63);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SharRImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.sar_ri64(REG_MAP[*ra], (*imm as u8) & 63);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::NegAddImm32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     // rd = imm - rb (32-bit)
                     if *ra == *rb {
                         self.asm.mov_rr(SCRATCH, rb_reg);
@@ -1112,12 +973,12 @@ impl Compiler {
                         self.asm.sub_rr32(REG_MAP[*ra], rb_reg);
                     }
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::NegAddImm64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra == *rb {
                         self.asm.mov_rr(SCRATCH, rb_reg);
                         self.asm.mov_ri64(REG_MAP[*ra], *imm);
@@ -1126,129 +987,129 @@ impl Compiler {
                         self.asm.mov_ri64(REG_MAP[*ra], *imm);
                         self.asm.sub_rr(REG_MAP[*ra], rb_reg);
                     }
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             // Alt shifts: rd = imm OP rb (operands swapped)
             Opcode::ShloLImmAlt32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
                     // rd = imm << (rb & 31)
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg32(REG_MAP[*ra], shift_src, 4); // SHL
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloRImmAlt32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.asm.movzx_32_64(REG_MAP[*ra], REG_MAP[*ra]);
                     self.emit_shift_by_reg32(REG_MAP[*ra], shift_src, 5); // SHR
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SharRImmAlt32 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg32(REG_MAP[*ra], shift_src, 7); // SAR
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloLImmAlt64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg64(REG_MAP[*ra], shift_src, 4);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::ShloRImmAlt64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg64(REG_MAP[*ra], shift_src, 5);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::SharRImmAlt64 => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg64(REG_MAP[*ra], shift_src, 7);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::CmovIzImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
                     // if φ[rb] == 0 then φ[ra] = imm
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.test_rr(rb_reg, rb_reg);
                     let skip = self.asm.new_label();
                     self.asm.jcc_label(Cc::NE, skip);
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
-                    self.pvm_reg_written(*ra);
+
                     self.asm.bind_label(skip);
                 }
             }
             Opcode::CmovNzImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     self.asm.test_rr(rb_reg, rb_reg);
                     let skip = self.asm.new_label();
                     self.asm.jcc_label(Cc::E, skip);
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
-                    self.pvm_reg_written(*ra);
+
                     self.asm.bind_label(skip);
                 }
             }
             Opcode::RotR64Imm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.ror_ri64(REG_MAP[*ra], (*imm as u8) & 63);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::RotR64ImmAlt => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
                     // rd = imm ROR rb
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.emit_shift_by_reg64(REG_MAP[*ra], shift_src, 1); // ROR
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::RotR32Imm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     if *ra != *rb { self.asm.mov_rr(REG_MAP[*ra], rb_reg); }
                     self.asm.movzx_32_64(REG_MAP[*ra], REG_MAP[*ra]);
                     self.asm.ror_ri32(REG_MAP[*ra], (*imm as u8) & 31);
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
             Opcode::RotR32ImmAlt => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = self.pvm_reg_read(*rb);
+                    let rb_reg = REG_MAP[*rb];
                     let shift_src = if *ra == *rb { self.asm.mov_rr(SCRATCH, rb_reg); SCRATCH } else { rb_reg };
                     self.asm.mov_ri64(REG_MAP[*ra], *imm);
                     self.asm.movzx_32_64(REG_MAP[*ra], REG_MAP[*ra]);
                     self.emit_shift_by_reg32(REG_MAP[*ra], shift_src, 1); // ROR
                     self.asm.movsxd(REG_MAP[*ra], REG_MAP[*ra]);
-                    self.pvm_reg_written(*ra);
+
                 }
             }
 
@@ -1257,37 +1118,37 @@ impl Compiler {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
                     // Both ra and rb are READ. If one is 12, we need special handling
                     // since both map to RCX. Load spilled first, save to SCRATCH if needed.
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::E, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchNe => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::NE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLtU => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::B, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchLtS => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::L, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGeU => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::AE, *offset as u32, next_pc, pc);
                 }
             }
             Opcode::BranchGeS => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let (ra_reg, rb_reg) = self.pvm_read_two(*ra, *rb);
+                    let (ra_reg, rb_reg) = (REG_MAP[*ra], REG_MAP[*rb]);
                     self.emit_branch_reg(ra_reg, rb_reg, Cc::GE, *offset as u32, next_pc, pc);
                 }
             }
@@ -1299,17 +1160,7 @@ impl Compiler {
                     // Per GP semantics, ra is written first, then jump uses the
                     // (possibly updated) rb value.
                     // If ra==rb, the jump target uses imm_x + imm_y.
-                    // If ra!=rb and rb==12, we need to load phi[12] for the jump.
-                    // If ra==12 (and rb!=12), write imm_x to RCX and store.
-                    // If ra==12 and rb==12, write imm_x to RCX, store, and jump
-                    //   uses the new value (imm_x) which is already in RCX.
                     self.asm.mov_ri64(REG_MAP[*ra], *imm_x);
-                    self.pvm_reg_written(*ra);
-                    // For the jump, if rb==12 and ra!=12, we need to load phi[12]
-                    // from context. If ra==12, RCX already has the new value.
-                    if *rb == SPILLED_REG && *ra != SPILLED_REG {
-                        self.load_spilled();
-                    }
                     self.emit_dynamic_jump(*rb, *imm_y, pc);
                 }
             }
@@ -1319,7 +1170,7 @@ impl Compiler {
             Opcode::Sub32 => { self.emit_alu3_32_sub(args); }
             Opcode::Mul32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     if *rd == *rb && *rd != *ra {
                         self.asm.mov_rr(SCRATCH, b);
@@ -1330,13 +1181,13 @@ impl Compiler {
                         self.asm.imul_rr32(d, b);
                     }
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::Add64 => { self.emit_alu3_64(args, |a, d, s| { a.add_rr(d, s); }); }
             Opcode::Sub64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     if *rd == *rb && *rd != *ra {
                         self.asm.mov_rr(SCRATCH, b);
@@ -1346,12 +1197,12 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.sub_rr(d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::Mul64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     if *rd == *rb && *rd != *ra {
                         self.asm.mov_rr(SCRATCH, b);
@@ -1361,7 +1212,7 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.imul_rr(d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::And => { self.emit_alu3_64(args, |a, d, s| { a.and_rr(d, s); }); }
@@ -1382,66 +1233,66 @@ impl Compiler {
             // Note: when rd==rb, we must save rb to SCRATCH before mov rd, ra.
             Opcode::ShloL32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg32(d, shift_src, 4);
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::ShloR32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.asm.movzx_32_64(d, d);
                     self.emit_shift_by_reg32(d, shift_src, 5);
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::SharR32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg32(d, shift_src, 7);
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::ShloL64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg64(d, shift_src, 4);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::ShloR64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg64(d, shift_src, 5);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::SharR64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg64(d, shift_src, 7);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
 
@@ -1453,20 +1304,20 @@ impl Compiler {
             // Set comparisons (three-register)
             Opcode::SetLtU => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     self.asm.cmp_rr(REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.setcc(Cc::B, REG_MAP[*rd]);
                     self.asm.movzx_8_64(REG_MAP[*rd], REG_MAP[*rd]);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::SetLtS => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     self.asm.cmp_rr(REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.setcc(Cc::L, REG_MAP[*rd]);
                     self.asm.movzx_8_64(REG_MAP[*rd], REG_MAP[*rd]);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
 
@@ -1474,98 +1325,89 @@ impl Compiler {
             Opcode::CmovIz => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
                     // if φ[rb] == 0 then φ[rd] = φ[ra]
-                    // All three are READ (rd is conditionally kept). Load spilled if any is 12.
-                    if *ra == SPILLED_REG || *rb == SPILLED_REG || *rd == SPILLED_REG {
-                        self.load_spilled();
-                    }
                     self.asm.test_rr(REG_MAP[*rb], REG_MAP[*rb]);
                     self.asm.cmovcc(Cc::E, REG_MAP[*rd], REG_MAP[*ra]);
-                    self.pvm_reg_written(*rd);
                 }
             }
             Opcode::CmovNz => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    if *ra == SPILLED_REG || *rb == SPILLED_REG || *rd == SPILLED_REG {
-                        self.load_spilled();
-                    }
                     self.asm.test_rr(REG_MAP[*rb], REG_MAP[*rb]);
                     self.asm.cmovcc(Cc::NE, REG_MAP[*rd], REG_MAP[*ra]);
-                    self.pvm_reg_written(*rd);
                 }
             }
 
             // Rotates (three-register)
             Opcode::RotL64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg64(d, shift_src, 0); // ROL
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::RotL32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.asm.movzx_32_64(d, d);
                     self.emit_shift_by_reg32(d, shift_src, 0);
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::RotR64 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.emit_shift_by_reg64(d, shift_src, 1); // ROR
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::RotR32 => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     let shift_src = if *rd == *rb && *rd != *ra { self.asm.mov_rr(SCRATCH, b); SCRATCH } else { b };
                     if *rd != *ra { self.asm.mov_rr(d, a); }
                     self.asm.movzx_32_64(d, d);
                     self.emit_shift_by_reg32(d, shift_src, 1);
                     self.asm.movsxd(d, d);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
 
             // Logical with invert
             Opcode::AndInv => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     // rd = ra & ~rb
                     self.asm.mov_rr(SCRATCH, REG_MAP[*rb]);
                     self.asm.not64(SCRATCH);
                     self.asm.mov_rr(REG_MAP[*rd], REG_MAP[*ra]);
                     self.asm.and_rr(REG_MAP[*rd], SCRATCH);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::OrInv => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     // rd = ra | ~rb
                     self.asm.mov_rr(SCRATCH, REG_MAP[*rb]);
                     self.asm.not64(SCRATCH);
                     self.asm.mov_rr(REG_MAP[*rd], REG_MAP[*ra]);
                     self.asm.or_rr(REG_MAP[*rd], SCRATCH);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::Xnor => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     // rd = ~(ra ^ rb)
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     if *rd == *rb && *rd != *ra {
@@ -1577,14 +1419,14 @@ impl Compiler {
                         self.asm.xor_rr(d, b);
                     }
                     self.asm.not64(REG_MAP[*rd]);
-                    self.pvm_reg_written(*rd);
+
                 }
             }
 
             // Min/Max
             Opcode::Max => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.cmp_rr(a, b);
                     if *rd == *rb && *rd != *ra {
@@ -1595,12 +1437,12 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.cmovcc(Cc::L, d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::MaxU => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.cmp_rr(a, b);
                     if *rd == *rb && *rd != *ra {
@@ -1611,12 +1453,12 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.cmovcc(Cc::B, d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::Min => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.cmp_rr(a, b);
                     if *rd == *rb && *rd != *ra {
@@ -1627,12 +1469,12 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.cmovcc(Cc::G, d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
             Opcode::MinU => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
                     let (d, a, b) = (REG_MAP[*rd], REG_MAP[*ra], REG_MAP[*rb]);
                     self.asm.cmp_rr(a, b);
                     if *rd == *rb && *rd != *ra {
@@ -1643,7 +1485,7 @@ impl Compiler {
                         if *rd != *ra { self.asm.mov_rr(d, a); }
                         self.asm.cmovcc(Cc::A, d, b);
                     }
-                    self.pvm_reg_written(*rd);
+
                 }
             }
         }
@@ -1800,7 +1642,7 @@ impl Compiler {
     /// Three-register 64-bit ALU: rd = ra OP rb
     fn emit_alu3_64(&mut self, args: &Args, op: impl FnOnce(&mut Assembler, Reg, Reg)) {
         if let Args::ThreeReg { ra, rb, rd } = args {
-            let (_a, _b, _d) = self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
             let d = REG_MAP[*rd];
             let a = REG_MAP[*ra];
             let b = REG_MAP[*rb];
@@ -1816,14 +1658,14 @@ impl Compiler {
                 self.asm.mov_rr(d, a);
                 op(&mut self.asm, d, b);
             }
-            self.pvm_reg_written(*rd);
+
         }
     }
 
     /// Three-register 32-bit ALU with sign extension: rd = sx32(ra OP rb)
     fn emit_alu3_32(&mut self, args: &Args, op: impl FnOnce(&mut Assembler, Reg, Reg)) {
         if let Args::ThreeReg { ra, rb, rd } = args {
-            let (_a, _b, _d) = self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
             let d = REG_MAP[*rd];
             let a = REG_MAP[*ra];
             let b = REG_MAP[*rb];
@@ -1838,13 +1680,13 @@ impl Compiler {
                 op(&mut self.asm, d, b);
             }
             self.asm.movsxd(d, d);
-            self.pvm_reg_written(*rd);
+
         }
     }
 
     fn emit_alu3_32_sub(&mut self, args: &Args) {
         if let Args::ThreeReg { ra, rb, rd } = args {
-            let (_a, _b, _d) = self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
             let d = REG_MAP[*rd];
             let a = REG_MAP[*ra];
             let b = REG_MAP[*rb];
@@ -1859,7 +1701,7 @@ impl Compiler {
                 self.asm.sub_rr32(d, b);
             }
             self.asm.movsxd(d, d);
-            self.pvm_reg_written(*rd);
+
         }
     }
 
@@ -1871,7 +1713,7 @@ impl Compiler {
             // We need to save φ[11] (RAX) around the operation.
 
             // Load spilled register if ra or rb is phi[12]
-            self.pvm_read_three_for_alu(*ra, *rb, *rd);
+
             let a_reg = REG_MAP[*ra];
             let b_reg = REG_MAP[*rb];
             let d_reg = REG_MAP[*rd];
@@ -1897,32 +1739,36 @@ impl Compiler {
 
             // x86 DIV/IDIV: dividend in RDX:RAX, divisor in any GPR except RAX/RDX.
             // Quotient → RAX, remainder → RDX. Both are always clobbered.
+            // RCX is used as divisor register and must be saved/restored (it's phi[12]).
             //
-            // Strategy: save RAX and RDX to stack, load operands from saved values
-            // if needed, perform division, then push result, restore RAX/RDX, and
-            // load result into d_reg last (so it correctly overwrites even if
-            // d_reg is RAX or RDX).
+            // Strategy: save RAX, RDX, and RCX to stack, load operands from saved
+            // values if needed, perform division, then push result, restore all three,
+            // and load result into d_reg last.
 
-            // Save RAX and RDX.
+            // Save RAX, RDX, and RCX.
             self.asm.push(Reg::RAX);
             self.asm.push(SCRATCH); // SCRATCH = RDX
-            // Stack: [RSP+0]=old_RDX, [RSP+8]=old_RAX
+            self.asm.push(Reg::RCX);
+            // Stack: [RSP+0]=old_RCX, [RSP+8]=old_RDX, [RSP+16]=old_RAX
 
-            // Load divisor into SCRATCH2 (RCX). Since φ[12] is spilled to
-            // JitContext memory, RCX is free within a single instruction's codegen.
+            // Load divisor into RCX.
             if b_reg == Reg::RAX {
-                self.asm.mov_load64(SCRATCH2, Reg::RSP, 8); // original RAX
+                self.asm.mov_load64(Reg::RCX, Reg::RSP, 16); // original RAX
             } else if b_reg == SCRATCH {
-                self.asm.mov_load64(SCRATCH2, Reg::RSP, 0); // original RDX
+                self.asm.mov_load64(Reg::RCX, Reg::RSP, 8); // original RDX
+            } else if b_reg == Reg::RCX {
+                self.asm.mov_load64(Reg::RCX, Reg::RSP, 0); // original RCX
             } else {
-                self.asm.mov_rr(SCRATCH2, b_reg);
+                self.asm.mov_rr(Reg::RCX, b_reg);
             }
 
             // Load dividend into RAX.
             if a_reg == Reg::RAX {
-                self.asm.mov_load64(Reg::RAX, Reg::RSP, 8); // original RAX
+                self.asm.mov_load64(Reg::RAX, Reg::RSP, 16); // original RAX
             } else if a_reg == SCRATCH {
-                self.asm.mov_load64(Reg::RAX, Reg::RSP, 0); // original RDX
+                self.asm.mov_load64(Reg::RAX, Reg::RSP, 8); // original RDX
+            } else if a_reg == Reg::RCX {
+                self.asm.mov_load64(Reg::RAX, Reg::RSP, 0); // original RCX
             } else {
                 self.asm.mov_rr(Reg::RAX, a_reg);
             }
@@ -1932,50 +1778,48 @@ impl Compiler {
                 if signed {
                     self.asm.movsxd(Reg::RAX, Reg::RAX);
                     self.asm.cdq();
-                    self.asm.idiv32(SCRATCH2);
+                    self.asm.idiv32(Reg::RCX);
                 } else {
                     self.asm.movzx_32_64(Reg::RAX, Reg::RAX);
                     self.asm.mov_ri64(SCRATCH, 0);
-                    self.asm.div32(SCRATCH2);
+                    self.asm.div32(Reg::RCX);
                 }
             } else {
                 if signed {
                     self.asm.cqo();
-                    self.asm.idiv64(SCRATCH2);
+                    self.asm.idiv64(Reg::RCX);
                 } else {
                     self.asm.mov_ri64(SCRATCH, 0);
-                    self.asm.div64(SCRATCH2);
+                    self.asm.div64(Reg::RCX);
                 }
             }
 
             // Result: quotient in RAX, remainder in RDX (SCRATCH).
             let result_reg = if remainder { SCRATCH } else { Reg::RAX };
 
-            // Push result, restore RAX/RDX, then load result into d_reg.
+            // Push result, restore RAX/RDX/RCX, then load result into d_reg.
             // This ordering ensures d_reg gets the correct value even when
-            // d_reg is RAX or RDX (the load happens after the restore).
+            // d_reg is RAX, RDX, or RCX (the load happens after the restore).
             self.asm.push(result_reg);
-            // Stack: [RSP+0]=result, [RSP+8]=old_RDX, [RSP+16]=old_RAX
-            self.asm.mov_load64(Reg::RAX, Reg::RSP, 16); // restore original RAX
-            self.asm.mov_load64(SCRATCH, Reg::RSP, 8);    // restore original RDX
+            // Stack: [RSP+0]=result, [RSP+8]=old_RCX, [RSP+16]=old_RDX, [RSP+24]=old_RAX
+            self.asm.mov_load64(Reg::RAX, Reg::RSP, 24); // restore original RAX
+            self.asm.mov_load64(SCRATCH, Reg::RSP, 16);   // restore original RDX
+            self.asm.mov_load64(Reg::RCX, Reg::RSP, 8);   // restore original RCX
             self.asm.mov_load64(d_reg, Reg::RSP, 0);      // load result (last!)
-            self.asm.add_ri(Reg::RSP, 24);                 // clean up 3 stack slots
+            self.asm.add_ri(Reg::RSP, 32);                 // clean up 4 stack slots
 
             if is_32bit {
                 self.asm.movsxd(d_reg, d_reg);
             }
 
             self.asm.bind_label(done);
-            self.pvm_reg_written(*rd);
+
         }
     }
 
     /// Multiply upper (128-bit product, take high 64 bits).
     fn emit_mul_upper(&mut self, args: &Args, a_signed: bool, b_signed: bool) {
         if let Args::ThreeReg { ra, rb, rd } = args {
-            // Load spilled register if ra or rb is phi[12]
-            self.pvm_read_three_for_alu(*ra, *rb, *rd);
-
             // MUL/IMUL uses RAX (φ[11]) and RDX (SCRATCH) implicitly.
             // Save original RAX and RDX.
             self.asm.push(Reg::RAX);  // save φ[11]
@@ -2036,7 +1880,7 @@ impl Compiler {
             self.asm.mov_load64(Reg::RAX, Reg::RSP, 16); // restore original RAX
             self.asm.pop(REG_MAP[*rd]); // rd = result_hi
             self.asm.add_ri(Reg::RSP, 16); // discard orig_RDX and orig_RAX
-            self.pvm_reg_written(*rd);
+
         }
     }
 
@@ -2051,10 +1895,10 @@ impl Compiler {
         self.asm.push(REG_MAP[ra]);
 
         self.save_caller_saved();
-        // Stack: [7 caller-saved (56)] [ra_value (8)] [saved_scratch (8)]
+        // Stack: [8 caller-saved (64)] [ra_value (8)] [saved_scratch (8)]
         // Args: RDI = ctx, RSI = size
         self.emit_ctx_ptr(Reg::RDI);                 // ctx = R15 - CTX_OFFSET
-        self.asm.mov_load64(Reg::RSI, Reg::RSP, 56); // ra value from stack
+        self.asm.mov_load64(Reg::RSI, Reg::RSP, 64); // ra value from stack
         self.asm.mov_ri64(Reg::RAX, fn_addr);
         self.asm.call_reg(Reg::RAX);
         self.asm.mov_rr(SCRATCH, Reg::RAX);
@@ -2101,9 +1945,10 @@ impl Compiler {
         self.asm.push(Reg::R15);
 
         // Stack alignment: after 6 callee-saved pushes + return address (7 * 8 = 56),
-        // RSP mod 16 = 8. With save_caller_saved (7 pushes = 56 bytes), total
-        // displacement = 56 + 56 = 112, RSP mod 16 = 0 — aligned for CALL.
-        // No alignment padding needed.
+        // RSP mod 16 = 8. With save_caller_saved (8 pushes = 64 bytes), total
+        // displacement = 56 + 64 = 120, RSP mod 16 = 8. Push extra 8 bytes for
+        // alignment so that save_caller_saved leaves RSP mod 16 = 0 for CALL.
+        self.asm.push(SCRATCH); // alignment padding
 
         // RDI = JitContext pointer. R15 = guest memory base = RDI + CTX_OFFSET.
         self.asm.lea(CTX, Reg::RDI, CTX_OFFSET);
@@ -2119,9 +1964,8 @@ impl Compiler {
         self.asm.add_rr(Reg::RAX, SCRATCH);
         self.asm.push(Reg::RAX);
 
-        // Load PVM registers from context (skip phi[12] — it stays in context memory)
+        // Load all 13 PVM registers from context
         for i in 0..13 {
-            if i == SPILLED_REG { continue; }
             self.asm.mov_load64(REG_MAP[i], CTX, CTX_REGS + (i as i32) * 8);
         }
 
@@ -2151,15 +1995,14 @@ impl Compiler {
         self.asm.mov_store32_imm(CTX, CTX_EXIT_REASON as i32, EXIT_PANIC as i32);
         // fall through to exit_label
 
-        // Common exit: save PVM registers to context, restore callee-saved, return
-        // phi[12] is already in context (spilled), skip it.
+        // Common exit: save all 13 PVM registers to context, restore callee-saved, return
         self.asm.bind_label(self.exit_label);
         for i in 0..13 {
-            if i == SPILLED_REG { continue; }
             self.asm.mov_store64(CTX, CTX_REGS + (i as i32) * 8, REG_MAP[i]);
         }
 
-        // Restore callee-saved
+        // Restore callee-saved (+ alignment padding)
+        self.asm.pop(SCRATCH); // alignment padding
         self.asm.pop(Reg::R15);
         self.asm.pop(Reg::R14);
         self.asm.pop(Reg::R13);

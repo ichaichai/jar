@@ -816,6 +816,11 @@ impl RecompiledPvm {
         self.ctx_mut().gas = gas as i64;
     }
 
+    /// Set a single PVM register.
+    pub fn set_register(&mut self, idx: usize, val: u64) {
+        self.ctx_mut().regs[idx] = val;
+    }
+
     /// Get the native code bytes (for disassembly / debugging).
     pub fn native_code_bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.native_code.ptr, self.native_code.len) }

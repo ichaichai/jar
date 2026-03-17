@@ -70,64 +70,78 @@ impl PvmInstance {
                 *step += 1;
                 let s = *step;
 
-                // Per-instruction comparison to find exact divergence point
-                let mut instr = 0u32;
-                loop {
-                    instr += 1;
-                    // Save current gas, set to 1 for single instruction
-                    let ig = interp.gas;
-                    let rg = recomp.gas();
-                    interp.gas = 1;
-                    recomp.set_gas(1);
-                    let (ie, _) = interp.run();
-                    let re = recomp.run();
-                    // Restore gas: subtract what was consumed (1 - remaining)
-                    let ig_after = ig.saturating_sub(1u64.saturating_sub(interp.gas));
-                    let rg_after = rg.saturating_sub(1u64.saturating_sub(recomp.gas()));
-                    interp.gas = ig_after;
-                    recomp.set_gas(rg_after);
+                // Run both with full gas. The recompiler uses block-level gas metering
+                // so per-instruction stepping doesn't work. Instead, run both to the
+                // next exit point and compare results.
+                let ig = interp.gas;
+                let rg = recomp.gas();
+                let (ie, _) = interp.run();
+                let re = recomp.run();
 
-                    // Check for register or exit mismatch
-                    let mut mismatch = false;
-                    for i in 0..13 {
-                        if interp.registers[i] != recomp.registers()[i] {
-                            tracing::error!(
-                                "COMPARE step {} instr {}: REG[{}] MISMATCH interp=0x{:x} recomp=0x{:x} pc_i={} pc_r={}",
-                                s, instr, i, interp.registers[i], recomp.registers()[i], interp.pc, recomp.pc()
-                            );
-                            mismatch = true;
-                        }
-                    }
-                    if interp.pc != recomp.pc() {
-                        tracing::error!(
-                            "COMPARE step {} instr {}: PC MISMATCH interp={} recomp={}",
-                            s, instr, interp.pc, recomp.pc()
+                // Check for mismatch
+                let mut mismatch = false;
+                for i in 0..13 {
+                    if interp.registers[i] != recomp.registers()[i] {
+                        eprintln!(
+                            "COMPARE step {}: REG[{}] MISMATCH interp=0x{:x} recomp=0x{:x} pc_i={} pc_r={}",
+                            s, i, interp.registers[i], recomp.registers()[i], interp.pc, recomp.pc()
                         );
                         mismatch = true;
-                    }
-                    if ie != re {
-                        tracing::error!(
-                            "COMPARE step {} instr {}: EXIT MISMATCH interp={:?} recomp={:?} pc_i={} pc_r={}",
-                            s, instr, ie, re, interp.pc, recomp.pc()
-                        );
-                        mismatch = true;
-                    }
-                    if mismatch {
-                        // Return recompiler's result on divergence
-                        return re;
-                    }
-                    // Both exited the same way
-                    match ie {
-                        ExitReason::OutOfGas => {
-                            // Normal: ran one instruction, gas was 1 → 0 → OOG. Continue.
-                            continue;
-                        }
-                        _ => {
-                            // Real exit (host call, halt, etc.)
-                            return re;
-                        }
                     }
                 }
+                if interp.pc != recomp.pc() {
+                    eprintln!(
+                        "COMPARE step {}: PC MISMATCH interp={} recomp={}",
+                        s, interp.pc, recomp.pc()
+                    );
+                    mismatch = true;
+                }
+                if ie != re {
+                    eprintln!(
+                        "COMPARE step {}: EXIT MISMATCH interp={:?} recomp={:?} pc_i={} pc_r={} gas_i={} gas_r={}",
+                        s, ie, re, interp.pc, recomp.pc(), interp.gas, recomp.gas()
+                    );
+                    mismatch = true;
+                }
+                if interp.gas != recomp.gas() {
+                    eprintln!(
+                        "COMPARE step {}: GAS MISMATCH interp={} recomp={} (exit_i={:?} exit_r={:?})",
+                        s, interp.gas, recomp.gas(), ie, re
+                    );
+                    mismatch = true;
+                }
+                // Compare memory on host-call exits (when PVM wrote to memory)
+                if !mismatch {
+                    for (page, _access, page_data) in interp.memory.pages_iter() {
+                        let base = page * 4096;
+                        for offset in 0..4096u32 {
+                            let addr = base + offset;
+                            let i_byte = page_data[offset as usize];
+                            let r_byte = recomp.read_byte(addr).unwrap_or(0);
+                            if i_byte != r_byte {
+                                eprintln!(
+                                    "COMPARE step {}: MEMORY MISMATCH at addr=0x{:08x} interp=0x{:02x} recomp=0x{:02x}",
+                                    s, addr, i_byte, r_byte
+                                );
+                                mismatch = true;
+                                break;
+                            }
+                        }
+                        if mismatch { break; }
+                    }
+                }
+
+                if mismatch {
+                    // Sync gas and return interpreter's result (correct behavior)
+                    recomp.set_gas(interp.gas);
+                    // Sync registers and PC from interpreter
+                    for i in 0..13 {
+                        recomp.set_register(i, interp.registers[i]);
+                    }
+                    recomp.set_pc(interp.pc);
+                }
+                // Always return interpreter result (correct), recompiler is just checked
+                ie
             }
         }
     }
