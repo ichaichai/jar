@@ -720,12 +720,13 @@ impl Compiler {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
                     let ra_reg = REG_MAP[*ra];
                     let rb_reg = REG_MAP[*rb];
-                    // addr = φ[rb] + imm, value = φ[ra]
-                    self.asm.mov_rr(SCRATCH, rb_reg);
+                    // addr = (φ[rb] + imm) truncated to 32 bits.
+                    // Use movzx_32_64 (32-bit mov) + add_ri32 (32-bit add) so the
+                    // result is automatically zero-extended — no separate truncation.
+                    self.asm.movzx_32_64(SCRATCH, rb_reg);
                     if *imm as i32 != 0 {
-                        self.asm.add_ri(SCRATCH, *imm as i32);
+                        self.asm.add_ri32(SCRATCH, *imm as i32);
                     }
-                    self.asm.movzx_32_64(SCRATCH, SCRATCH);
                     let fn_addr = self.write_fn_for(opcode);
                     self.emit_mem_write(true, ra_reg, fn_addr, pc);
                 }
@@ -735,12 +736,11 @@ impl Compiler {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
                     // Read rb BEFORE emit_mem_read (which uses push/pop RAX)
                     let rb_reg = REG_MAP[*rb];
-                    // addr = φ[rb] + imm
-                    self.asm.mov_rr(SCRATCH, rb_reg);
+                    // addr = (φ[rb] + imm) truncated to 32 bits.
+                    self.asm.movzx_32_64(SCRATCH, rb_reg);
                     if *imm as i32 != 0 {
-                        self.asm.add_ri(SCRATCH, *imm as i32);
+                        self.asm.add_ri32(SCRATCH, *imm as i32);
                     }
-                    self.asm.movzx_32_64(SCRATCH, SCRATCH);
                     let fn_addr = self.read_fn_for(opcode);
                     let ra_reg = REG_MAP[*ra];
                     self.emit_mem_read(ra_reg, SCRATCH, fn_addr, pc);
