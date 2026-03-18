@@ -86,12 +86,14 @@ fn main() {
             let t = Instant::now();
             let mut pvm = javm::recompiler::initialize_program_recompiled(&blob, &[], GAS).unwrap();
             let compile_ms = t.elapsed().as_secs_f64() * 1000.0;
+            let t_exec = Instant::now();
             loop {
                 match pvm.run() {
                     javm::ExitReason::Halt | javm::ExitReason::Panic => {
-                        eprintln!("{:20} {:>10.3} ms  (compile={:.1}ms) a0={}",
+                        let exec_us = t_exec.elapsed().as_micros();
+                        eprintln!("{:20} {:>10.3} ms  (compile={:.1}ms exec={}µs) a0={}",
                             "grey-recompiler", t.elapsed().as_secs_f64() * 1000.0,
-                            compile_ms, pvm.registers()[7]);
+                            compile_ms, exec_us, pvm.registers()[7]);
                         return;
                     }
                     javm::ExitReason::HostCall(_) => continue,
@@ -130,23 +132,17 @@ fn main() {
                 eprintln!("polkavm: NO EXPORTS"); return;
             }
             inst.set_reg(PReg::SP, module.default_sp());
+            let t_exec = Instant::now();
             loop {
                 match inst.run().unwrap() {
-                    InterruptKind::Finished => {
-                        eprintln!("{:20} {:>10.3} ms  (compile={:.1}ms) a0={}",
+                    InterruptKind::Finished | InterruptKind::Trap => {
+                        let exec_us = t_exec.elapsed().as_micros();
+                        eprintln!("{:20} {:>10.3} ms  (compile={:.1}ms exec={}µs) a0={}",
                             "polkavm", t.elapsed().as_secs_f64() * 1000.0,
-                            compile_ms, inst.reg(PReg::A0));
+                            compile_ms, exec_us, inst.reg(PReg::A0));
                         return;
                     }
                     InterruptKind::Ecalli(_) => continue,
-                    InterruptKind::Trap => {
-                        // Exported functions TRAP on return (no valid RA).
-                        // Treat as normal completion — report timing.
-                        eprintln!("{:20} {:>10.3} ms  (compile={:.1}ms) a0={}",
-                            "polkavm", t.elapsed().as_secs_f64() * 1000.0,
-                            compile_ms, inst.reg(PReg::A0));
-                        return;
-                    }
                     InterruptKind::NotEnoughGas => { eprintln!("polkavm: OOG"); return; }
                     other => { eprintln!("polkavm: {:?}", other); return; }
                 }
