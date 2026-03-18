@@ -70,5 +70,9 @@ async-trait = "0.1"
 jsonrpsee = { version = "0.24", features = ["server", "macros"] }
 
 
+[profile.release]
+lto = true
+codegen-units = 1
+
 [profile.release.package.polkavm-linux-raw]
 opt-level = 0
