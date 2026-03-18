@@ -138,10 +138,8 @@ fn validate(name: &str, grey_blob: &[u8], pvm_blob: &[u8]) {
         gi_result, pvm_result,
         "{name}: grey/polkavm result mismatch"
     );
-    assert_eq!(
-        gi_gas as i64, pvm_gas,
-        "{name}: grey/polkavm gas mismatch"
-    );
+    // Gas values differ: JAVM uses pipeline gas (JAR v0.8.0),
+    // polkavm uses per-instruction gas (GP v0.7.2).
 }
 
 // ---------------------------------------------------------------------------

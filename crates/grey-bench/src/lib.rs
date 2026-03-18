@@ -33,6 +33,7 @@ pub fn grey_fib_blob(n: u64) -> Vec<u8> {
     asm.set_stack_size(4096);
     asm.set_heap_pages(0);
 
+    asm.load_imm_64(Reg::RA, 0xFFFF0000u64); // halt address (linear layout doesn't pre-set RA)
     asm.load_imm_64(Reg::T0, 0);          // fib_prev = 0
     asm.load_imm_64(Reg::T1, 1);          // fib_curr = 1
     asm.load_imm_64(Reg::T2, 0);          // counter = 0
@@ -70,6 +71,7 @@ pub fn grey_hostcall_blob(n: u64) -> Vec<u8> {
     asm.set_stack_size(4096);
     asm.set_heap_pages(0);
 
+    asm.load_imm_64(Reg::RA, 0xFFFF0000u64); // halt address
     asm.load_imm_64(Reg::T0, 0);
     asm.load_imm_64(Reg::S1, n);
 
@@ -111,17 +113,19 @@ pub fn grey_sort_blob(n: u32) -> Vec<u8> {
     let mut c = Vec::new();  // code bytes
     let mut m = Vec::new();  // bitmask
 
-    // Register assignments (matching PVM reg indices)
-    const S0: u8 = 5; // array base
-    const S1: u8 = 6; // n
-    const T0: u8 = 2; // i (outer loop / init)
-    const T1: u8 = 3; // j (inner loop)
-    const T2: u8 = 4; // key
-    const A0: u8 = 7; // temp / result
-    const A1: u8 = 8; // scratch
-    const A2: u8 = 9; // address scratch
-    const RA: u8 = 0;
-    const SP: u8 = 1;
+    // Register assignments
+    // In JAR v0.8.0 linear memory: φ[0]=SP, φ[1]=stack_top
+    // We use φ[0] as SP and load the halt address into a dedicated register.
+    const SP: u8 = 0;  // stack pointer (φ[0] = s from init)
+    const RA: u8 = 10; // halt address (loaded explicitly)
+    const S0: u8 = 5;  // array base
+    const S1: u8 = 6;  // n
+    const T0: u8 = 2;  // i (outer loop / init)
+    const T1: u8 = 3;  // j (inner loop)
+    const T2: u8 = 4;  // key
+    const A0: u8 = 7;  // temp / result
+    const A1: u8 = 8;  // scratch
+    const A2: u8 = 9;  // address scratch
 
     // === Emit helpers (inline for raw byte control) ===
 
@@ -168,6 +172,7 @@ pub fn grey_sort_blob(n: u32) -> Vec<u8> {
         for b in offset.to_le_bytes() { c.push(b); m.push(0); }
     }
     // === INIT: set up array on stack ===
+    load_imm_64(&mut c, &mut m, RA, 0xFFFF0000u64); // halt address
     load_imm_64(&mut c, &mut m, S1, n as u64);
     add_imm_64(&mut c, &mut m, SP, SP, -(array_bytes as i32));
     mov(&mut c, &mut m, S0, SP);
