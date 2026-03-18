@@ -277,16 +277,18 @@ fn run_accumulate_test(dir: &str, stem: &str) {
         "privileges.designate mismatch in {path}"
     );
 
-    // Compare statistics
+    // Compare statistics (sort both by service ID for order-independent comparison)
+    let mut got_stats_sorted = state.statistics.clone();
+    got_stats_sorted.sort_by_key(|(id, _)| *id);
+    let mut exp_stats_sorted = expected_state.statistics.clone();
+    exp_stats_sorted.sort_by_key(|(id, _)| *id);
     assert_eq!(
-        state.statistics.len(),
-        expected_state.statistics.len(),
+        got_stats_sorted.len(), exp_stats_sorted.len(),
         "statistics length mismatch in {path}: got {} expected {}",
-        state.statistics.len(),
-        expected_state.statistics.len()
+        got_stats_sorted.len(), exp_stats_sorted.len()
     );
     for ((got_id, got_stats), (exp_id, exp_stats)) in
-        state.statistics.iter().zip(expected_state.statistics.iter())
+        got_stats_sorted.iter().zip(exp_stats_sorted.iter())
     {
         assert_eq!(got_id, exp_id, "statistics id mismatch in {path}");
         assert_eq!(

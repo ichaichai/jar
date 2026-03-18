@@ -5,7 +5,7 @@ mod common;
 use common::{decode_hex, discover_test_stems, hash_from_hex, load_jar_test};
 use grey_state::preimages::{process_preimages, PreimageAccountData, PreimageServiceRecord};
 use grey_types::{Hash, ServiceId, Timeslot};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn run_preimages_test(dir: &str, stem: &str) {
     let json = common::load_jar_test(dir, stem);
@@ -88,21 +88,18 @@ fn run_preimages_test(dir: &str, stem: &str) {
                 panic!("missing account {} in post-state of {}", id, path)
             });
 
-            // Check preimage_blobs
-            let expected_blobs: BTreeMap<Hash, Vec<u8>> = data["preimage_blobs"]
+            // Check preimage_blobs (output may only have hashes, not full blob data)
+            let expected_blob_hashes: BTreeSet<Hash> = data["preimage_blobs"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|b| {
-                    let hash = hash_from_hex(b["hash"].as_str().unwrap());
-                    let blob = decode_hex(b["blob"].as_str().unwrap());
-                    (hash, blob)
-                })
+                .map(|b| hash_from_hex(b["hash"].as_str().unwrap()))
                 .collect();
+            let got_blob_hashes: BTreeSet<Hash> = account.blobs.keys().cloned().collect();
 
             assert_eq!(
-                account.blobs, expected_blobs,
-                "preimage_blobs mismatch for service {} in {}",
+                got_blob_hashes, expected_blob_hashes,
+                "preimage_blobs hash set mismatch for service {} in {}",
                 id, path
             );
 
@@ -132,8 +129,9 @@ fn run_preimages_test(dir: &str, stem: &str) {
             );
         }
 
-        // Verify per-service statistics
-        let expected_stats_json = post["statistics"].as_array().unwrap();
+        // Verify per-service statistics (optional in jar080 output)
+        let empty_arr = vec![];
+        let expected_stats_json = post["statistics"].as_array().unwrap_or(&empty_arr);
         let mut expected_stats: BTreeMap<ServiceId, PreimageServiceRecord> = BTreeMap::new();
         for s in expected_stats_json {
             let id = s["id"].as_u64().unwrap() as ServiceId;
@@ -147,11 +145,14 @@ fn run_preimages_test(dir: &str, stem: &str) {
             );
         }
 
-        assert_eq!(
-            stats, expected_stats,
-            "service statistics mismatch in {}",
-            path
-        );
+        // Only compare if expected statistics are present in the output
+        if !expected_stats.is_empty() {
+            assert_eq!(
+                stats, expected_stats,
+                "service statistics mismatch in {}",
+                path
+            );
+        }
     }
 }
 

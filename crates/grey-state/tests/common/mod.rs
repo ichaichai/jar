@@ -59,21 +59,17 @@ pub fn parse_work_report(json: &serde_json::Value) -> WorkReport {
 
     let segment_root_lookup: BTreeMap<Hash, Hash> = json["segment_root_lookup"]
         .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| {
+        .map(|arr| arr.iter().map(|entry| {
             (
                 hash_from_hex(entry["work_package_hash"].as_str().unwrap()),
                 hash_from_hex(entry["segment_tree_root"].as_str().unwrap()),
             )
-        })
-        .collect();
+        }).collect())
+        .unwrap_or_default();
 
     let results: Vec<WorkDigest> = json["results"]
         .as_array()
-        .unwrap()
-        .iter()
-        .map(|d| {
+        .map(|arr| arr.iter().map(|d| {
             let rl = &d["refine_load"];
             WorkDigest {
                 service_id: d["service_id"].as_u64().unwrap() as ServiceId,
@@ -87,34 +83,32 @@ pub fn parse_work_report(json: &serde_json::Value) -> WorkReport {
                 extrinsics_size: rl["extrinsic_size"].as_u64().unwrap() as u32,
                 exports_count: rl["exports"].as_u64().unwrap() as u16,
             }
-        })
-        .collect();
+        }).collect())
+        .unwrap_or_default();
 
     WorkReport {
         package_spec: AvailabilitySpec {
             package_hash: hash_from_hex(ps["hash"].as_str().unwrap()),
-            bundle_length: ps["length"].as_u64().unwrap() as u32,
-            erasure_root: hash_from_hex(ps["erasure_root"].as_str().unwrap()),
-            exports_root: hash_from_hex(ps["exports_root"].as_str().unwrap()),
-            exports_count: ps["exports_count"].as_u64().unwrap() as u16,
+            bundle_length: ps["length"].as_u64().unwrap_or(0) as u32,
+            erasure_root: ps["erasure_root"].as_str().map(hash_from_hex).unwrap_or_default(),
+            exports_root: ps["exports_root"].as_str().map(hash_from_hex).unwrap_or_default(),
+            exports_count: ps["exports_count"].as_u64().unwrap_or(0) as u16,
         },
         context: RefinementContext {
-            anchor: hash_from_hex(ctx["anchor"].as_str().unwrap()),
-            state_root: hash_from_hex(ctx["state_root"].as_str().unwrap()),
-            beefy_root: hash_from_hex(ctx["beefy_root"].as_str().unwrap()),
-            lookup_anchor: hash_from_hex(ctx["lookup_anchor"].as_str().unwrap()),
-            lookup_anchor_timeslot: ctx["lookup_anchor_slot"].as_u64().unwrap() as u32,
+            anchor: ctx["anchor"].as_str().map(hash_from_hex).unwrap_or_default(),
+            state_root: ctx["state_root"].as_str().map(hash_from_hex).unwrap_or_default(),
+            beefy_root: ctx["beefy_root"].as_str().map(hash_from_hex).unwrap_or_default(),
+            lookup_anchor: ctx["lookup_anchor"].as_str().map(hash_from_hex).unwrap_or_default(),
+            lookup_anchor_timeslot: ctx["lookup_anchor_slot"].as_u64().unwrap_or(0) as u32,
             prerequisites: ctx["prerequisites"]
                 .as_array()
-                .unwrap()
-                .iter()
-                .map(|h| hash_from_hex(h.as_str().unwrap()))
-                .collect(),
+                .map(|a| a.iter().map(|h| hash_from_hex(h.as_str().unwrap())).collect())
+                .unwrap_or_default(),
         },
-        core_index: json["core_index"].as_u64().unwrap() as u16,
-        authorizer_hash: hash_from_hex(json["authorizer_hash"].as_str().unwrap()),
-        auth_gas_used: json["auth_gas_used"].as_u64().unwrap(),
-        auth_output: decode_hex(json["auth_output"].as_str().unwrap()),
+        core_index: json["core_index"].as_u64().unwrap_or(0) as u16,
+        authorizer_hash: json["authorizer_hash"].as_str().map(hash_from_hex).unwrap_or_default(),
+        auth_gas_used: json["auth_gas_used"].as_u64().unwrap_or(0),
+        auth_output: json["auth_output"].as_str().map(|s| decode_hex(s)).unwrap_or_default(),
         segment_root_lookup,
         results,
     }

@@ -274,8 +274,14 @@ fn compute_accumulatable_with_new(
     let immediate_hashes = package_hashes(immediate);
     let edited = edit_queue(&all_queued, &immediate_hashes);
 
-    let mut result = immediate.to_vec();
     let queue_resolved = resolve_queue(&edited);
+    eprintln!("accumulatable: immediate={} all_queued={} edited={} resolved={}", immediate.len(), all_queued.len(), edited.len(), queue_resolved.len());
+    for (i, rr) in edited.iter().enumerate() {
+        if rr.dependencies.len() <= 2 {
+            eprintln!("  edited[{}]: deps={}", i, rr.dependencies.len());
+        }
+    }
+    let mut result = immediate.to_vec();
     result.extend(queue_resolved);
     result
 }
@@ -2243,7 +2249,21 @@ pub fn process_accumulate(
         .iter()
         .flat_map(|slot_hashes| slot_hashes.iter().cloned())
         .collect();
+    eprintln!("accumulated_union: {} hashes", accumulated_union.len());
+    for h in accumulated_union.iter().take(5) {
+        eprintln!("  {}", hex::encode(&h.0[..8]));
+    }
     let edited_new_queued = edit_queue(&new_queued, &accumulated_union);
+    eprintln!("new_queued: {} entries, edited: {}", new_queued.len(), edited_new_queued.len());
+    for rr in &new_queued {
+        eprintln!("  new_queued deps: {}", rr.dependencies.len());
+        for d in &rr.dependencies {
+            eprintln!("    dep: {}", hex::encode(&d.0[..8]));
+        }
+    }
+    for rr in &edited_new_queued {
+        eprintln!("  edited_new deps: {}", rr.dependencies.len());
+    }
 
     // Step 2: Compute R* (all accumulatable reports)
     let accumulatable = compute_accumulatable_with_new(
@@ -2438,9 +2458,9 @@ fn update_statistics(
     accumulatable: &[WorkReport],
     n: usize,
 ) {
-    // Collect refinement statistics from reports
+    // Start with existing statistics, update with new data
     let reports = &accumulatable[..n];
-    let mut stat_map: BTreeMap<ServiceId, AccServiceStats> = BTreeMap::new();
+    let mut stat_map: BTreeMap<ServiceId, AccServiceStats> = stats.iter().cloned().collect();
 
     for report in reports {
         for digest in &report.results {
@@ -2454,23 +2474,13 @@ fn update_statistics(
         }
     }
 
-    // Add accumulation gas usage per GP eq at line 1892-1910.
-    // G(s) = Σ(u for (s,u) in u) — total gas used for service s across all batches
-    // N(s) = count of work items (digests) for service s in accumulated reports
-    // S only includes entries where G(s) + N(s) ≠ 0
+    // Add accumulation gas usage and count.
+    // G(s) = Σ(u for (s,u) in u) — total gas used for service s
+    // N(s) = number of times service s was accumulated (gasUsage entries)
     for (sid, gas) in gas_usage {
         let entry = stat_map.entry(*sid).or_default();
         entry.accumulate_gas_used += *gas;
-    }
-
-    // Compute N(s) — count of work items for each service
-    for (sid, stats_entry) in stat_map.iter_mut() {
-        let item_count: u32 = reports
-            .iter()
-            .flat_map(|r| &r.results)
-            .filter(|d| d.service_id == *sid)
-            .count() as u32;
-        stats_entry.accumulate_count += item_count;
+        entry.accumulate_count += 1;
     }
 
     // GP: S ≡ { (s ↦ (G(s), N(s))) | G(s) + N(s) ≠ 0 }
