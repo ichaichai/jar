@@ -16,7 +16,7 @@ extern crate alloc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 
-const HEAP_SIZE: usize = 128 * 1024; // 128 KB
+const HEAP_SIZE: usize = 64 * 1024; // 64 KB
 
 struct BumpAlloc {
     heap: UnsafeCell<[u8; HEAP_SIZE]>,
@@ -82,18 +82,28 @@ const EXPECTED_PUBKEY: [u8; 33] = [
 // Entry point
 // ---------------------------------------------------------------------------
 
+// Entry point for grey PVM (which starts execution at PC=0).
+// polkavm uses the exported ecrecover_bench directly.
+#[cfg(not(target_env = "polkavm"))]
 core::arch::global_asm!(
     ".global _start",
     "_start:",
     "call ecrecover_bench",
-    // Halt: jump to unmapped address 0xFFFF0000 (PVM halt convention).
-    // Result is in a0 (register 10 = PVM φ[7]).
     "lui t0, 0xffff0",
     "jr t0",
 );
 
+// polkavm needs a _start symbol to link but doesn't use it.
+#[cfg(target_env = "polkavm")]
+core::arch::global_asm!(
+    ".global _start",
+    "_start:",
+    "unimp",
+);
+
 /// Perform ecrecover: recover the public key from a signature + message hash.
 /// Returns 1 if the recovered key matches the expected public key, 0 otherwise.
+#[cfg_attr(target_env = "polkavm", polkavm_derive::polkavm_export)]
 #[no_mangle]
 pub extern "C" fn ecrecover_bench() -> u32 {
     let sig = match k256::ecdsa::Signature::from_slice(&SIGNATURE) {
@@ -160,5 +170,12 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    // Store a marker in a0 so we can identify panics
+    unsafe {
+        core::arch::asm!(
+            "li a0, 0xDEAD",
+            "unimp",
+            options(noreturn),
+        );
+    }
 }

@@ -18,6 +18,7 @@ polkavm-linker = { path = "../../../polkavm/crates/polkavm-linker" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
 
 [[bench]]
 name = "pvm_bench"

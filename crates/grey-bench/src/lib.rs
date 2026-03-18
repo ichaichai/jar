@@ -444,6 +444,7 @@ pub fn polkavm_hostcall_blob(n: u64) -> Vec<u8> {
 
 /// Shared rv64em ELF for both grey and polkavm ecrecover benchmarks.
 /// Same binary, same algorithm — only the VM differs.
+/// rv64em ELF with relocations and polkavm_export. Used by both grey and polkavm.
 const ECRECOVER_ELF: &[u8] = include_bytes!(
     "../../../services/bench-ecrecover/target/riscv64em-polkavm/release/bench-ecrecover.elf"
 );
@@ -495,6 +496,17 @@ mod tests_sort {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_ecrecover_code_size() {
+        let grey_blob = grey_ecrecover_blob();
+        let grey_pvm = javm::program::initialize_program(&grey_blob, &[], 1000).unwrap();
+        let grey_inst_count: usize = grey_pvm.bitmask.iter().filter(|&&b| b == 1).count();
+        eprintln!("Grey PVM:  code={} bytes, {} instructions", grey_pvm.code.len(), grey_inst_count);
+
+        let pvm_blob = polkavm_ecrecover_blob();
+        eprintln!("PolkaVM:   blob={} bytes", pvm_blob.len());
     }
 
     #[test]
