@@ -1,6 +1,6 @@
 # Grey
 
-A JAM (Join-Accumulate Machine) blockchain node implementation in Rust, following the [Gray Paper v0.7.2](https://github.com/gavofyork/graypaper/releases/download/v0.7.2/graypaper-0.7.2.pdf).
+A JAM (Join-Accumulate Machine) blockchain node implementation in Rust, following the [JAR v0.8.0 specification](https://github.com/bitarray/jar).
 
 ## Highlights
 
