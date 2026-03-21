@@ -33,8 +33,8 @@ def trustedSigningKeys : Array String := #[
 /-- The founding reviewer. -/
 def founder : ContributorId := "sorpaas"
 
-/-- The genesis commit. TBD at launch. -/
-def genesisCommit : CommitId := "0000000000000000000000000000000000000000"
+/-- The genesis commit. Scoring starts for commits AFTER this one. -/
+def genesisCommit : CommitId := "8f124a276a81c4d429d2c2f6ef15823f4fb5c59d"
 
 /-- Initial weight for the founder. -/
 def founderWeight : Nat := 1
