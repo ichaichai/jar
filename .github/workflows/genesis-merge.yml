@@ -1,0 +1,175 @@
+name: "Genesis: Merge"
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: genesis-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/merge' &&
+      github.event.comment.user.login == 'sorpaas'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check base branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE=$(gh pr view ${{ github.event.issue.number }} --json baseRefName --jq '.baseRefName')
+          if [ "$BASE" != "master" ]; then
+            echo "Not targeting master — skipping"
+            exit 0
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for protected file changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_AUTHOR=$(gh pr view ${{ github.event.issue.number }} --json author --jq '.author.login')
+          CHANGED=$(gh pr diff ${{ github.event.issue.number }} --name-only)
+          if echo "$CHANGED" | grep -qE '^\.github/(workflows/genesis-|cache/genesis\.json)'; then
+            if [ "$PR_AUTHOR" != "sorpaas" ]; then
+              gh pr comment ${{ github.event.issue.number }} --body \
+                "**Genesis Bot:** Cannot merge — this PR modifies protected genesis files. Only the founder (sorpaas) may modify these."
+              exit 1
+            fi
+          fi
+
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Cache Lake packages
+        uses: actions/cache@v4
+        with:
+          path: .lake
+          key: lake-genesis-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.lean') }}
+          restore-keys: lake-genesis-
+
+      - name: Build genesis tools
+        run: lake build genesis_evaluate
+
+      - name: Collect reviews and evaluate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          CACHE=$(cat .github/cache/genesis.json)
+
+          # Get PR details
+          PR_JSON=$(gh pr view "$PR_NUMBER" --json headRefOid,author)
+          HEAD_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
+          AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login')
+
+          # Collect all /genesis-review comments
+          COMMENTS=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | startswith("/genesis-review"))')
+
+          # Parse reviews from comments (collect last review per author)
+          REVIEWS="[]"
+          while IFS= read -r comment; do
+            [ -z "$comment" ] && continue
+            BODY=$(echo "$comment" | jq -r '.body')
+            REVIEWER=$(echo "$comment" | jq -r '.author.login')
+
+            DIFFICULTY=$(echo "$BODY" | grep -i '^difficulty:' | sed 's/^difficulty:\s*//' | tr -d ' ')
+            NOVELTY=$(echo "$BODY" | grep -i '^novelty:' | sed 's/^novelty:\s*//' | tr -d ' ')
+            DESIGN=$(echo "$BODY" | grep -i '^design:' | sed 's/^design:\s*//' | tr -d ' ')
+            VERDICT=$(echo "$BODY" | grep -i '^verdict:' | sed 's/^verdict:\s*//' | tr -d ' ')
+
+            if [ -n "$DIFFICULTY" ] && [ -n "$NOVELTY" ] && [ -n "$DESIGN" ] && [ -n "$VERDICT" ]; then
+              to_json_array() { echo "$1" | tr ',' '\n' | jq -R . | jq -s .; }
+              REVIEW=$(jq -n \
+                --arg reviewer "$REVIEWER" \
+                --argjson diff "$(to_json_array "$DIFFICULTY")" \
+                --argjson nov "$(to_json_array "$NOVELTY")" \
+                --argjson des "$(to_json_array "$DESIGN")" \
+                --arg verdict "$VERDICT" \
+                '{reviewer: $reviewer, difficultyRanking: $diff, noveltyRanking: $nov, designQualityRanking: $des, verdict: $verdict}')
+
+              # Replace existing review from same reviewer, or add new
+              REVIEWS=$(echo "$REVIEWS" | jq --arg r "$REVIEWER" --argjson rev "$REVIEW" \
+                '[.[] | select(.reviewer != $r)] + [$rev]')
+            fi
+          done <<< "$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | startswith("/genesis-review"))')"
+
+          # Get comparison targets
+          TARGETS_JSON=$(echo "{\"prId\":${PR_NUMBER},\"indices\":${CACHE}}" | \
+            .lake/build/bin/genesis_select_targets)
+          TARGETS=$(echo "$TARGETS_JSON" | jq '.targets')
+
+          # Build signed commit
+          EPOCH=$(date +%s)
+          COMMIT_JSON=$(jq -n \
+            --arg id "$HEAD_SHA" \
+            --argjson prId "$PR_NUMBER" \
+            --arg author "$AUTHOR" \
+            --argjson mergeEpoch "$EPOCH" \
+            --argjson targets "$TARGETS" \
+            --argjson reviews "$REVIEWS" \
+            '{id: $id, prId: $prId, author: $author, mergeEpoch: $mergeEpoch,
+              comparisonTargets: $targets, reviews: $reviews,
+              metaReviews: [], founderOverride: true}')
+
+          # Evaluate
+          INPUT=$(jq -n \
+            --argjson commit "$COMMIT_JSON" \
+            --argjson pastIndices "$CACHE" \
+            '{commit: $commit, pastIndices: $pastIndices}')
+
+          INDEX=$(echo "$INPUT" | .lake/build/bin/genesis_evaluate)
+
+          # Update cache
+          echo "$CACHE" | jq --argjson idx "$INDEX" '. + [$idx]' > .github/cache/genesis.json
+
+          # Save for commit message
+          echo "$INDEX" > /tmp/genesis_index.json
+          echo "$AUTHOR" > /tmp/genesis_author.txt
+
+      - name: Merge PR with genesis data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          INDEX=$(cat /tmp/genesis_index.json)
+          AUTHOR=$(cat /tmp/genesis_author.txt)
+          SCORE=$(echo "$INDEX" | jq -c '.score')
+          WEIGHT_DELTA=$(echo "$INDEX" | jq -r '.weightDelta')
+
+          # Commit the updated cache
+          git config user.name "genesis-bot"
+          git config user.email "genesis-bot@users.noreply.github.com"
+          git add .github/cache/genesis.json
+          git commit -m "genesis: update cache for PR #${PR_NUMBER}
+
+          Genesis-PR: #${PR_NUMBER}
+          Genesis-Author: ${AUTHOR}
+          Genesis-Score: ${SCORE}
+          Genesis-WeightDelta: ${WEIGHT_DELTA}"
+
+          git push
+
+          # Merge the PR
+          gh pr merge "$PR_NUMBER" --merge --subject "Merge PR #${PR_NUMBER}
+
+          Genesis-Index: $(echo "$INDEX" | jq -c .)
+          Genesis-PR: #${PR_NUMBER}
+          Genesis-Author: ${AUTHOR}"
+
+          gh pr comment "$PR_NUMBER" --body \
+            "**Genesis Bot:** Merged via founder override.
+            Score: ${SCORE}
+            Weight delta: ${WEIGHT_DELTA}"

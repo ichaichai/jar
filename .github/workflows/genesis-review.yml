@@ -1,0 +1,113 @@
+name: "Genesis: Review Check"
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  check-review:
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/genesis-review')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check base branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE=$(gh pr view ${{ github.event.issue.number }} --json baseRefName --jq '.baseRefName')
+          if [ "$BASE" != "master" ]; then
+            echo "Not targeting master — skipping"
+            exit 0
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Check for protected file changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_AUTHOR=$(gh pr view ${{ github.event.issue.number }} --json author --jq '.author.login')
+          CHANGED=$(gh pr diff ${{ github.event.issue.number }} --name-only)
+          if echo "$CHANGED" | grep -qE '^\.github/(workflows/genesis-|cache/genesis\.json)'; then
+            if [ "$PR_AUTHOR" != "sorpaas" ]; then
+              echo "Protected files modified by non-founder — skipping genesis review"
+              exit 0
+            fi
+          fi
+
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Cache Lake packages
+        uses: actions/cache@v4
+        with:
+          path: .lake
+          key: lake-genesis-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.lean') }}
+          restore-keys: lake-genesis-
+
+      - name: Build genesis tools
+        run: lake build genesis_check_merge
+
+      - name: Parse review and check merge readiness
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          CACHE=$(cat .github/cache/genesis.json)
+
+          # Parse the /genesis-review comment
+          # Extract rankings and verdict from the structured comment
+          DIFFICULTY=$(echo "$COMMENT_BODY" | grep -i '^difficulty:' | sed 's/^difficulty:\s*//' | tr -d ' ')
+          NOVELTY=$(echo "$COMMENT_BODY" | grep -i '^novelty:' | sed 's/^novelty:\s*//' | tr -d ' ')
+          DESIGN=$(echo "$COMMENT_BODY" | grep -i '^design:' | sed 's/^design:\s*//' | tr -d ' ')
+          VERDICT=$(echo "$COMMENT_BODY" | grep -i '^verdict:' | sed 's/^verdict:\s*//' | tr -d ' ')
+
+          if [ -z "$DIFFICULTY" ] || [ -z "$NOVELTY" ] || [ -z "$DESIGN" ] || [ -z "$VERDICT" ]; then
+            gh pr comment "$PR_NUMBER" --body "**Genesis Bot:** Could not parse review from @${COMMENT_AUTHOR}. Please check the format."
+            exit 0
+          fi
+
+          # Convert comma-separated to JSON arrays
+          to_json_array() {
+            echo "$1" | tr ',' '\n' | jq -R . | jq -s .
+          }
+
+          DIFF_JSON=$(to_json_array "$DIFFICULTY")
+          NOV_JSON=$(to_json_array "$NOVELTY")
+          DES_JSON=$(to_json_array "$DESIGN")
+
+          # Build review JSON
+          REVIEW=$(jq -n \
+            --arg reviewer "$COMMENT_AUTHOR" \
+            --argjson diff "$DIFF_JSON" \
+            --argjson nov "$NOV_JSON" \
+            --argjson des "$DES_JSON" \
+            --arg verdict "$VERDICT" \
+            '{reviewer: $reviewer, difficultyRanking: $diff, noveltyRanking: $nov, designQualityRanking: $des, verdict: $verdict}')
+
+          # Collect all reviews from PR comments (simplified: just this one for now)
+          # In production, would scan all PR comments for /genesis-review
+          REVIEWS_JSON="[$REVIEW]"
+
+          # Check merge readiness
+          INPUT=$(jq -n \
+            --argjson reviews "$REVIEWS_JSON" \
+            --argjson indices "$CACHE" \
+            '{reviews: $reviews, metaReviews: [], indices: $indices}')
+
+          RESULT=$(echo "$INPUT" | .lake/build/bin/genesis_check_merge)
+
+          READY=$(echo "$RESULT" | jq -r '.ready')
+          MERGE_W=$(echo "$RESULT" | jq -r '.mergeWeight')
+          TOTAL_W=$(echo "$RESULT" | jq -r '.totalWeight')
+
+          gh pr comment "$PR_NUMBER" --body \
+            "**Genesis Bot:** Review recorded from @${COMMENT_AUTHOR}.
+            Merge weight: ${MERGE_W}/${TOTAL_W} (ready: ${READY})."
