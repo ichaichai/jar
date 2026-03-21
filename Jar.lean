@@ -15,6 +15,7 @@ import Jar.Services
 import Jar.Accumulation
 import Jar.Variant
 import Jar.StateSerialization
+import Jar.Commitment
 
 /-!
 # JAR — JAM Axiomatic Reference
@@ -40,4 +41,5 @@ Gray Paper v0.7.2 (https://graypaper.com).
 - `Jar.PVM.Interpreter` — Appendix A: Execution loop Ψ and standard init
 - `Jar.Accumulation` — §12: Accumulation pipeline (accseq/accpar/accone)
 - `Jar.Variant`     — Protocol variant typeclass (JamVariant extends JamConfig)
+- `Jar.Commitment`  — Ligerito PCS + Accidental Computer (DA = polynomial commitment)
 -/
