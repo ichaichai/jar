@@ -51,7 +51,7 @@ jobs:
           restore-keys: lake-genesis-
 
       - name: Build genesis tools
-        run: lake build genesis_evaluate
+        run: lake build genesis_select_targets genesis_evaluate
 
       - name: Collect reviews and evaluate
         env:
