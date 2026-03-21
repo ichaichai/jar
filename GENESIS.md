@@ -4,7 +4,7 @@
 
 JAR (Join-Accumulate Refine) is a Lean 4 formalization of the JAM blockchain protocol. It began as Grey — an experiment where an AI agent (Claude) built a complete JAM node implementation in Rust from the Gray Paper specification, in under a week for ~$50 in API costs. The project then evolved into JAR: a formal specification in Lean 4 with its own testing, fuzzing, and variant system for protocol experimentation.
 
-JAR has already demonstrated concrete results — a linear memory model (`jar080_tiny`) that achieves 1.4x faster secp256k1 operations and 36x faster hostcalls compared to PolkaVM. The Lean 4 formalization enables trying out protocol changes with machine-checked correctness, then cross-verifying against the Rust implementation.
+JAR has already demonstrated concrete results — 1.4x faster secp256k1 operations and 36x faster hostcalls compared to PolkaVM, alongside a new linear memory model and an improved gas metering design. The Lean 4 formalization makes it possible to experiment with protocol changes under machine-checked correctness guarantees, then cross-verify against the Rust implementation.
 
 The project is built by AI agents, with human guidance on strategic decisions. This isn't incidental — it's the thesis: **JAR is a blockchain protocol built by AI agents, for AI agents.**
 
@@ -12,15 +12,16 @@ The project is built by AI agents, with human guidance on strategic decisions. T
 
 If a blockchain is built by AI agents, its token distribution should reflect that. Traditional models don't fit:
 
-- **Proof of Work** ties distribution to energy expenditure. Irrelevant for a protocol built by intelligence, not electricity.
-- **ICO / Premine / Airdrop** introduces allocation decisions that are political, not meritocratic. Who decides who gets how much?
-- **Proof of Stake** requires an initial distribution, which brings us back to the previous problem.
+- **Proof of Work** ties distribution to energy expenditure — irrelevant for a protocol built by intelligence, not electricity.
+- **Proof of Stake** needs an initial distribution, which traditionally means an ICO, a premine, or an airdrop. Each of these introduces allocation decisions that are political rather than meritocratic. Who decides who gets how much, and why?
 
-Proof of Intelligence is simple: **one contribution = one coin**. There is no premine. No team allocation. No investor round. No foundation reserve. Tokens materialize through demonstrated intelligence — code that gets reviewed, ranked, and merged.
+JAR is a proof-of-stake protocol. But instead of bootstrapping stake through any of these mechanisms, it does something fundamentally different: **Proof of Intelligence**. The rule is simple — one contribution, one coin. There is no premine. No team allocation. No investor round. No foundation reserve. Tokens materialize exclusively through demonstrated intelligence: code that gets reviewed, ranked, and merged.
 
 Every token in existence was earned by contributing to the protocol. The distribution is the development history itself, publicly auditable from the git log.
 
 ## The Protocol
+
+Anyone who opens a pull request on the JAR specification has an opportunity to earn a genesis allocation. Sustained contribution also accumulates reviewer weight — the ability to review other PRs and influence what gets merged into the protocol.
 
 ### Scoring
 
@@ -118,7 +119,7 @@ The protocol is specified in Lean 4 (`Genesis/` directory) and executed as a pur
 1. **Git commit history** of the master branch (force-push disabled)
 2. **Review data** embedded in signed merge commits (GitHub GPG key)
 
-The state at any point is deterministically recomputable from these inputs. The `.github/cache/genesis.json` file is a convenience cache — if lost, it can be rebuilt by replaying the spec against the git history.
+The state at any point is deterministically recomputable from these inputs. The `genesis-state` branch serves as a convenience cache — if lost or corrupted, it can be rebuilt entirely by replaying the spec against the git history.
 
 Each commit is evaluated by the spec version at the **previous** signed commit. A malicious spec change cannot affect its own scoring — it only takes effect for the next commit, and can be reverted before causing damage. Per-commit caps bound the worst-case blast radius to one commit's worth of weight.
 
@@ -135,11 +136,13 @@ Current parameters:
 
 These can be changed by future PRs — which will themselves be scored by the current parameters.
 
-### Centralization and the path forward
+### Bringing Genesis On-Chain
 
-The current version is centralized. The source of truth is GitHub — PRs, merge commits, review comments, and the bot running in GitHub Actions. This is unavoidable at bootstrap. Every blockchain starts centralized: Bitcoin had Satoshi's client, Ethereum had the foundation's genesis block. The question is not whether you start centralized, but whether the system is designed to move beyond it.
+The current version is centralized. The source of truth is GitHub — PRs, merge commits, review comments, and a bot running in GitHub Actions. This is an unavoidable property of bootstrap.
 
-The genesis protocol is designed for exactly this transition. The scoring spec is written in Lean 4 — a formal language with machine-checked correctness. The full history is self-contained in git merge commit trailers (`Genesis-Commit` and `Genesis-Index`), replayable by anyone without GitHub. The cache is a convenience, not an authority.
+What makes this different from ordinary centralization is what the repository contains: a decentralized blockchain protocol. JAR Genesis creates a self-reinforcing loop — a protocol that builds itself now, and eventually migrates itself onto the decentralized infrastructure it has constructed. The genesis distribution doesn't precede the chain; it emerges from the act of building it.
+
+The codebase is designed with this transition in mind. The scoring spec is written in Lean 4, a formal language with machine-checked correctness guarantees. The complete history is self-contained in git merge commit trailers (`Genesis-Commit` and `Genesis-Index`), replayable by anyone without access to GitHub. The cache is a convenience, not an authority.
 
 ### Self-bootstrapping
 
