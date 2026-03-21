@@ -1,1 +1,22 @@
-[]
+[
+  {
+    "commitHash": "2b1da7c9721ac7d58446129f11408a4f51ccf732",
+    "contributor": "sorpaas",
+    "epoch": 1774070221,
+    "founderOverride": true,
+    "mergeVotes": [
+      "sorpaas"
+    ],
+    "metaReviews": [],
+    "rejectVotes": [],
+    "reviewers": [
+      "sorpaas"
+    ],
+    "score": {
+      "designQuality": 250,
+      "difficulty": 250,
+      "novelty": 250
+    },
+    "weightDelta": 1250
+  }
+]
