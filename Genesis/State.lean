@@ -8,11 +8,11 @@
 
   1. Gather all signed commits from git history.
   2. Check out genesis commit. Feed it the first signed commit.
-     → produces CommitIndex (weight changes, score, reviewers, deltas).
+     → produces CommitIndex (weight changes, score, reviewers).
   3. Check out the first signed commit. Input = (genesis state, [index_0]).
      Evaluate the second signed commit → produces index_1.
   4. Continue: each step receives all past indices as input.
-  5. Finalization: current master spec computes end balances from all indices.
+  5. Finalization (future work): current master spec computes end balances.
 
   This ensures:
   - A malicious spec change only affects the NEXT commit's evaluation.
@@ -58,7 +58,7 @@ structure CommitIndex where
   score : CommitScore
   /-- Who authored the commit. -/
   contributor : ContributorId
-  /-- Weight change for the contributor (= score.weighted).
+  /-- Weight change for the contributor (= score.weighted, 0-100).
       Needed at each step for reconstructing reviewer weights. -/
   weightDelta : Nat
   /-- Approved reviewers who participated. Their weights can be
@@ -78,7 +78,7 @@ structure CommitIndex where
 
   Reconstructed from past CommitIndices for evaluating the next commit.
   This is NOT the final balance — it's the working state needed to
-  run the scoring algorithm (reviewer weights, reference scores, etc).
+  run the scoring algorithm (reviewer weights, past commit IDs).
 -/
 
 /-- Intermediate state reconstructed from past indices. -/
@@ -98,7 +98,7 @@ private def upsertContributor (cs : List Contributor) (updated : Contributor) : 
 /-- Reconstruct the evaluation state from genesis + past indices.
     Only needs weight and reviewer status — not balances (those are
     computed during finalization). -/
-def reconstructState (pastIndices : List CommitIndex) (rp : RewardParams := .default) : EvalState :=
+def reconstructState (pastIndices : List CommitIndex) (ep : EvalParams := .default) : EvalState :=
   let init : EvalState := {
     contributors := [⟨founder, 0, founderWeight, true⟩],
     pastCommitIds := []
@@ -111,10 +111,10 @@ def reconstructState (pastIndices : List CommitIndex) (rp : RewardParams := .def
         let existing := state.contributors.find? (fun (c : Contributor) => c.id == idx.contributor)
         let c := existing.getD ⟨idx.contributor, 0, 0, false⟩
         let newWeight := c.weight + idx.weightDelta
-        let meetsThreshold := newWeight ≥ rp.reviewerThreshold
+        let meetsThreshold := newWeight ≥ ep.reviewerThreshold
         let updated : Contributor := ⟨c.id, c.balance, newWeight, c.isReviewer || meetsThreshold⟩
         upsertContributor state.contributors updated
-    -- Record score for future comparisons
+    -- Record commit ID for future target selection
     let pastCommitIds := state.pastCommitIds ++ [idx.commitHash]
     { contributors := contributors, pastCommitIds := pastCommitIds }
   ) init
@@ -124,10 +124,6 @@ def EvalState.reviewerWeight (s : EvalState) (id : ContributorId) : Nat :=
   match s.contributors.find? (fun (c : Contributor) => c.id == id) with
   | some c => if c.isReviewer then c.weight else 0
   | none => 0
-
-/-- Get past commit IDs from an EvalState. -/
-def EvalState.getPastCommitIds (s : EvalState) : List CommitId :=
-  s.pastCommitIds
 
 /-! ### Evaluate — Produce a CommitIndex from a signed commit -/
 
@@ -145,11 +141,10 @@ def EvalState.getPastCommitIds (s : EvalState) : List CommitId :=
 def evaluate
     (pastIndices : List CommitIndex)
     (commit : SignedCommit)
-    (rp : RewardParams := .default) : CommitIndex :=
-  let state := reconstructState pastIndices rp
-  let (_, score) := commitRewards rp commit
+    (ep : EvalParams := .default) : CommitIndex :=
+  let state := reconstructState pastIndices ep
+  let score := commitScore ep commit
     state.pastCommitIds (state.reviewerWeight ·)
-  let weightedScore := score.weighted
   let approved := filterReviews commit.reviews commit.metaReviews (state.reviewerWeight ·)
   let approvedReviewers := approved
     |>.filter (fun (r : EmbeddedReview) => state.reviewerWeight r.reviewer > 0)
@@ -164,7 +159,7 @@ def evaluate
     epoch := commit.mergeEpoch,
     score := score,
     contributor := commit.author,
-    weightDelta := weightedScore,
+    weightDelta := score.weighted,
     reviewers := approvedReviewers,
     metaReviews := commit.metaReviews,
     mergeVotes := mergeVoters,
@@ -175,75 +170,23 @@ def evaluate
     Each commit is evaluated with all prior indices as context. -/
 def evaluateAll
     (signedCommits : List SignedCommit)
-    (rp : RewardParams := .default) : List CommitIndex :=
+    (ep : EvalParams := .default) : List CommitIndex :=
   signedCommits.foldl (fun indices commit =>
-    indices ++ [evaluate indices commit rp]
+    indices ++ [evaluate indices commit ep]
   ) []
-
-/-! ### Finalize — Compute end balances from all indices
-
-  This step uses the CURRENT master spec's parameters (not historical).
-  Token deltas are computed here, not stored in CommitIndex. This allows
-  changing reward splits (e.g., 70/30 → 80/20) without re-evaluating
-  the full history.
--/
-
-/-- Helper: add amount to a contributor in an association list. -/
-private def addToBalance (acc : List (ContributorId × TokenAmount))
-    (id : ContributorId) (amount : TokenAmount) : List (ContributorId × TokenAmount) :=
-  if amount == 0 then acc
-  else
-    match acc.find? (fun (cid, _) => cid == id) with
-    | some _ => acc.map (fun (cid, b) => if cid == id then (cid, b + amount) else (cid, b))
-    | none => acc ++ [(id, amount)]
-
-/-- Compute token deltas for a single CommitIndex using current parameters.
-    Reviewer weights are reconstructed from prior indices.
-    This is the reward logic applied at finalization, not at evaluation time. -/
-def indexTokenDeltas (idx : CommitIndex) (rp : RewardParams)
-    (getWeight : ContributorId → Nat) : List RewardDelta :=
-  let weightedScore := idx.score.weighted
-  -- Contributor reward
-  let contributorShare := rp.emission * (rp.reviewerShareDen - rp.reviewerShareNum) / rp.reviewerShareDen
-  let contributorReward := min contributorShare rp.contributorCap
-  let contributorDelta : RewardDelta := {
-    recipient := idx.contributor,
-    amount := if weightedScore == 0 then 0 else contributorReward,
-    kind := .contribution
-  }
-  -- Reviewer rewards (weights reconstructed from prior indices)
-  let reviewerPool := rp.emission * rp.reviewerShareNum / rp.reviewerShareDen
-  let reviewerDeltas := if idx.reviewers.isEmpty then []
-    else
-      let reviewerWeights := idx.reviewers.map (fun r => (r, getWeight r))
-      let totalReviewWeight := reviewerWeights.foldl (fun acc (_, w) => acc + w) 0
-      if totalReviewWeight == 0 then []
-      else reviewerWeights.map fun (reviewer, w) =>
-        let raw := reviewerPool * w / totalReviewWeight
-        let capped := min raw rp.reviewerCap
-        { recipient := reviewer, amount := capped, kind := .review : RewardDelta }
-  contributorDelta :: reviewerDeltas
-
-/-- Final balance for each contributor, computed from all indices
-    using the current spec's reward parameters. Reconstructs reviewer
-    weights progressively from prior indices. -/
-def finalize (indices : List CommitIndex) (rp : RewardParams := .default)
-    : List (ContributorId × TokenAmount) :=
-  let (balances, _) := indices.foldl (fun (acc, pastIndices) (idx : CommitIndex) =>
-    let state := reconstructState pastIndices rp
-    let deltas := indexTokenDeltas idx rp (state.reviewerWeight ·)
-    let newAcc := deltas.foldl (fun acc2 (d : RewardDelta) =>
-      addToBalance acc2 d.recipient d.amount
-    ) acc
-    (newAcc, pastIndices ++ [idx])
-  ) ([], [])
-  balances
 
 /-- Final weight for each contributor, computed from all indices.
     Weight = founderWeight + Σ weightDelta for authored commits. -/
 def finalWeights (indices : List CommitIndex) : List (ContributorId × Nat) :=
+  let addToWeight (acc : List (ContributorId × Nat))
+      (id : ContributorId) (amount : Nat) : List (ContributorId × Nat) :=
+    if amount == 0 then acc
+    else
+      match acc.find? (fun (cid, _) => cid == id) with
+      | some _ => acc.map (fun (cid, w) => if cid == id then (cid, w + amount) else (cid, w))
+      | none => acc ++ [(id, amount)]
   let init := [(founder, founderWeight)]
   indices.foldl (fun acc (idx : CommitIndex) =>
     if idx.weightDelta == 0 then acc
-    else addToBalance acc idx.contributor idx.weightDelta
+    else addToWeight acc idx.contributor idx.weightDelta
   ) init

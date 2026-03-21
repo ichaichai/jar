@@ -123,19 +123,6 @@ structure MetaReview where
   approve : Bool
   deriving Repr
 
-/-- Whether a reward delta is for a contribution (authoring a commit)
-    or for reviewing. Only contribution rewards affect reviewer weight. -/
-inductive RewardKind where
-  | contribution
-  | review
-  deriving Repr, BEq
-
-/-- A single reward delta: who gets how much, and why. Always non-negative. -/
-structure RewardDelta where
-  recipient : ContributorId
-  amount : TokenAmount
-  kind : RewardKind
-  deriving Repr
 
 /-- Score for a single commit, per dimension.
     Each dimension is a percentile rank (0-100) of the current PR

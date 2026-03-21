@@ -41,33 +41,19 @@ def rankingSize : Nat := 7
 def quantileNum : Nat := 1
 def quantileDen : Nat := 3
 
-/-! ### Reward Parameters -/
+/-! ### Evaluation Parameters -/
 
-/-- Protocol parameters for reward and scoring. -/
-structure RewardParams where
-  /-- Maximum tokens a contributor can earn per signed commit. -/
-  contributorCap : TokenAmount
-  /-- Maximum tokens a single reviewer can earn per signed commit. -/
-  reviewerCap : TokenAmount
-  /-- Base emission per signed commit. -/
-  emission : TokenAmount
-  /-- Fraction of emission allocated to reviewers (numerator). -/
-  reviewerShareNum : Nat
-  /-- Fraction of emission allocated to reviewers (denominator). -/
-  reviewerShareDen : Nat
-  reviewerShareDen_pos : reviewerShareDen > 0 := by omega
+/-- Parameters for the evaluation path (scoring + state reconstruction).
+    Reward parameters (emission, caps, splits) are deferred to finalization
+    and documented in Design.lean. -/
+structure EvalParams where
   /-- Minimum weight to activate as a reviewer. -/
   reviewerThreshold : Nat
   /-- Minimum number of approved reviews required for scoring. -/
   minReviews : Nat
   deriving Repr
 
-def RewardParams.default : RewardParams where
-  contributorCap := 100
-  reviewerCap := 20
-  emission := 1000
-  reviewerShareNum := 30
-  reviewerShareDen := 100
+def EvalParams.default : EvalParams where
   reviewerThreshold := 500
   minReviews := 1
 
@@ -220,59 +206,36 @@ def deriveScore
       novelty := weightedQuantile nEntries
       designQuality := weightedQuantile qEntries }
 
-/-! ### Reward Computation -/
+/-! ### Score Computation -/
 
-/-- Compute reward deltas for a single signed commit.
+/-- Compute the score for a single signed commit.
 
     Steps:
     1. Validate comparison targets against hash(prId).
     2. Filter reviews by meta-review (exclude thumbed-down reviews).
     3. Check minimum approved reviews from weighted reviewers.
     4. Derive score from rankings using weighted lower-quantile.
-    5. Compute contributor reward (capped, zero if score is zero).
-    6. Compute reviewer rewards (split by weight, capped).
 
-    Returns (deltas, commitScore). -/
-def commitRewards
-    (rp : RewardParams)
+    Returns the CommitScore (percentile-based, 0-100 per dimension).
+    Reward computation is deferred to finalization (see Design.lean). -/
+def commitScore
+    (ep : EvalParams)
     (commit : SignedCommit)
     (pastCommitIds : List CommitId)
     (getWeight : ContributorId → Nat)
-    : List RewardDelta × CommitScore :=
+    : CommitScore :=
   let zeroScore : CommitScore := { difficulty := 0, novelty := 0, designQuality := 0 }
   -- Step 1: Validate comparison targets
   if !validateComparisonTargets commit pastCommitIds then
-    ([], zeroScore)
+    zeroScore
   else
     -- Step 2: Filter reviews by meta-review
     let approvedReviews := filterReviews commit.reviews commit.metaReviews getWeight
     -- Step 3: Check minimum approved reviews from weighted reviewers
     let weightedReviews := approvedReviews.filter fun (r : EmbeddedReview) =>
       getWeight r.reviewer > 0
-    if weightedReviews.length < rp.minReviews then
-      ([], zeroScore)
+    if weightedReviews.length < ep.minReviews then
+      zeroScore
     else
-      -- Step 4: Derive score (percentile-based, no bootstrap special case)
-      let score := deriveScore weightedReviews commit.id getWeight
-      let weightedScore := score.weighted
-      -- Step 5: Contributor reward
-      let contributorShare := rp.emission * (rp.reviewerShareDen - rp.reviewerShareNum) / rp.reviewerShareDen
-      let contributorReward := min contributorShare rp.contributorCap
-      let contributorDelta : RewardDelta := {
-        recipient := commit.author,
-        amount := if weightedScore == 0 then 0 else contributorReward,
-        kind := .contribution
-      }
-      -- Step 6: Reviewer rewards (only for weighted approved reviewers)
-      let reviewerPool := rp.emission * rp.reviewerShareNum / rp.reviewerShareDen
-      let reviewerDeltas := if weightedReviews.isEmpty then []
-        else
-          let totalReviewWeight := weightedReviews.foldl
-            (fun acc (r : EmbeddedReview) => acc + getWeight r.reviewer) 0
-          if totalReviewWeight == 0 then []
-          else weightedReviews.map fun (r : EmbeddedReview) =>
-            let w := getWeight r.reviewer
-            let raw := reviewerPool * w / totalReviewWeight
-            let capped := min raw rp.reviewerCap
-            { recipient := r.reviewer, amount := capped, kind := .review : RewardDelta }
-      (contributorDelta :: reviewerDeltas, score)
+      -- Step 4: Derive score (percentile-based)
+      deriveScore weightedReviews commit.id getWeight

@@ -46,20 +46,6 @@ instance : FromJson Verdict where
     | Json.str "notMerge" => .ok .notMerge
     | j => .error s!"expected \"merge\" or \"notMerge\", got {j}"
 
--- ============================================================================
--- RewardKind
--- ============================================================================
-
-instance : ToJson RewardKind where
-  toJson
-    | .contribution => Json.str "contribution"
-    | .review => Json.str "review"
-
-instance : FromJson RewardKind where
-  fromJson?
-    | Json.str "contribution" => .ok .contribution
-    | Json.str "review" => .ok .review
-    | j => .error s!"expected \"contribution\" or \"review\", got {j}"
 
 -- ============================================================================
 -- CommitScore (percentile ranks, 0-100)
@@ -119,23 +105,6 @@ instance : FromJson MetaReview where
     let approve ← j.getObjValAs? Bool "approve"
     return { metaReviewer, targetReviewer, approve }
 
--- ============================================================================
--- RewardDelta
--- ============================================================================
-
-instance : ToJson RewardDelta where
-  toJson d := Json.mkObj [
-    ("recipient", toJson d.recipient),
-    ("amount", toJson d.amount),
-    ("kind", toJson d.kind)
-  ]
-
-instance : FromJson RewardDelta where
-  fromJson? j := do
-    let recipient ← j.getObjValAs? String "recipient"
-    let amount ← j.getObjValAs? Nat "amount"
-    let kind ← j.getObjValAs? RewardKind "kind"
-    return { recipient, amount, kind }
 
 -- ============================================================================
 -- SignedCommit
@@ -219,34 +188,19 @@ instance : FromJson CommitIndex where
              metaReviews, mergeVotes, rejectVotes, founderOverride }
 
 -- ============================================================================
--- RewardParams
+-- EvalParams
 -- ============================================================================
 
-instance : ToJson RewardParams where
-  toJson rp := Json.mkObj [
-    ("contributorCap", toJson rp.contributorCap),
-    ("reviewerCap", toJson rp.reviewerCap),
-    ("emission", toJson rp.emission),
-    ("reviewerShareNum", toJson rp.reviewerShareNum),
-    ("reviewerShareDen", toJson rp.reviewerShareDen),
-    ("reviewerThreshold", toJson rp.reviewerThreshold),
-    ("minReviews", toJson rp.minReviews)
+instance : ToJson EvalParams where
+  toJson ep := Json.mkObj [
+    ("reviewerThreshold", toJson ep.reviewerThreshold),
+    ("minReviews", toJson ep.minReviews)
   ]
 
-instance : FromJson RewardParams where
+instance : FromJson EvalParams where
   fromJson? j := do
-    let contributorCap ← j.getObjValAs? Nat "contributorCap"
-    let reviewerCap ← j.getObjValAs? Nat "reviewerCap"
-    let emission ← j.getObjValAs? Nat "emission"
-    let reviewerShareNum ← j.getObjValAs? Nat "reviewerShareNum"
-    let reviewerShareDen ← j.getObjValAs? Nat "reviewerShareDen"
     let reviewerThreshold ← j.getObjValAs? Nat "reviewerThreshold"
     let minReviews ← j.getObjValAs? Nat "minReviews"
-    if h : reviewerShareDen > 0 then
-      return { contributorCap, reviewerCap, emission, reviewerShareNum,
-               reviewerShareDen, reviewerShareDen_pos := h,
-               reviewerThreshold, minReviews }
-    else
-      .error "RewardParams.reviewerShareDen must be > 0"
+    return { reviewerThreshold, minReviews }
 
 end Genesis.Json
