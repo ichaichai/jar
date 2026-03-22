@@ -152,11 +152,13 @@ jobs:
               prCreatedAt: $prCreatedAt, comparisonTargets: $targets, reviews: $reviews,
               metaReviews: $metaReviews, founderOverride: $founderOverride}')
 
-          # Evaluate
+          # Evaluate (pass ranking for v2 target validation)
           INPUT=$(jq -n \
             --argjson commit "$COMMIT_JSON" \
             --argjson pastIndices "$CACHE" \
-            '{commit: $commit, pastIndices: $pastIndices}')
+            --argjson ranking "$RANKING_SNAPSHOT" \
+            'if $ranking == null then {commit: $commit, pastIndices: $pastIndices}
+             else {commit: $commit, pastIndices: $pastIndices, ranking: $ranking} end')
 
           INDEX=$(echo "$INPUT" | .lake/build/bin/genesis_evaluate)
 
