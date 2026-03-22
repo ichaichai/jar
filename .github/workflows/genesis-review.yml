@@ -37,17 +37,19 @@ jobs:
       - name: Cache Lake packages
         uses: actions/cache@v4
         with:
-          path: .lake
-          key: lake-genesis-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.lean') }}
+          path: spec/.lake
+          key: lake-genesis-${{ hashFiles('spec/lean-toolchain', 'spec/lake-manifest.json', 'spec/lakefile.lean') }}
           restore-keys: lake-genesis-
 
       - name: Build genesis tools
+        working-directory: spec
         run: lake build genesis_check_merge genesis_select_targets
 
       - name: Collect all reviews and check merge readiness
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        working-directory: spec
         run: |
           PR_NUMBER=${{ github.event.issue.number }}
           git fetch origin genesis-state

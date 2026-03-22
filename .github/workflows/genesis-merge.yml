@@ -68,16 +68,18 @@ jobs:
       - name: Cache Lake packages
         uses: actions/cache@v4
         with:
-          path: .lake
-          key: lake-genesis-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.lean') }}
+          path: spec/.lake
+          key: lake-genesis-${{ hashFiles('spec/lean-toolchain', 'spec/lake-manifest.json', 'spec/lakefile.lean') }}
           restore-keys: lake-genesis-
 
       - name: Build genesis tools
+        working-directory: spec
         run: lake build genesis_select_targets genesis_evaluate
 
       - name: Collect reviews and evaluate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: spec
         run: |
           PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
 
@@ -200,6 +202,7 @@ jobs:
             Weight delta: ${WEIGHT_DELTA}"
 
       - name: Verify cache integrity
+        working-directory: spec
         run: |
           git pull origin master --ff-only
           bash tools/genesis-replay.sh --verify-cache

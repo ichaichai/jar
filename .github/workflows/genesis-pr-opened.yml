@@ -37,14 +37,16 @@ jobs:
       - name: Cache Lake packages
         uses: actions/cache@v4
         with:
-          path: .lake
-          key: lake-genesis-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.lean') }}
+          path: spec/.lake
+          key: lake-genesis-${{ hashFiles('spec/lean-toolchain', 'spec/lake-manifest.json', 'spec/lakefile.lean') }}
           restore-keys: lake-genesis-
 
       - name: Build genesis tools
+        working-directory: spec
         run: lake build genesis_select_targets
 
       - name: Select comparison targets
+        working-directory: spec
         run: |
           git fetch origin genesis-state
           CACHE=$(git show origin/genesis-state:genesis.json)
