@@ -39,6 +39,22 @@ fn map_register(rv_reg: u8) -> Result<Option<u8>, TranspileError> {
     }
 }
 
+/// Determine the minimum byte width for encoding a signed immediate in PVM format.
+///
+/// Returns `(lx, bytes)` where `lx` is the byte count (0, 1, 2, or 4) and `bytes`
+/// are the little-endian encoded value.
+fn encode_var_imm(imm: i32) -> (u8, Vec<u8>) {
+    if imm == 0 {
+        (0, vec![])
+    } else if imm >= -128 && imm <= 127 {
+        (1, vec![imm as i8 as u8])
+    } else if imm >= -32768 && imm <= 32767 {
+        (2, (imm as i16).to_le_bytes().to_vec())
+    } else {
+        (4, imm.to_le_bytes().to_vec())
+    }
+}
+
 /// Translation context for converting RISC-V to PVM.
 pub struct TranslationContext {
     /// Emitted PVM code bytes.
@@ -821,16 +837,7 @@ impl TranslationContext {
         let inst_pc = self.code.len() as u32;
         self.emit_inst(opcode);
 
-        // Determine minimum byte width for the signed immediate
-        let (lx, imm_bytes): (u8, Vec<u8>) = if imm == 0 {
-            (0, vec![])
-        } else if imm >= -128 && imm <= 127 {
-            (1, vec![imm as i8 as u8])
-        } else if imm >= -32768 && imm <= 32767 {
-            (2, (imm as i16).to_le_bytes().to_vec())
-        } else {
-            (4, imm.to_le_bytes().to_vec())
-        };
+        let (lx, imm_bytes) = encode_var_imm(imm);
 
         // Pack register and immediate length into one byte
         self.emit_data(ra | (lx << 4));
