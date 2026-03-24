@@ -15,11 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rust-src
-
-      - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -27,10 +25,10 @@ jobs:
 
       - name: Workspace tests (interpreter)
         working-directory: grey
-        run: cargo +stable test --workspace
+        run: cargo test --workspace
 
       - name: Workspace tests (recompiler)
         working-directory: grey
-        run: cargo +stable test --workspace
+        run: cargo test --workspace
         env:
           GREY_PVM: recompiler
