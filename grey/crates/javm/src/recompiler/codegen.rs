@@ -1202,42 +1202,30 @@ impl Compiler {
             }
             Opcode::SetLtUImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = REG_MAP[*rb];
-                    self.asm.mov_ri64(SCRATCH, *imm);
-                    self.asm.cmp_rr(rb_reg, SCRATCH);
+                    self.emit_cmp_imm(REG_MAP[*rb], *imm);
                     self.asm.setcc(Cc::B, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-
                 }
             }
             Opcode::SetLtSImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = REG_MAP[*rb];
-                    self.asm.mov_ri64(SCRATCH, *imm);
-                    self.asm.cmp_rr(rb_reg, SCRATCH);
+                    self.emit_cmp_imm(REG_MAP[*rb], *imm);
                     self.asm.setcc(Cc::L, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-
                 }
             }
             Opcode::SetGtUImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = REG_MAP[*rb];
-                    self.asm.mov_ri64(SCRATCH, *imm);
-                    self.asm.cmp_rr(rb_reg, SCRATCH);
+                    self.emit_cmp_imm(REG_MAP[*rb], *imm);
                     self.asm.setcc(Cc::A, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-
                 }
             }
             Opcode::SetGtSImm => {
                 if let Args::TwoRegImm { ra, rb, imm } = args {
-                    let rb_reg = REG_MAP[*rb];
-                    self.asm.mov_ri64(SCRATCH, *imm);
-                    self.asm.cmp_rr(rb_reg, SCRATCH);
+                    self.emit_cmp_imm(REG_MAP[*rb], *imm);
                     self.asm.setcc(Cc::G, REG_MAP[*ra]);
                     self.asm.movzx_8_64(REG_MAP[*ra], REG_MAP[*ra]);
-
                 }
             }
             Opcode::ShloLImm32 => {
@@ -1905,6 +1893,17 @@ impl Compiler {
         self.asm.jmp_label(self.panic_label);
     }
 
+    /// Compare register against immediate, using cmp_ri for i32-range values.
+    fn emit_cmp_imm(&mut self, reg: Reg, imm: u64) {
+        let imm_i64 = imm as i64;
+        if imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64 {
+            self.asm.cmp_ri(reg, imm_i64 as i32);
+        } else {
+            self.asm.mov_ri64(SCRATCH, imm);
+            self.asm.cmp_rr(reg, SCRATCH);
+        }
+    }
+
     /// Emit a branch comparing register against immediate.
     fn emit_branch_imm(&mut self, reg: Reg, imm: u64, cc: Cc, target: u32, _fallthrough: u32, pc: u32) {
         if !self.is_basic_block_start(target) {
@@ -1915,14 +1914,7 @@ impl Compiler {
             self.asm.jcc_label(cc, self.panic_label);
             return;
         }
-        // Use cmp_ri for small immediates (avoids mov_ri64 + cmp_rr)
-        let imm_i64 = imm as i64;
-        if imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64 {
-            self.asm.cmp_ri(reg, imm_i64 as i32);
-        } else {
-            self.asm.mov_ri64(SCRATCH, imm);
-            self.asm.cmp_rr(reg, SCRATCH);
-        }
+        self.emit_cmp_imm(reg, imm);
         let label = self.label_for_pc(target);
         self.asm.jcc_label(cc, label);
     }
