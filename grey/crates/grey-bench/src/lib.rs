@@ -532,11 +532,15 @@ mod tests_sort {
         loop {
             let (exit, _) = pvm.run();
             match exit {
-                javm::ExitReason::Halt | javm::ExitReason::Panic => {
+                javm::ExitReason::Halt => {
                     let gas_used = 100_000_000_000u64 - pvm.gas;
                     eprintln!("ecrecover: a0={} gas_used={}", pvm.registers[7], gas_used);
+                    assert!(gas_used > 1_000_000, "ecrecover should use >1M gas, got {gas_used}");
                     assert_eq!(pvm.registers[7], 1, "ecrecover should return 1 (success)");
                     return;
+                }
+                javm::ExitReason::Panic => {
+                    panic!("ecrecover panicked at PC={} gas_remaining={}", pvm.pc, pvm.gas);
                 }
                 javm::ExitReason::HostCall(_) => continue,
                 other => panic!("unexpected exit: {:?}", other),

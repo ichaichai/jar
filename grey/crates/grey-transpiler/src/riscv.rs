@@ -71,8 +71,6 @@ pub struct TranslationContext {
     fixups: Vec<(usize, u64, u8)>,
     /// Map from fixup imm offset → instruction PC (for PC-relative encoding)
     fixup_pcs: std::collections::HashMap<usize, u32>,
-    /// Pending absolute fixups: (pvm_imm_offset, target_rv_address) — patched with absolute PVM PC
-    abs_fixups: Vec<(usize, u64)>,
     /// Return-address fixups: (jump_table_index, risc-v return address).
     /// Resolved during `apply_fixups` to patch jump table entries.
     return_fixups: Vec<(usize, u64)>,
@@ -92,7 +90,6 @@ impl TranslationContext {
             address_map: std::collections::HashMap::new(),
             fixups: Vec::new(),
             fixup_pcs: std::collections::HashMap::new(),
-            abs_fixups: Vec::new(),
             return_fixups: Vec::new(),
             pending_auipc: None,
             last_t0_imm: None,
@@ -204,10 +201,10 @@ impl TranslationContext {
                                 self.last_t0_imm = None;
                             }
                             1 => self.emit_inst(0),   // EBREAK → trap
-                            _ => self.emit_inst(1),   // fence etc → fallthrough
+                            _ => self.emit_inst(0),   // unimp/unknown CSR → trap
                         }
                     }
-                    _ => self.emit_inst(1), // CSR ops → fallthrough
+                    _ => self.emit_inst(0), // CSR ops → trap
                 }
             }
             0x0F => { // FENCE
@@ -221,14 +218,6 @@ impl TranslationContext {
             }
         }
 
-        Ok(())
-    }
-
-    /// Flush any pending AUIPC as a standalone load_imm.
-    pub(crate) fn flush_pending_auipc(&mut self) -> Result<(), TranspileError> {
-        if let Some((rd, val)) = self.pending_auipc.take() {
-            self.emit_load_imm(rd, val as i64)?;
-        }
         Ok(())
     }
 
@@ -478,7 +467,7 @@ impl TranslationContext {
             // add rd, x0, rs2 → mv rd, rs2
             let pvm_rd = self.require_reg(rd)?;
             let pvm_rs2 = self.require_reg(rs2)?;
-            self.emit_inst(52); // move_reg
+            self.emit_inst(100); // move_reg
             self.emit_data(pvm_rd | (pvm_rs2 << 4));
             return Ok(());
         }
@@ -486,7 +475,7 @@ impl TranslationContext {
             // add rd, rs1, x0 → mv rd, rs1
             let pvm_rd = self.require_reg(rd)?;
             let pvm_rs1 = self.require_reg(rs1)?;
-            self.emit_inst(52); // move_reg
+            self.emit_inst(100); // move_reg
             self.emit_data(pvm_rd | (pvm_rs1 << 4));
             return Ok(());
         }
@@ -511,7 +500,7 @@ impl TranslationContext {
                 }
                 (0, 4) | (0, 6) => {
                     // XOR/OR rd, x0, rs2 → rs2
-                    self.emit_inst(52);
+                    self.emit_inst(100); // move_reg
                     self.emit_data(pvm_rd | (pvm_rs2 << 4));
                     return Ok(());
                 }
@@ -521,7 +510,11 @@ impl TranslationContext {
                 }
                 (0, 3) => {
                     // SLTU rd, x0, rs2 → snez rd, rs2
-                    self.emit_load_imm(rd, 0)?;
+                    // When rd == rs2, skip the load_imm to avoid clobbering
+                    // the value before the conditional check.
+                    if pvm_rd != pvm_rs2 {
+                        self.emit_load_imm(rd, 0)?;
+                    }
                     self.emit_inst(148); // cmov_nz_imm: if rs2 != 0 then rd = imm
                     self.emit_data(pvm_rd | (pvm_rs2 << 4));
                     self.emit_imm32(1);
@@ -553,7 +546,7 @@ impl TranslationContext {
                 }
                 (0x20, 0) | (0, 4) | (0, 6) => {
                     // SUB/XOR/OR rd, rs1, x0 → rs1 op 0 = rs1 → move
-                    self.emit_inst(52);
+                    self.emit_inst(100); // move_reg
                     self.emit_data(pvm_rd | (pvm_rs1 << 4));
                     return Ok(());
                 }
@@ -563,7 +556,7 @@ impl TranslationContext {
                 }
                 (0, 1) | (0, 5) | (0x20, 5) => {
                     // SLL/SRL/SRA rd, rs1, x0 → shift by 0 = rs1 → move
-                    self.emit_inst(52);
+                    self.emit_inst(100); // move_reg
                     self.emit_data(pvm_rd | (pvm_rs1 << 4));
                     return Ok(());
                 }
@@ -777,19 +770,6 @@ impl TranslationContext {
         self.emit_load_imm(rd, jt_addr)
     }
 
-    /// Emit a load_imm for a return address (RISC-V addr → absolute PVM PC).
-    /// Used by the linker for CALL_PLT relocations.
-    pub(crate) fn emit_return_address(&mut self, rd: u8, rv_ret_addr: u64) -> Result<(), TranspileError> {
-        if rd == 0 { return Ok(()); }
-        let pvm_rd = self.require_reg(rd)?;
-        self.emit_inst(51); // load_imm
-        self.emit_data(pvm_rd);
-        let imm_offset = self.code.len();
-        self.emit_imm32(0); // placeholder — absolute fixup will patch
-        self.abs_fixups.push((imm_offset, rv_ret_addr));
-        Ok(())
-    }
-
     pub(crate) fn emit_ecalli(&mut self, id: u32) {
         self.emit_inst(10);
         self.emit_imm32(id as i32);
@@ -863,16 +843,6 @@ impl TranslationContext {
                 }
             } else {
                 tracing::warn!("unresolved fixup: rv_target={:#x}, pvm_offset={}", rv_target, pvm_offset);
-            }
-        }
-
-        // Absolute fixups (return addresses in load_imm, used by linker)
-        for (pvm_offset, rv_target) in self.abs_fixups.drain(..).collect::<Vec<_>>() {
-            if let Some(&pvm_target) = self.address_map.get(&rv_target) {
-                let bytes = (pvm_target as i32).to_le_bytes();
-                for i in 0..4 {
-                    self.code[pvm_offset + i] = bytes[i];
-                }
             }
         }
 
