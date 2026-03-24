@@ -525,6 +525,44 @@ mod tests_sort {
     }
 
     #[test]
+    fn test_grey_ecrecover_recompiler() {
+        let blob = grey_ecrecover_blob();
+        let gas = 100_000_000_000u64;
+
+        // Run interpreter
+        let mut interp = javm::program::initialize_program(&blob, &[], gas).unwrap();
+        loop {
+            match interp.run().0 {
+                javm::ExitReason::Halt => break,
+                javm::ExitReason::Panic => panic!("interpreter panicked at PC={}", interp.pc),
+                javm::ExitReason::HostCall(_) => continue,
+                other => panic!("interpreter: unexpected exit: {:?}", other),
+            }
+        }
+        let interp_gas = gas - interp.gas;
+        let interp_a0 = interp.registers[7];
+
+        // Run recompiler
+        let mut recomp = javm::recompiler::initialize_program_recompiled(&blob, &[], gas).unwrap();
+        loop {
+            match recomp.run() {
+                javm::ExitReason::Halt => break,
+                javm::ExitReason::Panic => panic!("recompiler panicked"),
+                javm::ExitReason::HostCall(_) => continue,
+                other => panic!("recompiler: unexpected exit: {:?}", other),
+            }
+        }
+        let recomp_gas = gas - recomp.gas();
+        let recomp_a0 = recomp.registers()[7];
+
+        assert_eq!(interp_a0, 1, "interpreter ecrecover should return 1");
+        assert_eq!(recomp_a0, 1, "recompiler ecrecover should return 1");
+        assert!(interp_gas > 100_000, "should use >100K gas, got {interp_gas}");
+        assert_eq!(interp_gas, recomp_gas,
+            "gas mismatch: interpreter={interp_gas} recompiler={recomp_gas}");
+    }
+
+    #[test]
     fn test_sample_service_loadable() {
         let blob = sample_service_blob();
         assert!(!blob.is_empty());
