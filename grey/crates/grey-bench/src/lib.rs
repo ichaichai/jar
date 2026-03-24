@@ -453,6 +453,11 @@ pub fn polkavm_ecrecover_blob() -> &'static [u8] {
     POLKAVM_ECRECOVER_BLOB
 }
 
+/// Grey PVM service blob for sample-service (refine at PC=0, accumulate at PC=5).
+pub fn sample_service_blob() -> &'static [u8] {
+    SAMPLE_SERVICE_BLOB
+}
+
 #[cfg(test)]
 mod tests_sort {
     use super::*;
@@ -516,6 +521,41 @@ mod tests_sort {
                 javm::ExitReason::HostCall(_) => continue,
                 other => panic!("unexpected exit: {:?}", other),
             }
+        }
+    }
+
+    #[test]
+    fn test_sample_service_loadable() {
+        let blob = sample_service_blob();
+        assert!(!blob.is_empty());
+        let pvm = javm::program::initialize_program(blob, &[], 10_000);
+        assert!(pvm.is_some(), "sample service blob should be loadable by PVM");
+    }
+
+    #[test]
+    fn test_sample_service_refine_halts() {
+        let blob = sample_service_blob();
+        let mut pvm = javm::program::initialize_program(blob, &[], 10_000)
+            .expect("blob should be loadable");
+        let (result, _gas) = pvm.run();
+        assert!(
+            result == javm::ExitReason::Halt || result == javm::ExitReason::Panic,
+            "refine should halt or panic; got {:?}", result
+        );
+    }
+
+    #[test]
+    fn test_sample_service_accumulate_host_write() {
+        let blob = sample_service_blob();
+        let mut pvm = javm::program::initialize_program(blob, &[], 10_000)
+            .expect("blob should be loadable");
+        pvm.pc = 5;
+        let (result, _gas) = pvm.run();
+        match result {
+            javm::ExitReason::HostCall(id) => {
+                assert_eq!(id, 4, "expected host_write (ID=4), got ID={}", id);
+            }
+            other => panic!("expected HostCall(4), got {:?}", other),
         }
     }
 }
