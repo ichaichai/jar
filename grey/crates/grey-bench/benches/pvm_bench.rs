@@ -335,6 +335,27 @@ fn bench_ecrecover(c: &mut Criterion) {
         })
     });
 
+    // Execution-only: compile in setup (not timed), measure only execution.
+    // Separates JIT compilation time from execution time.
+    group.bench_function("grey-recompiler-exec", |b| {
+        b.iter_batched(
+            || javm::recompiler::initialize_program_recompiled(
+                &grey_blob, &[], ecrecover_gas,
+            ).unwrap(),
+            |mut pvm| {
+                loop {
+                    match pvm.run() {
+                        javm::ExitReason::Halt | javm::ExitReason::Panic => break,
+                        javm::ExitReason::HostCall(_) => continue,
+                        other => panic!("unexpected exit: {:?}", other),
+                    }
+                }
+                pvm.registers()[7]
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
     let pvm_interp = try_make_polkavm_module(&pvm_blob, BackendKind::Interpreter);
     if let Some((_, ref pvm_interp_mod)) = pvm_interp {
         group.bench_function("polkavm-interpreter", |b| {
