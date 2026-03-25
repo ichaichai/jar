@@ -322,4 +322,118 @@ mod tests {
         assert_eq!(warnings.len(), 3); // one warning per dimension
         assert!(warnings[0].contains("1 entries, expected 3"));
     }
+
+    #[test]
+    fn test_parse_review_with_prose_after_verdict() {
+        // Real reviews have explanation text after the structured fields
+        let body = "/review\n\
+            difficulty: 204e93ab, currentPR, b012110b\n\
+            novelty: currentPR, 204e93ab, b012110b\n\
+            design: 204e93ab, currentPR, b012110b\n\
+            verdict: merge\n\
+            \n\
+            Strong architectural contribution. The prCreatedAt anchor eliminates\n\
+            a class of concurrency bugs with a stateless solution.";
+        let mut warnings = vec![];
+        let review =
+            parse_review_comment(body, "alice", HEAD_SHA, &targets(), &mut warnings).unwrap();
+        assert!(warnings.is_empty(), "prose should not interfere: {warnings:?}");
+        assert_eq!(review.verdict, Verdict::Merge);
+    }
+
+    #[test]
+    fn test_parse_review_notmerge_verdict() {
+        let body = "/review\n\
+            difficulty: currentPR, 204e93ab, b012110b\n\
+            novelty: currentPR, 204e93ab, b012110b\n\
+            design: currentPR, 204e93ab, b012110b\n\
+            verdict: notMerge\n\
+            \n\
+            Existing tests modified — waiting for human review.";
+        let mut warnings = vec![];
+        let review =
+            parse_review_comment(body, "bot", HEAD_SHA, &targets(), &mut warnings).unwrap();
+        assert_eq!(review.verdict, Verdict::NotMerge);
+    }
+
+    #[test]
+    fn test_parse_review_all_urls() {
+        // PR #97 scenario: all hashes are GitHub URLs
+        let url_a = format!("https://github.com/jarchain/jar/commit/{TARGET_A}");
+        let url_b = format!("https://github.com/jarchain/jar/commit/{TARGET_B}");
+        let body = format!(
+            "/review\n\
+            difficulty: {url_a}, currentPR, {url_b}\n\
+            novelty: currentPR, {url_a}, {url_b}\n\
+            design: {url_a}, currentPR, {url_b}\n\
+            verdict: merge"
+        );
+        let mut warnings = vec![];
+        let review =
+            parse_review_comment(&body, "carol", HEAD_SHA, &targets(), &mut warnings).unwrap();
+        assert!(warnings.is_empty(), "URLs should normalize: {warnings:?}");
+        assert_eq!(review.difficulty_ranking, vec![TARGET_A, HEAD_SHA, TARGET_B]);
+        assert_eq!(review.novelty_ranking, vec![HEAD_SHA, TARGET_A, TARGET_B]);
+    }
+
+    #[test]
+    fn test_multiple_reviews_different_authors() {
+        let body1 = "/review\ndifficulty: 204e93ab, currentPR, b012110b\nnovelty: 204e93ab, currentPR, b012110b\ndesign: 204e93ab, currentPR, b012110b\nverdict: merge";
+        let body2 = "/review\ndifficulty: currentPR, 204e93ab, b012110b\nnovelty: currentPR, 204e93ab, b012110b\ndesign: currentPR, 204e93ab, b012110b\nverdict: notMerge";
+
+        let mut warnings = vec![];
+        let mut reviews: Vec<EmbeddedReview> = Vec::new();
+
+        if let Some(r) = parse_review_comment(body1, "alice", HEAD_SHA, &targets(), &mut warnings) {
+            reviews.push(r);
+        }
+        if let Some(r) = parse_review_comment(body2, "bob", HEAD_SHA, &targets(), &mut warnings) {
+            reviews.push(r);
+        }
+
+        assert_eq!(reviews.len(), 2);
+        assert_eq!(reviews[0].reviewer, "alice");
+        assert_eq!(reviews[0].verdict, Verdict::Merge);
+        assert_eq!(reviews[1].reviewer, "bob");
+        assert_eq!(reviews[1].verdict, Verdict::NotMerge);
+    }
+
+    #[test]
+    fn test_signed_commit_matches_real_trailer_format() {
+        // A real Genesis-Commit trailer from the repo
+        let trailer = r#"{"id":"cf701ea84d9e1ab600c834e9d5bf7dee0829f2a1","prId":118,"author":"mariopino","mergeEpoch":1774471809,"prCreatedAt":1774471183,"comparisonTargets":["25c798d8161147e2360e620feb86372f0d897f15"],"reviews":[{"reviewer":"sorpaas","difficultyRanking":["25c798d8161147e2360e620feb86372f0d897f15","cf701ea84d9e1ab600c834e9d5bf7dee0829f2a1"],"noveltyRanking":["25c798d8161147e2360e620feb86372f0d897f15","cf701ea84d9e1ab600c834e9d5bf7dee0829f2a1"],"designQualityRanking":["25c798d8161147e2360e620feb86372f0d897f15","cf701ea84d9e1ab600c834e9d5bf7dee0829f2a1"],"verdict":"merge"}],"metaReviews":[],"founderOverride":false}"#;
+
+        // Verify it deserializes into our SignedCommit type
+        let commit: crate::types::SignedCommit = serde_json::from_str(trailer).unwrap();
+        assert_eq!(commit.id, "cf701ea84d9e1ab600c834e9d5bf7dee0829f2a1");
+        assert_eq!(commit.pr_id, 118);
+        assert_eq!(commit.author, "mariopino");
+        assert_eq!(commit.pr_created_at, Some(1774471183));
+        assert!(!commit.founder_override);
+        assert_eq!(commit.reviews.len(), 1);
+        assert_eq!(commit.reviews[0].verdict, Verdict::Merge);
+
+        // Verify round-trip: serialize back and compare field by field
+        let reserialized = serde_json::to_string(&commit).unwrap();
+        let original: serde_json::Value = serde_json::from_str(trailer).unwrap();
+        let roundtrip: serde_json::Value = serde_json::from_str(&reserialized).unwrap();
+        assert_eq!(original, roundtrip, "round-trip mismatch");
+    }
+
+    #[test]
+    fn test_commit_index_matches_real_trailer_format() {
+        let trailer = r#"{"commitHash":"c395102ceab5cdbf22b88f9a3d80175c2d76ce14","contributor":"sorpaas","epoch":1774080150,"founderOverride":false,"mergeVotes":["sorpaas"],"metaReviews":[],"rejectVotes":[],"reviewers":["sorpaas"],"score":{"designQuality":100,"difficulty":100,"novelty":100},"weightDelta":100}"#;
+
+        let index: crate::types::CommitIndex = serde_json::from_str(trailer).unwrap();
+        assert_eq!(index.commit_hash, "c395102ceab5cdbf22b88f9a3d80175c2d76ce14");
+        assert_eq!(index.contributor, "sorpaas");
+        assert_eq!(index.score.difficulty, 100);
+        assert_eq!(index.weight_delta, 100);
+
+        // Round-trip
+        let reserialized = serde_json::to_string(&index).unwrap();
+        let original: serde_json::Value = serde_json::from_str(trailer).unwrap();
+        let roundtrip: serde_json::Value = serde_json::from_str(&reserialized).unwrap();
+        assert_eq!(original, roundtrip, "round-trip mismatch");
+    }
 }

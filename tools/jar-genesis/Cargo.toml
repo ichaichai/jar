@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "jar_genesis"
+path = "src/lib.rs"
+
 [[bin]]
 name = "jar-genesis"
 path = "src/main.rs"

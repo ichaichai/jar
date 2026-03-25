@@ -395,4 +395,50 @@ mod tests {
         let body = "\nSet-Genesis-Author: @alice";
         assert_eq!(parse_flag(body, "Set-Genesis-Author"), None);
     }
+
+    #[test]
+    fn test_find_ranking_snapshot_empty() {
+        let indices: Vec<serde_json::Value> = vec![];
+        let ranking = serde_json::json!({});
+        assert!(find_ranking_snapshot(&indices, &ranking, 1000).is_none());
+    }
+
+    #[test]
+    fn test_find_ranking_snapshot_all_future() {
+        let indices = vec![serde_json::json!({"commitHash": "abc", "epoch": 2000})];
+        let ranking = serde_json::json!({"abc": ["abc"]});
+        // epoch 1000 < 2000, so nothing is before it
+        assert!(find_ranking_snapshot(&indices, &ranking, 1000).is_none());
+    }
+
+    #[test]
+    fn test_find_ranking_snapshot_picks_last_before_epoch() {
+        let indices = vec![
+            serde_json::json!({"commitHash": "aaa", "epoch": 100}),
+            serde_json::json!({"commitHash": "bbb", "epoch": 200}),
+            serde_json::json!({"commitHash": "ccc", "epoch": 300}),
+        ];
+        let ranking = serde_json::json!({
+            "aaa": ["aaa"],
+            "bbb": ["bbb", "aaa"],
+            "ccc": ["ccc", "bbb", "aaa"],
+        });
+        // epoch 250: last before it is bbb (epoch 200)
+        let snapshot = find_ranking_snapshot(&indices, &ranking, 250).unwrap();
+        assert_eq!(snapshot, serde_json::json!(["bbb", "aaa"]));
+    }
+
+    #[test]
+    fn test_find_ranking_snapshot_missing_key() {
+        let indices = vec![serde_json::json!({"commitHash": "abc", "epoch": 100})];
+        let ranking = serde_json::json!({}); // key not present
+        assert!(find_ranking_snapshot(&indices, &ranking, 200).is_none());
+    }
+
+    #[test]
+    fn test_parse_flag_multiple_flags() {
+        let body = "Set-Genesis-Author: @alice\nSome-Other-Flag: value\n\nBody text.";
+        assert_eq!(parse_flag(body, "Set-Genesis-Author"), Some("alice".to_string()));
+        assert_eq!(parse_flag(body, "Some-Other-Flag"), Some("value".to_string()));
+    }
 }

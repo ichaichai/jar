@@ -1,14 +1,6 @@
 use clap::{Parser, Subcommand};
 
-mod cache;
-mod git;
-mod github;
-mod hash;
-mod lean;
-mod replay;
-mod review;
-mod types;
-mod workflow;
+use jar_genesis::{cache, replay, review, workflow};
 
 #[derive(Parser)]
 #[command(name = "jar-genesis", about = "JAR Genesis tooling")]
