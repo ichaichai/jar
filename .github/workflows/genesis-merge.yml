@@ -83,10 +83,10 @@ jobs:
         run: |
           PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
 
-          # Read cache from genesis-state branch
+          # Read cache from genesis-state branch (write to files to avoid ARG_MAX)
           git fetch origin genesis-state
-          CACHE=$(git show origin/genesis-state:genesis.json)
-          RANKING=$(git show origin/genesis-state:ranking.json 2>/dev/null || echo '{}')
+          git show origin/genesis-state:genesis.json > /tmp/genesis_cache.json
+          git show origin/genesis-state:ranking.json 2>/dev/null > /tmp/genesis_ranking_cache.json || echo '{}' > /tmp/genesis_ranking_cache.json
 
           # Get PR details (including immutable created_at for target anchoring)
           PR_JSON=$(gh pr view "$PR_NUMBER" --json headRefOid,author,createdAt,body)
@@ -109,20 +109,20 @@ jobs:
           fi
 
           # Get comparison targets anchored to PR creation time
-          RANKING_SNAPSHOT=$(echo "$CACHE" | jq -c --argjson epoch "$PR_CREATED_EPOCH" --argjson ranking "$RANKING" '
+          RANKING_SNAPSHOT=$(jq -c --argjson epoch "$PR_CREATED_EPOCH" --slurpfile ranking /tmp/genesis_ranking_cache.json '
             [.[] | select(.epoch < $epoch)] | last | .commitHash // empty |
-            . as $hash | $ranking[$hash] // empty
-          ')
+            . as $hash | $ranking[0][$hash] // empty
+          ' /tmp/genesis_cache.json)
           if [ -z "$RANKING_SNAPSHOT" ] || [ "$RANKING_SNAPSHOT" = "null" ]; then
             RANKING_SNAPSHOT="null"
           fi
           INPUT=$(jq -n \
             --argjson prId "$PR_NUMBER" \
             --argjson prCreatedAt "$PR_CREATED_EPOCH" \
-            --argjson indices "$CACHE" \
+            --slurpfile indices /tmp/genesis_cache.json \
             --argjson ranking "$RANKING_SNAPSHOT" \
-            'if $ranking == null then {prId: $prId, prCreatedAt: $prCreatedAt, indices: $indices}
-             else {prId: $prId, prCreatedAt: $prCreatedAt, indices: $indices, ranking: $ranking} end')
+            'if $ranking == null then {prId: $prId, prCreatedAt: $prCreatedAt, indices: $indices[0]}
+             else {prId: $prId, prCreatedAt: $prCreatedAt, indices: $indices[0], ranking: $ranking} end')
           TARGETS_JSON=$(echo "$INPUT" | .lake/build/bin/genesis_select_targets)
           TARGETS=$(echo "$TARGETS_JSON" | jq -c '.targets')
 
@@ -155,10 +155,10 @@ jobs:
           # Evaluate (pass ranking for v2 target validation)
           INPUT=$(jq -n \
             --argjson commit "$COMMIT_JSON" \
-            --argjson pastIndices "$CACHE" \
+            --slurpfile pastIndices /tmp/genesis_cache.json \
             --argjson ranking "$RANKING_SNAPSHOT" \
-            'if $ranking == null then {commit: $commit, pastIndices: $pastIndices}
-             else {commit: $commit, pastIndices: $pastIndices, ranking: $ranking} end')
+            'if $ranking == null then {commit: $commit, pastIndices: $pastIndices[0]}
+             else {commit: $commit, pastIndices: $pastIndices[0], ranking: $ranking} end')
 
           INDEX=$(echo "$INPUT" | .lake/build/bin/genesis_evaluate)
 
@@ -168,7 +168,6 @@ jobs:
           # Save for merge step
           echo "$INDEX" > /tmp/genesis_index.json
           echo "$COMMIT_JSON" > /tmp/genesis_commit.json
-          echo "$CACHE" > /tmp/genesis_cache.json
 
       - name: Wait for checks and merge
         env:
@@ -229,14 +228,13 @@ jobs:
           PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
           INDEX=$(cat /tmp/genesis_index.json)
 
-          # Update genesis.json
-          CACHE=$(cat /tmp/genesis_cache.json 2>/dev/null || git show origin/genesis-state:genesis.json)
-          UPDATED_CACHE=$(echo "$CACHE" | jq --argjson idx "$INDEX" '. + [$idx]')
+          # Update genesis.json (use files to avoid ARG_MAX)
+          jq --argjson idx "$INDEX" '. + [$idx]' /tmp/genesis_cache.json > /tmp/genesis_updated.json
 
           # Compute updated ranking from all SignedCommits in git history
           GENESIS_COMMIT=$(grep 'def genesisCommit' Genesis/State.lean | grep -oP '"[0-9a-f]{40}"' | tr -d '"')
           git pull origin master --ff-only
-          SIGNED_COMMITS="[]"
+          echo '[]' > /tmp/genesis_sc.json
           for MERGE_HASH in $(git log --merges --reverse --format="%H" "${GENESIS_COMMIT}..HEAD"); do
             COMMIT_LINE=$(git log -1 --format="%B" "$MERGE_HASH" | grep '^Genesis-Commit: ' | sed 's/^Genesis-Commit: //' || true)
             if [ -n "$COMMIT_LINE" ]; then
@@ -247,23 +245,23 @@ jobs:
                   .noveltyRanking |= [.[] | . as $h | if ($h | length) < 40 then ($all[] | select(startswith($h))) // $h else . end] |
                   .designQualityRanking |= [.[] | . as $h | if ($h | length) < 40 then ($all[] | select(startswith($h))) // $h else . end]
                 ]')
-              SIGNED_COMMITS=$(echo "$SIGNED_COMMITS" | jq --argjson c "$COMMIT_LINE" '. + [$c]')
+              jq --argjson c "$COMMIT_LINE" '. + [$c]' /tmp/genesis_sc.json > /tmp/genesis_sc.tmp && mv /tmp/genesis_sc.tmp /tmp/genesis_sc.json
             fi
           done
-          NEW_RANKING=$(jq -n --argjson sc "$SIGNED_COMMITS" --argjson idx "$UPDATED_CACHE" \
-            '{signedCommits: $sc, indices: $idx}' | .lake/build/bin/genesis_ranking | jq -c '.ranking')
+          NEW_RANKING=$(jq -n --slurpfile sc /tmp/genesis_sc.json --slurpfile idx /tmp/genesis_updated.json \
+            '{signedCommits: $sc[0], indices: $idx[0]}' | .lake/build/bin/genesis_ranking | jq -c '.ranking')
           NEW_COMMIT_HASH=$(echo "$INDEX" | jq -r '.commitHash')
 
           # Update ranking.json: add new entry keyed by the new commit hash
-          EXISTING_RANKING=$(git show origin/genesis-state:ranking.json 2>/dev/null || echo '{}')
-          UPDATED_RANKING=$(echo "$EXISTING_RANKING" | jq --arg key "$NEW_COMMIT_HASH" --argjson val "$NEW_RANKING" '. + {($key): $val}')
+          git show origin/genesis-state:ranking.json 2>/dev/null > /tmp/genesis_existing_ranking.json || echo '{}' > /tmp/genesis_existing_ranking.json
+          jq --arg key "$NEW_COMMIT_HASH" --argjson val "$NEW_RANKING" '. + {($key): $val}' /tmp/genesis_existing_ranking.json > /tmp/genesis_updated_ranking.json
 
           # Push both to genesis-state
           git fetch origin genesis-state
           git worktree add /tmp/genesis-state origin/genesis-state
           git -C /tmp/genesis-state checkout -B genesis-state origin/genesis-state
-          echo "$UPDATED_CACHE" > /tmp/genesis-state/genesis.json
-          echo "$UPDATED_RANKING" > /tmp/genesis-state/ranking.json
+          cp /tmp/genesis_updated.json /tmp/genesis-state/genesis.json
+          cp /tmp/genesis_updated_ranking.json /tmp/genesis-state/ranking.json
           git -C /tmp/genesis-state config user.name "JAR Bot"
           git -C /tmp/genesis-state config user.email "legal@bitarray.dev"
           git -C /tmp/genesis-state add genesis.json ranking.json
