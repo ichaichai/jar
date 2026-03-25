@@ -2017,13 +2017,26 @@ fn smod_i64(a: i64, b: i64) -> i64 {
 }
 
 /// Compute the set of basic block start indices (ϖ, eq A.5).
+/// Compute basic block starts AND a precomputed skip table in a single pass.
+/// skip_table[pc] = number of bytes to skip after the opcode byte (instruction size - 1).
+/// Only valid at instruction-start PCs (where bitmask[pc] == 1).
+pub fn compute_basic_block_starts_with_skips(code: &[u8], bitmask: &[u8]) -> (Vec<bool>, Vec<u8>) {
+    let (starts, skip_table) = compute_bb_starts_inner(code, bitmask);
+    (starts, skip_table)
+}
+
 pub fn compute_basic_block_starts(code: &[u8], bitmask: &[u8]) -> Vec<bool> {
+    compute_bb_starts_inner(code, bitmask).0
+}
+
+fn compute_bb_starts_inner(code: &[u8], bitmask: &[u8]) -> (Vec<bool>, Vec<u8>) {
     let len = code.len();
     if len == 0 {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let mut starts = vec![false; len];
+    let mut skip_table = vec![0u8; len];
 
     // Index 0 is always a basic block start if it's a valid instruction
     if !bitmask.is_empty() && bitmask[0] == 1 {
@@ -2033,7 +2046,6 @@ pub fn compute_basic_block_starts(code: &[u8], bitmask: &[u8]) -> Vec<bool> {
     }
 
     // Iterate only over instruction starts (skip non-instruction bytes).
-    // This is O(n_instructions) instead of O(n_bytes).
     let mut i = 0;
     while i < len {
         if i >= bitmask.len() || bitmask[i] != 1 { i += 1; continue; }
@@ -2048,6 +2060,7 @@ pub fn compute_basic_block_starts(code: &[u8], bitmask: &[u8]) -> Vec<bool> {
             }
             s
         };
+        skip_table[i] = skip as u8;
 
         if op.is_terminator() {
             // The instruction after a terminator starts a new block
@@ -2109,7 +2122,7 @@ pub fn compute_basic_block_starts(code: &[u8], bitmask: &[u8]) -> Vec<bool> {
         i += 1 + skip; // advance to next instruction start
     }
 
-    starts
+    (starts, skip_table)
 }
 
 /// Compute the gas cost for each basic block using single-pass gas model (JAR v0.8.0).

@@ -255,8 +255,9 @@ impl Compiler {
         // Emit prologue
         self.emit_prologue();
 
-        // Gas block starts: use the same basic block analysis as the interpreter.
-        let mut gas_starts = crate::vm::compute_basic_block_starts(code, bitmask);
+        // Gas block starts + precomputed skip table (avoids repeated bitmask scanning).
+        let (mut gas_starts, skip_table) =
+            crate::vm::compute_basic_block_starts_with_skips(code, bitmask);
 
         // Single streaming pass: decode + gas blocks + codegen
         let mut gas_sim = GasSimulator::new();
@@ -278,7 +279,7 @@ impl Compiler {
                     continue;
                 }
             };
-            let skip = compute_skip(pc, bitmask);
+            let skip = skip_table[pc] as usize;
             let next_pc = (pc + 1 + skip) as u32;
 
             // Extract raw register fields (for gas sim)
