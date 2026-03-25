@@ -113,8 +113,25 @@ instance GenesisVariant.v2 : GenesisVariant where
 
 /-- GitHub username. -/
 abbrev ContributorId := String
-/-- Full git commit SHA (40 hex chars). -/
-abbrev CommitId := String
+/-- Full git commit SHA (40 hex chars), or invalid (non-hex / URL residue).
+    Invalid entries occupy ranking positions but never match any valid hash. -/
+inductive CommitId where
+  | valid (hash : String) : CommitId
+  | invalid : CommitId
+  deriving Repr
+
+instance : BEq CommitId where
+  beq
+    | .valid a, .valid b => a == b
+    | _, _ => false  -- invalid never equals anything, not even itself
+
+instance : ToString CommitId where
+  toString
+    | .valid h => h
+    | .invalid => "invalid"
+
+instance : Inhabited CommitId where
+  default := .invalid
 abbrev PRId := Nat
 abbrev Epoch := Nat
 abbrev TokenAmount := Nat

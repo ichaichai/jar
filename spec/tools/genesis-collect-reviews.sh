@@ -48,6 +48,10 @@ expand_hashes() {
         fi
       fi
     fi
+    # Sanity check: final hash should be 40 hex chars
+    if ! [[ "$EXPANDED" =~ ^[0-9a-f]{40}$ ]]; then
+      add_warning "reviewer ${REVIEWER}: ${DIM} contains invalid hash '${EXPANDED:0:20}...' (expected 40 hex chars)"
+    fi
     if [ "$FIRST" = true ]; then
       RESULT="$EXPANDED"
       FIRST=false
@@ -61,9 +65,11 @@ expand_hashes() {
 parse_review() {
   local BODY="$1"
   local AUTHOR="$2"
-  local RAW_DIFF=$(echo "$BODY" | grep -i '^difficulty:' | sed 's/^difficulty:\s*//' | tr -d ' \r')
-  local RAW_NOV=$(echo "$BODY" | grep -i '^novelty:' | sed 's/^novelty:\s*//' | tr -d ' \r')
-  local RAW_DES=$(echo "$BODY" | grep -i '^design:' | sed 's/^design:\s*//' | tr -d ' \r')
+  # Strip whitespace, \r, and GitHub commit URLs (https://github.com/.../commit/<sha> → <sha>)
+  local COMMIT_URL_RE='https://github\.com/[^/]+/[^/]+/commit/'
+  local RAW_DIFF=$(echo "$BODY" | grep -i '^difficulty:' | sed 's/^difficulty:\s*//' | tr -d ' \r' | sed -E "s|${COMMIT_URL_RE}||g")
+  local RAW_NOV=$(echo "$BODY" | grep -i '^novelty:' | sed 's/^novelty:\s*//' | tr -d ' \r' | sed -E "s|${COMMIT_URL_RE}||g")
+  local RAW_DES=$(echo "$BODY" | grep -i '^design:' | sed 's/^design:\s*//' | tr -d ' \r' | sed -E "s|${COMMIT_URL_RE}||g")
   local VERD=$(echo "$BODY" | grep -i '^verdict:' | sed 's/^verdict:\s*//' | tr -d ' \r')
   # Replace "currentPR" with actual commit SHA if provided
   if [ -n "$HEAD_SHA" ]; then

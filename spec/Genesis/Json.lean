@@ -16,6 +16,26 @@ namespace Genesis.Json
 open Lean (Json ToJson FromJson toJson fromJson?)
 
 -- ============================================================================
+-- CommitId
+-- ============================================================================
+
+private def isHexChar (c : Char) : Bool :=
+  c.isDigit || ('a' ≤ c && c ≤ 'f')
+
+instance : FromJson CommitId where
+  fromJson? j := do
+    let s ← j.getStr?
+    if s.length == 40 && s.all isHexChar then
+      return .valid s
+    else
+      return .invalid
+
+instance : ToJson CommitId where
+  toJson
+    | .valid h => toJson h
+    | .invalid => toJson "invalid"
+
+-- ============================================================================
 -- Ratio
 -- ============================================================================
 
@@ -81,9 +101,9 @@ instance : ToJson EmbeddedReview where
 instance : FromJson EmbeddedReview where
   fromJson? j := do
     let reviewer ← j.getObjValAs? String "reviewer"
-    let difficultyRanking ← j.getObjValAs? (List String) "difficultyRanking"
-    let noveltyRanking ← j.getObjValAs? (List String) "noveltyRanking"
-    let designQualityRanking ← j.getObjValAs? (List String) "designQualityRanking"
+    let difficultyRanking ← j.getObjValAs? (List CommitId) "difficultyRanking"
+    let noveltyRanking ← j.getObjValAs? (List CommitId) "noveltyRanking"
+    let designQualityRanking ← j.getObjValAs? (List CommitId) "designQualityRanking"
     let verdict ← j.getObjValAs? Verdict "verdict"
     return { reviewer, difficultyRanking, noveltyRanking, designQualityRanking, verdict }
 
@@ -125,13 +145,13 @@ instance : ToJson SignedCommit where
 
 instance : FromJson SignedCommit where
   fromJson? j := do
-    let id ← j.getObjValAs? String "id"
+    let id ← j.getObjValAs? CommitId "id"
     let prId ← j.getObjValAs? Nat "prId"
     let author ← j.getObjValAs? String "author"
     let mergeEpoch ← j.getObjValAs? Nat "mergeEpoch"
     -- Backward compat: legacy commits without prCreatedAt use mergeEpoch
     let prCreatedAt ← (j.getObjValAs? Nat "prCreatedAt") <|> pure mergeEpoch
-    let comparisonTargets ← j.getObjValAs? (List String) "comparisonTargets"
+    let comparisonTargets ← j.getObjValAs? (List CommitId) "comparisonTargets"
     let reviews ← j.getObjValAs? (List EmbeddedReview) "reviews"
     let metaReviews ← j.getObjValAs? (List MetaReview) "metaReviews"
     let founderOverride ← j.getObjValAs? Bool "founderOverride"
@@ -177,7 +197,7 @@ instance : ToJson CommitIndex where
 
 instance : FromJson CommitIndex where
   fromJson? j := do
-    let commitHash ← j.getObjValAs? String "commitHash"
+    let commitHash ← j.getObjValAs? CommitId "commitHash"
     let epoch ← j.getObjValAs? Nat "epoch"
     let score ← j.getObjValAs? CommitScore "score"
     let contributor ← j.getObjValAs? String "contributor"

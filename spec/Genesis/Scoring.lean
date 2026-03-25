@@ -389,7 +389,7 @@ def validateReview
       else []
     let unknown := ranking.filter (fun h => !expected.contains h)
     let ws := ws ++ unknown.map (fun h =>
-      s!"reviewer {review.reviewer}: {dimName} ranking contains unknown hash {h.take 8}...")
+      s!"reviewer {review.reviewer}: {dimName} ranking contains unknown hash {toString h}...")
     let ws := if !ranking.contains currentPR then
         ws ++ [s!"reviewer {review.reviewer}: {dimName} ranking missing current PR"]
       else ws

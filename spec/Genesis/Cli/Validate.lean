@@ -22,7 +22,7 @@ def lookupRanking (pastIndices : List CommitIndex) (rankings : Lean.Json)
   match prior.getLast? with
   | none => none
   | some lastIdx =>
-    (rankings.getObjValAs? (List String) lastIdx.commitHash).toOption
+    (rankings.getObjValAs? (List CommitId) (toString lastIdx.commitHash)).toOption
 
 def main : IO UInt32 := runJsonPipe fun j => do
   let indices ← IO.ofExcept (j.getObjValAs? (List CommitIndex) "indices")
