@@ -371,7 +371,7 @@ impl TranslationContext {
 
         self.emit_inst(pvm_opcode);
         self.emit_data(pvm_rd | (pvm_rs1 << 4));
-        self.emit_imm32(imm);
+        self.emit_var_imm(imm);
 
         Ok(())
     }
@@ -414,7 +414,7 @@ impl TranslationContext {
 
         self.emit_inst(pvm_opcode);
         self.emit_data(pvm_rs2 | (pvm_rs1 << 4));
-        self.emit_imm32(imm);
+        self.emit_var_imm(imm);
 
         Ok(())
     }
@@ -481,7 +481,7 @@ impl TranslationContext {
                 let shamt = imm & if self.is_64bit { 0x3F } else { 0x1F };
                 self.emit_inst(if self.is_64bit { 151 } else { 138 }); // shlo_l_imm_64/32
                 self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                self.emit_imm32(shamt);
+                self.emit_var_imm(shamt);
                 return Ok(());
             }
             2 => 137, // SLTI → set_lt_s_imm
@@ -495,7 +495,7 @@ impl TranslationContext {
                     self.emit_inst(if self.is_64bit { 152 } else { 139 }); // shlo_r_imm_64/32
                 }
                 self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                self.emit_imm32(shamt);
+                self.emit_var_imm(shamt);
                 return Ok(());
             }
             6 => 134, // ORI → or_imm
@@ -505,7 +505,7 @@ impl TranslationContext {
 
         self.emit_inst(pvm_opcode);
         self.emit_data(pvm_rd | (pvm_rs1 << 4));
-        self.emit_imm32(imm);
+        self.emit_var_imm(imm);
 
         Ok(())
     }
@@ -681,13 +681,13 @@ impl TranslationContext {
             0 => { // ADDIW → add_imm_32
                 self.emit_inst(131);
                 self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                self.emit_imm32(imm);
+                self.emit_var_imm(imm);
             }
             1 => { // SLLIW
                 let shamt = imm & 0x1F;
                 self.emit_inst(138); // shlo_l_imm_32
                 self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                self.emit_imm32(shamt);
+                self.emit_var_imm(shamt);
             }
             5 => { // SRLIW/SRAIW
                 let shamt = imm & 0x1F;
@@ -697,7 +697,7 @@ impl TranslationContext {
                     self.emit_inst(139); // shlo_r_imm_32
                 }
                 self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                self.emit_imm32(shamt);
+                self.emit_var_imm(shamt);
             }
             _ => return Err(TranspileError::UnsupportedInstruction {
                 offset: 0, detail: format!("OP-IMM-32 funct3={}", funct3),
@@ -719,14 +719,14 @@ impl TranslationContext {
                     // ADDW rd, x0, rs2 → sext.w rd, rs2 (sign-extend lower 32 bits)
                     self.emit_inst(131); // add_imm_32
                     self.emit_data(pvm_rd | (pvm_rs2 << 4));
-                    self.emit_imm32(0);
+                    self.emit_var_imm(0);
                     return Ok(());
                 }
                 (0x20, 0) => {
                     // SUBW rd, x0, rs2 → negw rd, rs2
                     self.emit_inst(141); // neg_add_imm_32
                     self.emit_data(pvm_rd | (pvm_rs2 << 4));
-                    self.emit_imm32(0);
+                    self.emit_var_imm(0);
                     return Ok(());
                 }
                 _ => {} // fall through to normal handling
@@ -740,14 +740,14 @@ impl TranslationContext {
                     // ADDW rd, rs1, x0 → sext.w rd, rs1
                     self.emit_inst(131); // add_imm_32
                     self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                    self.emit_imm32(0);
+                    self.emit_var_imm(0);
                     return Ok(());
                 }
                 (0x20, 0) => {
                     // SUBW rd, rs1, x0 → sext.w rd, rs1 (subtract zero)
                     self.emit_inst(131); // add_imm_32
                     self.emit_data(pvm_rd | (pvm_rs1 << 4));
-                    self.emit_imm32(0);
+                    self.emit_var_imm(0);
                     return Ok(());
                 }
                 _ => {} // fall through
@@ -819,6 +819,24 @@ impl TranslationContext {
         let bytes = imm.to_le_bytes();
         for b in &bytes {
             self.emit_data(*b);
+        }
+    }
+
+    /// Emit a signed immediate using the minimum byte width.
+    /// PVM instruction categories OneRegOneImm and TwoRegOneImm derive
+    /// immediate length from the instruction skip distance, so shorter
+    /// encodings are automatically decoded correctly via sign extension.
+    pub(crate) fn emit_var_imm(&mut self, imm: i32) {
+        if imm == 0 {
+            // Zero bytes — decoder gets lx=0, sign_extend(0, 0) = 0
+        } else if imm >= -128 && imm <= 127 {
+            self.emit_data(imm as i8 as u8);
+        } else if imm >= -32768 && imm <= 32767 {
+            let bytes = (imm as i16).to_le_bytes();
+            for b in &bytes { self.emit_data(*b); }
+        } else {
+            let bytes = imm.to_le_bytes();
+            for b in &bytes { self.emit_data(*b); }
         }
     }
 
