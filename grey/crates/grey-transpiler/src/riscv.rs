@@ -638,9 +638,12 @@ impl TranslationContext {
                     };
 
                     if let Some(pvm_opcode) = pvm_imm_opcode {
-                        // Undo the load_imm and emit immediate form instead
+                        // Undo the load_imm and emit immediate form instead.
+                        // Must update address_map for this RISC-V instruction since
+                        // its PVM offset shifted when the previous load_imm was removed.
                         self.code.truncate(undo_pos);
                         self.bitmask.truncate(undo_pos);
+                        self.address_map.insert(addr, undo_pos as u32);
                         let pvm_rd = self.require_reg(rd)?;
                         let pvm_base = self.require_reg(base)?;
                         self.emit_inst(pvm_opcode);
