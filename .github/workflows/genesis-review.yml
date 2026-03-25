@@ -55,8 +55,10 @@ jobs:
       - name: Process review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: |
           cargo run -p jar-genesis -- workflow review \
             --pr ${{ github.event.issue.number }} \
-            --comment-author "${{ github.event.comment.user.login }}" \
-            --comment-body "${{ github.event.comment.body }}"
+            --comment-author "$COMMENT_AUTHOR" \
+            --comment-body "$COMMENT_BODY"
