@@ -438,6 +438,21 @@ impl TranslationContext {
 
         if rd == 0 { return Ok(()); } // Write to x0 is a no-op in RISC-V
 
+        // ADDI rd, rs, 0 is the RISC-V `mv rd, rs` pseudo-instruction.
+        // Use compact move_reg (2 bytes) instead of add_imm (6 bytes).
+        if funct3 == 0 && imm == 0 && rs1 != 0 {
+            if rd == rs1 {
+                // ADDI rd, rd, 0 is a NOP
+                self.emit_inst(1); // fallthrough
+                return Ok(());
+            }
+            let pvm_rd = self.require_reg(rd)?;
+            let pvm_rs1 = self.require_reg(rs1)?;
+            self.emit_inst(100); // move_reg
+            self.emit_data(pvm_rd | (pvm_rs1 << 4));
+            return Ok(());
+        }
+
         // When rs1 = x0 (zero register), treat as loading immediate directly
         // because PVM has no zero register — x0 maps to RA which is NOT zero.
         if rs1 == 0 {
