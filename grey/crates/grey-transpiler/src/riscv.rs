@@ -152,8 +152,8 @@ impl TranslationContext {
         }
 
         // Clear pending_load_imm if this isn't an instruction that can consume it.
-        // OP (0x33) and Branch (0x63) handlers check and potentially fuse.
-        if opcode != 0x33 && opcode != 0x63 {
+        // OP (0x33), OP-32 (0x3B), and Branch (0x63) handlers check and potentially fuse.
+        if opcode != 0x33 && opcode != 0x3B && opcode != 0x63 {
             self.pending_load_imm = None; // already emitted, just clear tracking
         }
 
@@ -942,6 +942,51 @@ impl TranslationContext {
 
     fn translate_op_32(&mut self, funct3: u32, funct7: u32, rd: u8, rs1: u8, rs2: u8) -> Result<(), TranspileError> {
         if rd == 0 { return Ok(()); }
+
+        // Fuse load_imm + 32-bit ALU op: ADDW, MULW, SUB as negated ADD.
+        if let Some((load_rd, load_val, undo_pos)) = self.pending_load_imm.take() {
+            if load_val >= i32::MIN as i64 && load_val <= i32::MAX as i64 {
+                let imm = load_val as i32;
+                let (fuse_base, _comm) = if rs2 == load_rd && rs1 != load_rd {
+                    (Some(rs1), true)
+                } else if rs1 == load_rd && rs2 != load_rd && (funct7, funct3) != (0x20, 0) {
+                    (Some(rs2), true)
+                } else {
+                    (None, false)
+                };
+
+                if let Some(base) = fuse_base {
+                    let pvm_imm_opcode = match (funct7, funct3) {
+                        (0, 0) => Some(131),  // ADDW → add_imm_32
+                        (1, 0) => Some(135),  // MULW → mul_imm_32
+                        _ => None,
+                    };
+                    if let Some(pvm_opcode) = pvm_imm_opcode {
+                        self.code.truncate(undo_pos);
+                        self.bitmask.truncate(undo_pos);
+                        let pvm_rd = self.require_reg(rd)?;
+                        let pvm_base = self.require_reg(base)?;
+                        self.emit_inst(pvm_opcode);
+                        self.emit_data(pvm_rd | (pvm_base << 4));
+                        self.emit_var_imm(imm);
+                        return Ok(());
+                    }
+                }
+                // SUB with loaded rs2: SUBW rd, rs1, load_rd → add_imm_32 rd, rs1, -imm
+                if (funct7, funct3) == (0x20, 0) && rs2 == load_rd && rs1 != load_rd {
+                    let neg_imm = (-(load_val as i32) as i64) as i32;
+                    self.code.truncate(undo_pos);
+                    self.bitmask.truncate(undo_pos);
+                    let pvm_rd = self.require_reg(rd)?;
+                    let pvm_rs1 = self.require_reg(rs1)?;
+                    self.emit_inst(131); // add_imm_32
+                    self.emit_data(pvm_rd | (pvm_rs1 << 4));
+                    self.emit_var_imm(neg_imm);
+                    return Ok(());
+                }
+            }
+            // Couldn't fuse
+        }
 
         // Handle x0 as source: PVM reg 0 = RA, not zero.
         if rs1 == 0 {
