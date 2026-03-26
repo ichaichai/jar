@@ -732,6 +732,26 @@ impl TranslationContext {
                     }
                 }
 
+                // Special case: shifts with loaded shift count → shift immediate forms.
+                // SLL/SRL/SRA rd, rs1, load_rd → shlo_l/shlo_r/shar_r_imm rd, rs1, imm
+                if rs2 == load_rd && matches!((funct7, funct3), (0, 1) | (0, 5) | (0x20, 5)) {
+                    let pvm_imm_opcode = match (funct7, funct3) {
+                        (0, 1) => if self.is_64bit { 151 } else { 138 }, // SLL → shlo_l_imm
+                        (0, 5) => if self.is_64bit { 152 } else { 139 }, // SRL → shlo_r_imm
+                        (0x20, 5) => if self.is_64bit { 153 } else { 140 }, // SRA → shar_r_imm
+                        _ => unreachable!(),
+                    };
+                    self.code.truncate(undo_pos);
+                    self.bitmask.truncate(undo_pos);
+                    self.address_map.insert(addr, undo_pos as u32);
+                    let pvm_rd = self.require_reg(rd)?;
+                    let pvm_rs1 = self.require_reg(rs1)?;
+                    self.emit_inst(pvm_imm_opcode);
+                    self.emit_data(pvm_rd | (pvm_rs1 << 4));
+                    self.emit_var_imm(imm);
+                    return Ok(());
+                }
+
                 // Special case: SUB rd, rs1, load_rd → neg_add_imm rd, rs1, -imm
                 // SUB is not commutative, but if rs2 is the loaded register:
                 // rd = rs1 - imm = rs1 + (-imm)
