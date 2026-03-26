@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -63,12 +64,12 @@ jobs:
         run: cp -r spec/_out/html-multi site/spec
 
       - uses: actions/upload-pages-artifact@v4
-        if: github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         with:
           path: site
 
   deploy:
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs: build
     runs-on: ubuntu-latest
     environment:
