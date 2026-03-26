@@ -84,3 +84,9 @@ jobs:
             ARGS="$ARGS --founder-override"
           fi
           cargo run -p jar-genesis -- workflow merge $ARGS
+
+      - name: Trigger docs deployment
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run docs.yml
