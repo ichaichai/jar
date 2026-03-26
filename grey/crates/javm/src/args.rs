@@ -113,6 +113,13 @@ fn read_le_at(code: &[u8], offset: usize, n: usize) -> u64 {
     }
 }
 
+/// Read `n` bytes from code at offset, sign-extend, and return as u64.
+/// Public for use by the recompiler's inline decode path.
+#[inline(always)]
+pub fn read_signed_imm(code: &[u8], offset: usize, n: usize) -> u64 {
+    read_signed_at(code, offset, n)
+}
+
 /// Read `n` bytes and sign-extend (no allocation).
 #[inline(always)]
 fn read_signed_at(code: &[u8], offset: usize, n: usize) -> u64 {

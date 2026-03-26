@@ -341,6 +341,17 @@ impl Compiler {
                         ra: (reg_byte >> 4).min(12) as usize,
                     }
                 }
+                crate::instruction::InstructionCategory::TwoRegOneImm => {
+                    // Inline decode for the ~30% of instructions that are TwoRegImm
+                    // (load/store indirect, immediate ALU ops). Avoids the decode_args
+                    // function call and its 13-arm category match.
+                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
+                    let ra = (reg_byte & 0x0F).min(12) as usize;
+                    let rb = (reg_byte >> 4).min(12) as usize;
+                    let lx = if skip > 1 { (skip - 1).min(4) } else { 0 };
+                    let imm = args::read_signed_imm(code, pc + 2, lx);
+                    Args::TwoRegImm { ra, rb, imm }
+                }
                 _ => args::decode_args(code, pc, skip, category),
             };
 
