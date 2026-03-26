@@ -76,8 +76,17 @@ struct Fixup {
 }
 
 /// x86-64 assembler with label support.
+///
+/// Uses direct pointer writes to the pre-allocated buffer for emission,
+/// avoiding per-byte Vec::push overhead (capacity check + len update).
+/// The Vec's len is only synced at finalization.
 pub struct Assembler {
     pub code: Vec<u8>,
+    /// Write position — may be ahead of code.len(). All emission goes through
+    /// this pointer to avoid Vec::push overhead in the hot compilation loop.
+    buf: *mut u8,
+    write_pos: usize,
+    capacity: usize,
     /// Label ID → bound offset (usize::MAX = unbound).
     labels: Vec<usize>,
     fixups: Vec<Fixup>,
@@ -87,8 +96,14 @@ const LABEL_UNBOUND: usize = usize::MAX;
 
 impl Assembler {
     pub fn new() -> Self {
+        let mut code = Vec::with_capacity(4096);
+        let buf = code.as_mut_ptr();
+        let capacity = code.capacity();
         Self {
-            code: Vec::with_capacity(4096),
+            code,
+            buf,
+            write_pos: 0,
+            capacity,
             labels: Vec::new(),
             fixups: Vec::new(),
         }
@@ -96,10 +111,38 @@ impl Assembler {
 
     /// Create with pre-allocated capacity for code and labels.
     pub fn with_capacity(code_capacity: usize, label_capacity: usize) -> Self {
+        let mut code = Vec::with_capacity(code_capacity);
+        let buf = code.as_mut_ptr();
+        let capacity = code.capacity();
         Self {
-            code: Vec::with_capacity(code_capacity),
+            code,
+            buf,
+            write_pos: 0,
+            capacity,
             labels: Vec::with_capacity(label_capacity),
             fixups: Vec::with_capacity(label_capacity),
+        }
+    }
+
+    /// Ensure at least `additional` bytes of capacity remain.
+    /// Called before emitting large sequences. Most individual instructions
+    /// need at most ~32 bytes, so this is rarely needed mid-compilation.
+    #[cold]
+    fn grow(&mut self, additional: usize) {
+        // Sync len so Vec knows how much data we've written
+        unsafe { self.code.set_len(self.write_pos); }
+        self.code.reserve(additional);
+        self.buf = self.code.as_mut_ptr();
+        self.capacity = self.code.capacity();
+        // Reset len to 0 — we track position via write_pos
+        unsafe { self.code.set_len(0); }
+    }
+
+    /// Check capacity and grow if needed. Inlined for the fast path (no grow).
+    #[inline(always)]
+    pub fn ensure_capacity(&mut self, n: usize) {
+        if self.write_pos + n > self.capacity {
+            self.grow(n);
         }
     }
 
@@ -110,49 +153,94 @@ impl Assembler {
         Label(id)
     }
 
-    /// Bind a label to the current code position.
+    /// Bind a label to the current write position.
     pub fn bind_label(&mut self, label: Label) {
-        self.labels[label.0 as usize] = self.code.len();
+        self.labels[label.0 as usize] = self.write_pos;
     }
 
-    /// Current code offset.
+    /// Current code offset (write position).
     pub fn offset(&self) -> usize {
-        self.code.len()
+        self.write_pos
     }
 
     /// Patch an i32 value at a previously recorded offset.
     pub fn patch_i32(&mut self, offset: usize, value: i32) {
-        self.code[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        debug_assert!(offset + 4 <= self.write_pos);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                self.buf.add(offset),
+                4,
+            );
+        }
     }
 
     // === Raw byte emission ===
+    // All emission writes directly to the buffer via raw pointer,
+    // bypassing Vec::push's capacity check and len update.
 
     #[inline(always)]
     fn emit(&mut self, b: u8) {
-        self.code.push(b);
+        debug_assert!(self.write_pos < self.capacity);
+        unsafe { *self.buf.add(self.write_pos) = b; }
+        self.write_pos += 1;
     }
 
-/// Emit 3 bytes at once.
+    /// Emit 3 bytes at once.
     #[inline(always)]
     fn emit3(&mut self, a: u8, b: u8, c: u8) {
-        self.code.extend_from_slice(&[a, b, c]);
+        debug_assert!(self.write_pos + 3 <= self.capacity);
+        unsafe {
+            let p = self.buf.add(self.write_pos);
+            *p = a;
+            *p.add(1) = b;
+            *p.add(2) = c;
+        }
+        self.write_pos += 3;
     }
 
+    #[inline(always)]
     fn emit_u32(&mut self, v: u32) {
-        self.code.extend_from_slice(&v.to_le_bytes());
+        debug_assert!(self.write_pos + 4 <= self.capacity);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                v.to_le_bytes().as_ptr(),
+                self.buf.add(self.write_pos),
+                4,
+            );
+        }
+        self.write_pos += 4;
     }
 
+    #[inline(always)]
     fn emit_u64(&mut self, v: u64) {
-        self.code.extend_from_slice(&v.to_le_bytes());
+        debug_assert!(self.write_pos + 8 <= self.capacity);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                v.to_le_bytes().as_ptr(),
+                self.buf.add(self.write_pos),
+                8,
+            );
+        }
+        self.write_pos += 8;
     }
 
+    #[inline(always)]
     fn emit_i32(&mut self, v: i32) {
-        self.code.extend_from_slice(&v.to_le_bytes());
+        debug_assert!(self.write_pos + 4 <= self.capacity);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                v.to_le_bytes().as_ptr(),
+                self.buf.add(self.write_pos),
+                4,
+            );
+        }
+        self.write_pos += 4;
     }
 
     /// Emit a 4-byte placeholder for a label fixup, recording the fixup.
     fn emit_label_fixup(&mut self, label: Label) {
-        let offset = self.code.len();
+        let offset = self.write_pos;
         self.fixups.push(Fixup { offset, label });
         self.emit_u32(0); // placeholder
     }
@@ -1047,9 +1135,17 @@ impl Assembler {
         if off == LABEL_UNBOUND { None } else { Some(off) }
     }
 
+    /// Sync Vec length with the write cursor. Call before accessing `self.code` directly.
+    pub fn sync_len(&mut self) {
+        unsafe { self.code.set_len(self.write_pos); }
+    }
+
     /// Resolve all label fixups and return the final machine code.
     /// Panics if any label is unbound.
     pub fn finalize(mut self) -> Vec<u8> {
+        // Sync Vec len with our write position so the returned Vec has correct length.
+        self.sync_len();
+
         for fixup in &self.fixups {
             let target = self.labels[fixup.label.0 as usize];
             assert!(target != LABEL_UNBOUND, "unbound label {:?}", fixup.label);
@@ -1072,6 +1168,7 @@ mod tests {
     fn test_mov_ri64_zero() {
         let mut asm = Assembler::new();
         asm.mov_ri64(Reg::RAX, 0);
+        asm.sync_len();
         // xor eax, eax → 0x31 0xC0
         assert_eq!(&asm.code, &[0x31, 0xC0]);
     }
@@ -1080,6 +1177,7 @@ mod tests {
     fn test_mov_ri64_small() {
         let mut asm = Assembler::new();
         asm.mov_ri64(Reg::RAX, 42);
+        asm.sync_len();
         // mov eax, 42 → 0xB8, 0x2A, 0x00, 0x00, 0x00
         assert_eq!(&asm.code, &[0xB8, 0x2A, 0x00, 0x00, 0x00]);
     }
@@ -1105,6 +1203,7 @@ mod tests {
         let mut asm = Assembler::new();
         asm.push(Reg::R15);
         asm.pop(Reg::R15);
+        asm.sync_len();
         // push r15: 41 57, pop r15: 41 5F
         assert_eq!(&asm.code, &[0x41, 0x57, 0x41, 0x5F]);
     }

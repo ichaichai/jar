@@ -163,8 +163,9 @@ pub struct Compiler {
     fault_stubs: Vec<(Label, u32)>,
     /// Helper function addresses.
     helpers: HelperFns,
-    /// Jump table.
-    jump_table: Vec<u32>,
+    /// Jump table (borrowed, read-only during compilation).
+    jump_table_ptr: *const u32,
+    jump_table_len: usize,
     /// Bitmask reference (1 = instruction start). Stored as raw pointer for self-referential use.
     bitmask_ptr: *const u8,
     bitmask_len: usize,
@@ -186,12 +187,13 @@ const NO_LABEL: Label = Label(0);
 impl Compiler {
     pub fn new(
         bitmask: &[u8],
-        jump_table: Vec<u32>,
+        jump_table: &[u32],
         helpers: HelperFns,
         code_len: usize,
     ) -> Self {
-        // Estimate native code size: ~2x PVM code (empirically ~1.8x after encoding optimizations).
-        let estimated_native = code_len * 2 + 4096;
+        // Estimate native code size: ~3x PVM code provides safety margin for
+        // direct-write emission (no per-byte capacity checks in hot loop).
+        let estimated_native = code_len * 3 + 8192;
         // Labels: ~1 per 16 code bytes (only gas block starts get labels) + fixed overhead.
         let estimated_labels = code_len / 16 + 256;
         let mut asm = Assembler::with_capacity(estimated_native, estimated_labels);
@@ -216,7 +218,8 @@ impl Compiler {
             reg_defs: [RegDef::Unknown; 13],
             reg_defs_active: 0,
             helpers,
-            jump_table,
+            jump_table_ptr: jump_table.as_ptr(),
+            jump_table_len: jump_table.len(),
             bitmask_ptr: bitmask.as_ptr(),
             bitmask_len: bitmask.len(),
             #[cfg(feature = "signals")]
@@ -259,8 +262,9 @@ impl Compiler {
         // Ensure jump table target PCs are marked as gas block starts.
         // Dynamic jumps (jump_ind) dispatch through the dispatch table,
         // so these PCs need labels and dispatch table entries.
-        for i in 0..self.jump_table.len() {
-            let target_pc = self.jump_table[i] as usize;
+        let jt_len = self.jump_table_len;
+        for i in 0..jt_len {
+            let target_pc = unsafe { *self.jump_table_ptr.add(i) } as usize;
             if target_pc < code_len {
                 gas_starts.set(target_pc);
             }
@@ -289,16 +293,6 @@ impl Compiler {
             let skip = skip_table[pc] as usize;
             let next_pc = (pc + 1 + skip) as u32;
 
-            // Only create and bind labels for PCs that need dispatch table entries:
-            // gas block starts (branch targets, post-terminators, post-ecalli,
-            // jump table targets) for OOG/ecalli re-entry and branch dispatch.
-            // Other instruction PCs don't need labels — they're only reached by
-            // native code fallthrough, never by dispatch table lookup.
-            if gas_starts.get(pc) {
-                let label = self.label_for_pc(pc as u32);
-                self.asm.bind_label(label);
-            }
-
             // Full decode — done once, reused for both gas cost and codegen.
             let category = opcode.category();
             let decoded_args = args::decode_args(code, pc, skip, category);
@@ -309,15 +303,13 @@ impl Compiler {
                 gas_starts.set(next_pc as usize);
             }
 
-            // At basic block boundaries (branch targets, post-terminators),
-            // invalidate all reg_defs since registers may have different values
-            // when entered from different paths (e.g., loop back-edges).
+            // Gas block boundary: consolidated check (was 3 separate checks).
+            // Handles label binding, reg invalidation, and gas metering in one branch.
             if gas_starts.get(pc) {
+                let label = self.label_for_pc(pc as u32);
+                self.asm.bind_label(label);
                 self.invalidate_all_regs();
-            }
 
-            // Gas block boundary check
-            if gas_starts.get(pc) {
                 if let Some((stub_label, block_pc, patch_offset)) = pending_gas.take() {
                     let cost = gas_sim.flush_and_get_cost();
                     self.asm.patch_i32(patch_offset, cost as i32);
@@ -860,6 +852,10 @@ impl Compiler {
 
     /// Compile a single PVM instruction.
     fn compile_instruction(&mut self, opcode: Opcode, args: &Args, pc: u32, next_pc: u32) {
+        // Ensure capacity for this instruction's native code emission.
+        // Most PVM instructions emit at most ~64 bytes of x86. Memory access
+        // with helper calls can emit ~128. This avoids per-byte capacity checks.
+        self.asm.ensure_capacity(256);
         match opcode {
             // === A.5.1: No arguments ===
             Opcode::Trap => {
@@ -2370,6 +2366,7 @@ impl Compiler {
     /// Emit prologue: save callee-saved, load PVM registers from context,
     /// then dispatch to the correct basic block based on entry_pc.
     fn emit_prologue(&mut self) {
+        self.asm.ensure_capacity(512); // prologue needs ~200 bytes
         // Save callee-saved registers
         self.asm.push(Reg::RBX);
         self.asm.push(Reg::RBP);
@@ -2410,6 +2407,10 @@ impl Compiler {
 
     /// Emit exit sequences and epilogue.
     fn emit_exit_sequences(&mut self) {
+        // Reserve capacity for exit sequences + all OOG/fault stubs.
+        // Each OOG stub is ~12 bytes, each fault stub is ~10 bytes.
+        let needed = 512 + self.oog_stubs.len() * 16 + self.fault_stubs.len() * 16;
+        self.asm.ensure_capacity(needed);
         // Shared OOG handler that reads PC from SCRATCH — emitted BEFORE OOG
         // stubs so backward jumps from stubs can use jmp rel8 (2 bytes).
         self.asm.bind_label(self.oog_pc_label);

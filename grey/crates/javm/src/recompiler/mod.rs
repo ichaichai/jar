@@ -512,7 +512,7 @@ impl RecompiledPvm {
         let _t2 = std::time::Instant::now();
         let compiler = Compiler::new(
             &bitmask,
-            jump_table.clone(),
+            &jump_table,
             helpers,
             code.len(),
         );
