@@ -304,10 +304,29 @@ impl Compiler {
             let skip = skip_table[pc] as usize;
             let next_pc = (pc + 1 + skip) as u32;
 
-            // Full decode — done once, reused for both gas cost and codegen.
-            // Use static lookup table for category (eliminates match dispatch).
+            // Decode args. ThreeReg and TwoReg categories are inlined here to
+            // skip the decode_args function call (which has a 13-arm match on
+            // category). These categories make up ~40-50% of instructions in
+            // crypto code and their decode is trivial (just 1-2 byte reads).
             let category = crate::instruction::InstructionCategory::from_opcode_byte(code[pc]);
-            let decoded_args = args::decode_args(code, pc, skip, category);
+            let decoded_args = match category {
+                crate::instruction::InstructionCategory::ThreeReg => {
+                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
+                    Args::ThreeReg {
+                        ra: (reg_byte & 0x0F).min(12) as usize,
+                        rb: (reg_byte >> 4).min(12) as usize,
+                        rd: if pc + 2 < code.len() { code[pc + 2].min(12) as usize } else { 0 },
+                    }
+                }
+                crate::instruction::InstructionCategory::TwoReg => {
+                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
+                    Args::TwoReg {
+                        rd: (reg_byte & 0x0F).min(12) as usize,
+                        ra: (reg_byte >> 4).min(12) as usize,
+                    }
+                }
+                _ => args::decode_args(code, pc, skip, category),
+            };
 
             // Gas block boundary: consolidated check (was 3 separate checks).
             // Handles label binding, reg invalidation, and gas metering in one branch.
