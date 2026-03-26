@@ -330,10 +330,9 @@ impl Compiler {
                 pending_gas = Some((stub_label, pc as u32, patch_offset));
             }
 
-            // Feed gas simulator — uses decoded args directly, avoiding:
-            // 1. Redundant raw register byte extraction
-            // 2. Redundant args re-decoding for branch target extraction
-            let fc = crate::gas_cost::fast_cost_from_decoded(
+            // Feed gas simulator via lookup table (single array access + mask
+            // computation, replaces the 256-arm match in fast_cost_from_decoded).
+            let fc = crate::gas_cost::fast_cost_lut(
                 opcode as u8, &decoded_args, pc as u32, code, bitmask,
             );
             gas_sim.feed(&fc);
