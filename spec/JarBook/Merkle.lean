@@ -33,8 +33,5 @@ used for state commitment and availability (GP Appendix D).
 
 # Merkle Mountain Range
 
-{docstring Jar.Merkle.MerkleMountainRange}
-
-{docstring Jar.Merkle.MerkleMountainRange.append}
-
-{docstring Jar.Merkle.MerkleMountainRange.root}
+MMR operations (`mmrAppend`, `mmrSuperPeak`) are defined in `Jar.State` as part of
+the block-level state transition (GP Appendix E).
