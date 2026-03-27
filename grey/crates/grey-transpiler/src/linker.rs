@@ -501,9 +501,41 @@ fn translate_section_linked(
 
             if let Some(&target_addr) = elf.hi20_targets.get(&rv_addr) {
                 // PCREL_HI20: AUIPC for data reference.
-                // Just load the resolved address into rd. The paired LO12 instruction
-                // (which may be several instructions later) will be handled separately.
+                // Peek ahead: if the next instruction is a paired LO12 ADDI (nop),
+                // skip it and set pending_load_imm to enable cascading fusion
+                // with the instruction after (load_ind, store_ind, ALU, branch).
+                let next_addr = rv_addr + 4;
+                if offset + 8 <= data.len() {
+                    if let Some(&_) = elf.lo12_targets.get(&next_addr) {
+                        let next_inst = u32::from_le_bytes([
+                            data[offset+4], data[offset+5], data[offset+6], data[offset+7],
+                        ]);
+                        let next_opcode = next_inst & 0x7f;
+                        let next_funct3 = (next_inst >> 12) & 0x7;
+                        let next_rd = ((next_inst >> 7) & 0x1f) as u8;
+                        let next_rs1 = ((next_inst >> 15) & 0x1f) as u8;
+
+                        if next_opcode == 0x13 && next_funct3 == 0 && next_rs1 == rd {
+                            // LO12 ADDI: address is already complete from HI20.
+                            // Emit load_imm into the ADDI's destination register
+                            // and set pending_load_imm for cascading fusion.
+                            let dest = if next_rd != 0 { next_rd } else { rd };
+                            let pos = ctx.code.len();
+                            ctx.emit_load_imm(dest, target_addr as i64)?;
+                            ctx.pending_load_imm = Some((dest, target_addr as i64, pos));
+                            ctx.address_map.insert(next_addr, ctx.code.len() as u32);
+                            offset += 8; // skip both AUIPC and ADDI
+                            continue;
+                        }
+                    }
+                }
+
+                // No paired LO12 ADDI next — emit load_imm with pending tracking.
+                // This enables fusion with the next load/store/ALU/branch via
+                // pending_load_imm even when the LO12 is a LOAD or STORE directly.
+                let pos = ctx.code.len();
                 ctx.emit_load_imm(rd, target_addr as i64)?;
+                ctx.pending_load_imm = Some((rd, target_addr as i64, pos));
                 offset += 4;
                 continue;
             }
@@ -511,61 +543,41 @@ fn translate_section_linked(
 
         // Check if this instruction has a PCREL_LO12 relocation.
         // If so, the rs1 register already contains the full resolved address
-        // (loaded by the paired AUIPC/HI20 above). We need to override the
-        // instruction's immediate to 0 since the address is already complete.
+        // (loaded by the paired AUIPC/HI20 above). Override immediate to 0
+        // and route through translate_load/translate_store to enable fusion
+        // with the pending_load_imm set by the HI20 handler above.
         if let Some(&_data_addr) = elf.lo12_targets.get(&rv_addr) {
             let rd = ((inst >> 7) & 0x1f) as u8;
             let rs1 = ((inst >> 15) & 0x1f) as u8;
             let funct3 = (inst >> 12) & 0x7;
 
             if opcode == 0x13 && funct3 == 0 {
-                // ADDI rd, rs1, lo12 → just move rs1 to rd (address already loaded)
+                // ADDI rd, rs1, lo12 → address already loaded by HI20.
+                // This path is reached when the HI20 peek-ahead didn't consume
+                // this ADDI (e.g., non-adjacent HI20/LO12 pair).
                 if rd != rs1 && rd != 0 {
                     let pvm_src = ctx.require_reg(rs1)?;
                     let pvm_dst = ctx.require_reg(rd)?;
                     ctx.emit_inst(100); // move_reg
                     ctx.emit_data(pvm_dst | (pvm_src << 4));
                 } else if rd == 0 {
-                    // Write to x0 is nop
                     ctx.emit_inst(1); // fallthrough
                 } else {
-                    // rd == rs1: value already in place, emit nop
                     ctx.emit_inst(1); // fallthrough
                 }
                 offset += 4;
                 continue;
             } else if opcode == 0x03 {
-                // LOAD rd, lo12(rs1) → LOAD rd, 0(rs1) since rs1 already has full address
-                let pvm_dst = ctx.require_reg(rd)?;
-                let pvm_base = ctx.require_reg(rs1)?;
-                let pvm_load_opcode = match funct3 {
-                    0 => 125, 1 => 127, 2 => 129, 3 => 130,
-                    4 => 124, 5 => 126, 6 => 128,
-                    _ => return Err(TranspileError::UnsupportedInstruction {
-                        offset: rv_addr as usize,
-                        detail: format!("load funct3={}", funct3),
-                    }),
-                };
-                ctx.emit_inst(pvm_load_opcode);
-                ctx.emit_data(pvm_dst | (pvm_base << 4));
-                ctx.emit_var_imm(0); // offset 0: address already resolved
+                // LOAD rd, lo12(rs1) → route through translate_load with imm=0.
+                // If pending_load_imm is set (from HI20), this fuses into a
+                // direct load (load_* rd, addr) — saving one instruction.
+                ctx.translate_load(funct3, rd, rs1, 0)?;
                 offset += 4;
                 continue;
             } else if opcode == 0x23 {
-                // STORE rs2, lo12(rs1) → STORE rs2, 0(rs1)
+                // STORE rs2, lo12(rs1) → route through translate_store with imm=0.
                 let rs2 = ((inst >> 20) & 0x1f) as u8;
-                let pvm_data = ctx.require_reg(rs2)?;
-                let pvm_base = ctx.require_reg(rs1)?;
-                let pvm_store_opcode = match funct3 {
-                    0 => 120, 1 => 121, 2 => 122, 3 => 123,
-                    _ => return Err(TranspileError::UnsupportedInstruction {
-                        offset: rv_addr as usize,
-                        detail: format!("store funct3={}", funct3),
-                    }),
-                };
-                ctx.emit_inst(pvm_store_opcode);
-                ctx.emit_data(pvm_data | (pvm_base << 4));
-                ctx.emit_var_imm(0);
+                ctx.translate_store(funct3, rs1, rs2, 0)?;
                 offset += 4;
                 continue;
             }

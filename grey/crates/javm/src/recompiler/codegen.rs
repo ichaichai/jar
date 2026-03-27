@@ -1173,7 +1173,7 @@ impl Compiler {
                 if let Args::RegImm { ra, imm } = args {
                     let addr = *imm as u32;
                     let fn_addr = self.read_fn_for(opcode);
-                    self.asm.mov_ri64(SCRATCH, addr as u64);
+                    self.asm.mov_ri32(SCRATCH, addr);
                     let ra_reg = REG_MAP[*ra];
                     self.emit_mem_read(ra_reg, SCRATCH, fn_addr, pc);
                     // Sign-extend for signed load variants
@@ -1190,7 +1190,7 @@ impl Compiler {
                     let addr = *imm as u32;
                     let ra_reg = REG_MAP[*ra];
                     let fn_addr = self.write_fn_for(opcode);
-                    self.asm.mov_ri64(SCRATCH, addr as u64);
+                    self.asm.mov_ri32(SCRATCH, addr);
                     self.emit_mem_write(true, ra_reg, fn_addr, pc);
                 }
             }

@@ -79,9 +79,9 @@ pub struct TranslationContext {
     /// Pending LUI: (rd, upper_imm). Used to fuse LUI+ADDI into single load_imm.
     pending_lui: Option<(u8, i64)>,
     /// Last emitted load_imm: (rd, value, code_position_before_emit).
-    /// Enables fusion with a subsequent ADD/AND/OR/XOR into the immediate form,
-    /// eliminating the load_imm instruction entirely.
-    pending_load_imm: Option<(u8, i64, usize)>,
+    /// Enables fusion with a subsequent ADD/AND/OR/XOR/load/store into the
+    /// immediate form, eliminating the load_imm instruction entirely.
+    pub(crate) pending_load_imm: Option<(u8, i64, usize)>,
     /// Last immediate loaded into t0 (x5) — used for ecall → ecalli translation.
     last_t0_imm: Option<i32>,
 }
@@ -152,9 +152,9 @@ impl TranslationContext {
         }
 
         // Clear pending_load_imm if this isn't an instruction that can consume it.
-        // OP (0x33), OP-32 (0x3B), Branch (0x63), and Store (0x23) handlers
-        // check and potentially fuse.
-        if opcode != 0x33 && opcode != 0x3B && opcode != 0x63 && opcode != 0x23 {
+        // OP (0x33), OP-32 (0x3B), Branch (0x63), Store (0x23), and Load (0x03)
+        // handlers check and potentially fuse.
+        if opcode != 0x33 && opcode != 0x3B && opcode != 0x63 && opcode != 0x23 && opcode != 0x03 {
             self.pending_load_imm = None; // already emitted, just clear tracking
         }
 
@@ -465,8 +465,40 @@ impl TranslationContext {
         Ok(())
     }
 
-    fn translate_load(&mut self, funct3: u32, rd: u8, rs1: u8, imm: i32) -> Result<(), TranspileError> {
+    pub(crate) fn translate_load(&mut self, funct3: u32, rd: u8, rs1: u8, imm: i32) -> Result<(), TranspileError> {
         if rd == 0 { return Ok(()); } // Write to x0 is a no-op
+
+        // Fuse load_imm + load_ind: if the base register was just loaded with
+        // a constant address, use the direct load form (OneRegOneImm) instead.
+        // Saves one PVM instruction per fused load.
+        if let Some((load_rd, load_val, undo_pos)) = self.pending_load_imm.take() {
+            if rs1 == load_rd {
+                let combined = load_val.wrapping_add(imm as i64);
+                if combined >= i32::MIN as i64 && combined <= i32::MAX as i64 {
+                    let direct_opcode = match funct3 {
+                        0 => Some(53),  // LB → load_i8
+                        1 => Some(55),  // LH → load_i16
+                        2 => Some(57),  // LW → load_i32
+                        3 => Some(58),  // LD → load_u64
+                        4 => Some(52),  // LBU → load_u8
+                        5 => Some(54),  // LHU → load_u16
+                        6 => Some(56),  // LWU → load_u32
+                        _ => None,
+                    };
+                    if let Some(opc) = direct_opcode {
+                        self.code.truncate(undo_pos);
+                        self.bitmask.truncate(undo_pos);
+                        let pvm_rd = self.require_reg(rd)?;
+                        self.emit_inst(opc);
+                        self.emit_data(pvm_rd);
+                        self.emit_var_imm(combined as i32);
+                        return Ok(());
+                    }
+                }
+            }
+            // Couldn't fuse — load_imm already emitted, just proceed
+        }
+
         let pvm_rd = self.require_reg(rd)?;
         let pvm_rs1 = self.require_reg(rs1)?;
 
@@ -491,37 +523,56 @@ impl TranslationContext {
         Ok(())
     }
 
-    fn translate_store(&mut self, funct3: u32, rs1: u8, rs2: u8, imm: i32) -> Result<(), TranspileError> {
-        // Fuse load_imm + store: when the stored value was just loaded as a
-        // constant, use store_imm_ind_* instead of load_imm + store_ind_*.
-        // This eliminates one instruction per constant store.
+    pub(crate) fn translate_store(&mut self, funct3: u32, rs1: u8, rs2: u8, imm: i32) -> Result<(), TranspileError> {
+        // Fuse load_imm + store: check if the base address or stored value was constant.
         if let Some((load_rd, load_val, undo_pos)) = self.pending_load_imm.take() {
-            if rs2 == load_rd && rs1 != load_rd
-                && load_val >= i32::MIN as i64 && load_val <= i32::MAX as i64
-            {
-                let store_val = load_val as i32;
-                let pvm_rs1 = self.require_reg(rs1)?;
-                let pvm_opcode = match funct3 {
-                    0 => 70,  // store_imm_ind_u8
-                    1 => 71,  // store_imm_ind_u16
-                    2 => 72,  // store_imm_ind_u32
-                    3 => 73,  // store_imm_ind_u64
-                    _ => 0,   // can't fuse
-                };
-                if pvm_opcode != 0 {
-                    // Undo the load_imm and emit store_imm_ind instead.
-                    self.code.truncate(undo_pos);
-                    self.bitmask.truncate(undo_pos);
-                    // Format: OneRegTwoImm — base_reg + offset(imm_x) + value(imm_y)
-                    let (lx, offset_bytes) = encode_var_imm(imm);
-                    let (ly, value_bytes) = encode_var_imm(store_val);
-                    // The skip = lx + ly + 1 (for the lx/ly encoding byte after reg_byte)
-                    // reg_byte = ra | (lx << 4), then lx bytes of offset, then ly bytes of value
-                    self.emit_inst(pvm_opcode);
-                    self.emit_data(pvm_rs1 | (lx << 4));
-                    for b in &offset_bytes { self.emit_data(*b); }
-                    for b in &value_bytes { self.emit_data(*b); }
-                    return Ok(());
+            if load_val >= i32::MIN as i64 && load_val <= i32::MAX as i64 {
+                // Case 1: Base register was loaded with constant address → direct store.
+                // store_ind_* data, base, offset  where base = constant addr
+                //   → store_* data, (addr + offset)
+                if rs1 == load_rd && rs2 != load_rd && rs2 != 0 {
+                    let combined = load_val.wrapping_add(imm as i64);
+                    if combined >= i32::MIN as i64 && combined <= i32::MAX as i64 {
+                        let direct_opcode = match funct3 {
+                            0 => Some(59),  // SB → store_u8
+                            1 => Some(60),  // SH → store_u16
+                            2 => Some(61),  // SW → store_u32
+                            3 => Some(62),  // SD → store_u64
+                            _ => None,
+                        };
+                        if let Some(opc) = direct_opcode {
+                            self.code.truncate(undo_pos);
+                            self.bitmask.truncate(undo_pos);
+                            let pvm_rs2 = self.require_reg(rs2)?;
+                            self.emit_inst(opc);
+                            self.emit_data(pvm_rs2);
+                            self.emit_var_imm(combined as i32);
+                            return Ok(());
+                        }
+                    }
+                }
+                // Case 2: Value register was loaded with constant → store_imm_ind (existing).
+                if rs2 == load_rd && rs1 != load_rd {
+                    let store_val = load_val as i32;
+                    let pvm_rs1 = self.require_reg(rs1)?;
+                    let pvm_opcode = match funct3 {
+                        0 => 70,  // store_imm_ind_u8
+                        1 => 71,  // store_imm_ind_u16
+                        2 => 72,  // store_imm_ind_u32
+                        3 => 73,  // store_imm_ind_u64
+                        _ => 0,   // can't fuse
+                    };
+                    if pvm_opcode != 0 {
+                        self.code.truncate(undo_pos);
+                        self.bitmask.truncate(undo_pos);
+                        let (lx, offset_bytes) = encode_var_imm(imm);
+                        let (ly, value_bytes) = encode_var_imm(store_val);
+                        self.emit_inst(pvm_opcode);
+                        self.emit_data(pvm_rs1 | (lx << 4));
+                        for b in &offset_bytes { self.emit_data(*b); }
+                        for b in &value_bytes { self.emit_data(*b); }
+                        return Ok(());
+                    }
                 }
             }
             // Couldn't fuse — load_imm was already emitted, just clear tracking
