@@ -137,8 +137,13 @@ pub struct Assembler {
     buf: *mut u8,
     write_pos: usize,
     capacity: usize,
-    /// Label ID → bound offset (usize::MAX = unbound).
+    /// Label ID → bound offset+1 (0 = unbound).
+    /// Pre-sized via `vec![0; capacity]` which uses calloc (zero-page COW).
+    /// Only pages containing bound labels trigger page faults.
     labels: Vec<usize>,
+    /// Number of labels allocated via new_label/bulk_create_labels.
+    /// The Vec is pre-sized but labels_len tracks the logical length.
+    labels_len: usize,
     fixups: Vec<Fixup>,
 }
 
@@ -158,6 +163,7 @@ impl Assembler {
             write_pos: 0,
             capacity,
             labels: Vec::new(),
+            labels_len: 0,
             fixups: Vec::new(),
         }
     }
@@ -173,7 +179,9 @@ impl Assembler {
             buf,
             write_pos: 0,
             capacity,
-            labels: Vec::with_capacity(label_capacity),
+            // vec![0; n] uses calloc — zero pages via COW, no page faults for untouched entries
+            labels: vec![0usize; label_capacity],
+            labels_len: 0,
             fixups: Vec::with_capacity(label_capacity),
         }
     }
@@ -201,7 +209,8 @@ impl Assembler {
             buf: ptr,
             write_pos: 0,
             capacity: code_capacity,
-            labels: Vec::with_capacity(label_capacity),
+            labels: vec![0usize; label_capacity],
+            labels_len: 0,
             fixups: Vec::with_capacity(label_capacity),
         })
     }
@@ -246,21 +255,28 @@ impl Assembler {
 
     /// Allocate a new label.
     pub fn new_label(&mut self) -> Label {
-        let id = self.labels.len() as u32;
-        self.labels.push(LABEL_UNBOUND);
+        let id = self.labels_len as u32;
+        self.labels_len += 1;
+        // Grow if needed (rare — labels Vec is pre-sized in with_capacity/with_mmap)
+        if self.labels_len > self.labels.len() {
+            self.labels.push(LABEL_UNBOUND);
+        }
         Label(id)
     }
 
     /// Current number of labels allocated.
     pub fn labels_len(&self) -> usize {
-        self.labels.len()
+        self.labels_len
     }
 
-    /// Bulk-allocate `count` unbound labels. Uses zeroed memory (calloc/mmap
-    /// zero-page COW) since LABEL_UNBOUND = 0. Only pages that are later
-    /// bound via bind_label() trigger page faults — unbound labels are free.
+    /// Bulk-allocate `count` unbound labels. The labels Vec is already pre-sized
+    /// via calloc (zero pages). This just advances the logical length counter.
     pub fn bulk_create_labels(&mut self, count: usize) {
-        self.labels.resize(self.labels.len() + count, LABEL_UNBOUND);
+        self.labels_len += count;
+        // Grow if pre-sized Vec wasn't large enough (shouldn't happen normally)
+        if self.labels_len > self.labels.len() {
+            self.labels.resize(self.labels_len, LABEL_UNBOUND);
+        }
     }
 
     /// Bind a label to the current write position.
