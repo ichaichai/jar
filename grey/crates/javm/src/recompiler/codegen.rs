@@ -149,15 +149,11 @@ enum RegDef {
 /// PVM-to-x86-64 compiler.
 pub struct Compiler {
     pub asm: Assembler,
-    /// Pre-created labels for gas block starts, indexed by gas_block_index.
-    /// Replaces the 448KB dense block_labels Vec with a compact ~80KB structure.
-    gas_block_labels: Vec<Label>,
-    /// Sorted PCs of gas block starts (for dispatch table construction).
+    /// Dense label array: one pre-created label per PVM PC.
+    /// label_for_pc(pc) = all_labels[pc] — O(1) array index, no rank query.
+    all_labels: Vec<Label>,
+    /// Gas block start PCs discovered during compilation (for dispatch table).
     gas_block_pcs: Vec<u32>,
-    /// Rank index for O(1) PC → gas_block_index lookup.
-    gas_rank_index: Vec<u32>,
-    /// The gas_starts BitSet (borrowed from compile, stored for rank queries).
-    gas_starts_words: Vec<u64>,
     /// Label for the exit sequence.
     exit_label: Label,
     /// Label for the shared out-of-gas exit (sets EXIT_OOG + jumps to exit).
@@ -200,8 +196,8 @@ impl Compiler {
         // Estimate native code size: ~3x PVM code provides safety margin for
         // direct-write emission (no per-byte capacity checks in hot loop).
         let estimated_native = code_len * 3 + 8192;
-        // Labels: ~1 per 16 code bytes (only gas block starts get labels) + fixed overhead.
-        let estimated_labels = code_len / 16 + 256;
+        // Labels: one per PC (dense array) + fixed overhead for exit/oog/stubs.
+        let estimated_labels = code_len + 1024;
         let mut asm = if use_mmap {
             Assembler::with_mmap(estimated_native, estimated_labels)
                 .unwrap_or_else(|_| Assembler::with_capacity(estimated_native, estimated_labels))
@@ -215,11 +211,14 @@ impl Compiler {
         let panic_label = asm.new_label();
         let fault_exit_label = asm.new_label();
         let oog_pc_label = asm.new_label();
+        // Pre-create one label per PC for O(1) lookup in label_for_pc.
+        let mut all_labels = Vec::with_capacity(code_len + 1);
+        for _ in 0..=code_len {
+            all_labels.push(asm.new_label());
+        }
         Self {
-            gas_block_labels: Vec::new(), // populated in compile()
-            gas_block_pcs: Vec::new(),
-            gas_rank_index: Vec::new(),
-            gas_starts_words: Vec::new(),
+            all_labels,
+            gas_block_pcs: Vec::new(), // populated in compile()
             asm,
             exit_label,
             oog_label,
@@ -240,30 +239,15 @@ impl Compiler {
         }
     }
 
-    /// Look up the pre-created label for a gas block start PC.
-    /// Uses O(1) rank query on the gas_starts BitSet.
+    /// Look up the pre-created label for a PVM PC. O(1) dense array index.
     #[inline]
     fn label_for_pc(&self, pc: u32) -> Label {
-        let pos = pc as usize;
-        let word_idx = pos / 64;
-        let bit_idx = pos % 64;
-        let prefix = self.gas_rank_index[word_idx] as usize;
-        let mask = if bit_idx == 0 { 0 } else { (1u64 << bit_idx) - 1 };
-        let idx = prefix + (self.gas_starts_words[word_idx] & mask).count_ones() as usize;
-        self.gas_block_labels[idx]
+        self.all_labels[pc as usize]
     }
 
     fn is_basic_block_start(&self, idx: u32) -> bool {
         let i = idx as usize;
         i < self.bitmask_len && unsafe { *self.bitmask_ptr.add(i) } == 1
-    }
-
-    /// Check if a PC is a gas block start (branch target, post-terminator, etc.).
-    #[inline]
-    fn is_gas_block_start(&self, pc: u32) -> bool {
-        let pos = pc as usize;
-        pos < self.gas_starts_words.len() * 64
-            && (self.gas_starts_words[pos / 64] >> (pos % 64)) & 1 != 0
     }
 
     /// Compile directly from raw code+bitmask. Streaming single-pass:
@@ -274,48 +258,34 @@ impl Compiler {
         // Emit prologue
         self.emit_prologue();
 
-        // Gas block starts per spec: ϖ = {0} ∪ {post-terminator PCs}.
-        // No branch targets, no jump table entries — those are validation only.
-        let gas_starts = crate::vm::compute_gas_starts_only(code, bitmask);
-
-        // Pre-create labels for ALL gas block starts using ranked bitset.
-        // This replaces the 448KB dense block_labels Vec with ~87KB of compact
-        // data structures (gas_block_pcs + gas_block_labels + rank_index).
-        self.gas_rank_index = gas_starts.build_rank_index();
-        self.gas_block_pcs = gas_starts.collect_set_positions();
-        self.gas_starts_words = gas_starts.words.clone();
-        self.gas_block_labels = Vec::with_capacity(self.gas_block_pcs.len());
-        for _ in 0..self.gas_block_pcs.len() {
-            self.gas_block_labels.push(self.asm.new_label());
-        }
-
-        // Single streaming pass: decode + gas blocks + codegen
+        // True single-pass: no pre-scan. Gas block starts (ϖ) are discovered
+        // inline — PC=0 is always a gas block start, and after every terminator
+        // instruction the next PC becomes a gas block start.
         let mut gas_sim = GasSimulator::new();
         let mut pending_gas: Option<(Label, u32, usize)> = None;
-        let mut gas_block_counter: usize = 0;
+        // Tracks whether the next instruction starts a new gas block.
+        // True initially for PC=0.
+        let mut next_is_gas_start = true;
 
         // Find first instruction start
         let mut pc: usize = 0;
         while pc < code.len() && (pc >= bitmask.len() || bitmask[pc] != 1) { pc += 1; }
 
         while pc < code.len() {
-            // Ensure assembler capacity for this instruction + gas block overhead.
-            // Batched: capacity is generously pre-allocated (code_len*3+8192), so
-            // this check is almost always false (no branch misprediction).
             self.asm.ensure_capacity(512);
 
-            // Fast skip for Fallthrough/Unlikely: these produce zero native code
-            // (especially after gas block coarsening PR #150). Skip all decode,
-            // gas cost, and reg_defs work — just advance PC.
             let raw_byte = code[pc];
+            let is_gas_start = next_is_gas_start;
+            next_is_gas_start = false;
+
+            // Fast skip for Fallthrough/Unlikely: these produce zero native code
+            // but ARE terminators, so the next instruction starts a new gas block.
             if raw_byte == 1 || raw_byte == 2 { // Fallthrough=1, Unlikely=2
                 let skip = crate::vm::skip_for_bitmask(bitmask, pc);
-                // Still need to handle gas block boundary if this PC is one
-                // (rare after coarsening, but possible if it's a branch target)
-                if gas_starts.get(pc) {
-                    let label = self.gas_block_labels[gas_block_counter];
-                    gas_block_counter += 1;
+                if is_gas_start {
+                    let label = self.all_labels[pc];
                     self.asm.bind_label(label);
+                    self.gas_block_pcs.push(pc as u32);
                     self.invalidate_all_regs();
                     if let Some((stub_label, block_pc, patch_offset)) = pending_gas.take() {
                         let cost = gas_sim.flush_and_get_cost();
@@ -329,11 +299,11 @@ impl Compiler {
                     self.asm.jcc_label(Cc::S, stub_label);
                     pending_gas = Some((stub_label, pc as u32, patch_offset));
                 }
-                // Feed gas sim with trivial cost (fallthrough = 2 cycles, 1 decode slot)
                 gas_sim.feed(&crate::gas_cost::FastCost {
                     cycles: 2, decode_slots: 1, exec_unit: 0,
                     src_mask: 0, dst_mask: 0, is_terminator: true, is_move_reg: false,
                 });
+                next_is_gas_start = true; // fallthrough IS a terminator
                 pc += 1 + skip;
                 continue;
             }
@@ -450,12 +420,11 @@ impl Compiler {
                 }
             };
 
-            // Gas block boundary: consolidated check.
-            // Uses counter-based label access (O(1), no rank query needed).
-            if gas_starts.get(pc) {
-                let label = self.gas_block_labels[gas_block_counter];
-                gas_block_counter += 1;
+            // Gas block boundary: discovered inline via next_is_gas_start flag.
+            if is_gas_start {
+                let label = self.all_labels[pc];
                 self.asm.bind_label(label);
+                self.gas_block_pcs.push(pc as u32);
                 self.invalidate_all_regs();
 
                 if let Some((stub_label, block_pc, patch_offset)) = pending_gas.take() {
@@ -539,6 +508,11 @@ impl Compiler {
                 }
             }
 
+            // After a terminator, the next instruction starts a new gas block.
+            if opcode.is_terminator() {
+                next_is_gas_start = true;
+            }
+
             pc += 1 + skip;
         }
 
@@ -552,11 +526,11 @@ impl Compiler {
         self.emit_exit_sequences();
 
         // Build dispatch table: PVM PC → native code offset.
-        // Iterate pre-created gas block PCs (compact, ~10K entries).
+        // gas_block_pcs was populated inline during the single-pass loop.
         let table_len = code_len + 1;
         let mut dispatch_table = vec![0i32; table_len];
-        for (idx, &pvm_pc) in self.gas_block_pcs.iter().enumerate() {
-            let label = self.gas_block_labels[idx];
+        for &pvm_pc in self.gas_block_pcs.iter() {
+            let label = self.all_labels[pvm_pc as usize];
             if let Some(offset) = self.asm.label_offset(label) {
                 dispatch_table[pvm_pc as usize] = offset as i32;
             }
@@ -672,17 +646,9 @@ impl Compiler {
         }
 
         // Bind labels for all 4 instructions
-        for &ipc in &[pc, pc2, pc3, pc4] {
-            // Bind label if this PC is a gas block start (checked via ranked bitset)
-            if ipc < self.gas_starts_words.len() * 64 {
-                let word_idx = ipc / 64;
-                let bit_idx = ipc % 64;
-                if (self.gas_starts_words[word_idx] >> bit_idx) & 1 != 0 {
-                    let label = self.label_for_pc(ipc as u32);
-                    self.asm.bind_label(label);
-                }
-            }
-        }
+        // With post-terminator-only gas blocks, fused instructions (add, mul,
+        // load, store) are never terminators, so none of these PCs are gas block
+        // starts. No label binding needed.
 
         match op4 {
             Opcode::LoadIndU8 | Opcode::LoadIndI8 | Opcode::LoadIndU16 | Opcode::LoadIndI16 |
@@ -741,17 +707,7 @@ impl Compiler {
         gas_sim.feed(&fc);
 
         // Bind labels
-        for &ipc in &[pc, pc2] {
-            // Bind label if this PC is a gas block start (checked via ranked bitset)
-            if ipc < self.gas_starts_words.len() * 64 {
-                let word_idx = ipc / 64;
-                let bit_idx = ipc % 64;
-                if (self.gas_starts_words[word_idx] >> bit_idx) & 1 != 0 {
-                    let label = self.label_for_pc(ipc as u32);
-                    self.asm.bind_label(label);
-                }
-            }
-        }
+        // Fused mul-pair instructions are never terminators — no gas block binding.
 
         let (a, b) = (REG_MAP[*m_ra], REG_MAP[*m_rb]);
         let (rd_lo, rd_hi) = (REG_MAP[*m_rd], REG_MAP[u_rd]);
@@ -2093,7 +2049,7 @@ impl Compiler {
         if !condition {
             return;
         }
-        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
+        if !self.is_basic_block_start(target) {
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.emit_exit(EXIT_PANIC, 0);
             return;
@@ -2221,7 +2177,7 @@ impl Compiler {
 
     /// Emit a branch comparing register against immediate.
     fn emit_branch_imm(&mut self, reg: Reg, imm: u64, cc: Cc, target: u32, _fallthrough: u32, pc: u32) {
-        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
+        if !self.is_basic_block_start(target) {
             // Target not valid → store PC and panic if condition true (cold path)
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.asm.mov_ri64(SCRATCH, imm);
@@ -2236,7 +2192,7 @@ impl Compiler {
 
     /// Emit a branch comparing two registers.
     fn emit_branch_reg(&mut self, a: Reg, b: Reg, cc: Cc, target: u32, _fallthrough: u32, pc: u32) {
-        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
+        if !self.is_basic_block_start(target) {
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.asm.cmp_rr(a, b);
             self.asm.jcc_label(cc, self.panic_label);
