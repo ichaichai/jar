@@ -258,6 +258,14 @@ impl Compiler {
         i < self.bitmask_len && unsafe { *self.bitmask_ptr.add(i) } == 1
     }
 
+    /// Check if a PC is a gas block start (branch target, post-terminator, etc.).
+    #[inline]
+    fn is_gas_block_start(&self, pc: u32) -> bool {
+        let pos = pc as usize;
+        pos < self.gas_starts_words.len() * 64
+            && (self.gas_starts_words[pos / 64] >> (pos % 64)) & 1 != 0
+    }
+
     /// Compile directly from raw code+bitmask. Streaming single-pass:
     /// gas block discovery + decode + gas sim + codegen in one loop.
     pub fn compile(mut self, code: &[u8], bitmask: &[u8]) -> CompileResult {
@@ -2096,7 +2104,7 @@ impl Compiler {
         if !condition {
             return;
         }
-        if !self.is_basic_block_start(target) {
+        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.emit_exit(EXIT_PANIC, 0);
             return;
@@ -2224,7 +2232,7 @@ impl Compiler {
 
     /// Emit a branch comparing register against immediate.
     fn emit_branch_imm(&mut self, reg: Reg, imm: u64, cc: Cc, target: u32, _fallthrough: u32, pc: u32) {
-        if !self.is_basic_block_start(target) {
+        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
             // Target not valid → store PC and panic if condition true (cold path)
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.asm.mov_ri64(SCRATCH, imm);
@@ -2239,7 +2247,7 @@ impl Compiler {
 
     /// Emit a branch comparing two registers.
     fn emit_branch_reg(&mut self, a: Reg, b: Reg, cc: Cc, target: u32, _fallthrough: u32, pc: u32) {
-        if !self.is_basic_block_start(target) {
+        if !self.is_basic_block_start(target) || !self.is_gas_block_start(target) {
             self.asm.mov_store32_imm(CTX, CTX_PC as i32, pc as i32);
             self.asm.cmp_rr(a, b);
             self.asm.jcc_label(cc, self.panic_label);
