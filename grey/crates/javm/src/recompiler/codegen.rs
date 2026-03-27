@@ -180,6 +180,12 @@ pub struct Compiler {
     reg_defs: [RegDef; 13],
     /// Bitmask of registers that have non-Unknown reg_defs (for fast invalidation).
     reg_defs_active: u16,
+    /// Carry flag fusion: after an `add64 D, A, B`, CF = overflow(A+B).
+    /// Stores (D, A, B) so that a subsequent `setLtU C, D, A` or `setLtU C, D, B`
+    /// can use CF directly instead of emitting a redundant `cmp`.
+    /// Cleared by any instruction that clobbers flags (i.e., everything except the
+    /// immediately following setLtU).
+    last_add_cf: Option<(usize, usize, usize)>,
     /// Trap table for signal-based bounds checking: (native_offset, pvm_pc).
     #[cfg(feature = "signals")]
     trap_entries: Vec<(u32, u32)>,
@@ -230,6 +236,7 @@ impl Compiler {
             fault_stubs: Vec::with_capacity(256),
             reg_defs: [RegDef::Unknown; 13],
             reg_defs_active: 0,
+            last_add_cf: None,
             helpers,
             jump_table_ptr: jump_table.as_ptr(),
             jump_table_len: jump_table.len(),
@@ -427,6 +434,7 @@ impl Compiler {
                 self.asm.bind_label(label);
                 self.gas_block_pcs.push(pc as u32);
                 self.invalidate_all_regs();
+                self.last_add_cf = None; // gas check clobbers flags
 
                 if let Some((stub_label, block_pc, patch_offset)) = pending_gas.take() {
                     let cost = gas_sim.flush_and_get_cost();
@@ -459,6 +467,12 @@ impl Compiler {
             if let Some(advance) = fused {
                 pc += advance;
                 continue;
+            }
+
+            // Clear carry flag tracking for all opcodes except Add64 (which sets it)
+            // and SetLtU (which consumes it inside compile_instruction).
+            if !matches!(opcode, Opcode::Add64 | Opcode::SetLtU) {
+                self.last_add_cf = None;
             }
 
             self.compile_instruction(opcode, &decoded_args, pc as u32, next_pc);
@@ -1757,6 +1771,11 @@ impl Compiler {
             }
             Opcode::Add64 => {
                 self.emit_alu3_64_comm(args, true, |a, d, s| { a.add_rr(d, s); });
+                // Track CF: after add64 D, A, B, CF = overflow(A+B).
+                // A subsequent setLtU C, D, A (or D, B) can use CF directly.
+                if let Args::ThreeReg { ra, rb, rd } = args {
+                    self.last_add_cf = Some((*rd, *ra, *rb));
+                }
                 // reg_defs tracking handled by update_reg_defs() in main loop
             }
             Opcode::Sub64 => {
@@ -1864,7 +1883,29 @@ impl Compiler {
             // Set comparisons (three-register)
             Opcode::SetLtU => {
                 if let Args::ThreeReg { ra, rb, rd } = args {
-                    self.emit_setcc_3reg(*ra, *rb, *rd, Cc::B);
+                    // Carry flag fusion: if the previous instruction was add64 D, A, B,
+                    // and this is setLtU C, D, A (or D, B), CF already holds the result.
+                    // Skip the redundant cmp and just use setb.
+                    let fused = if let Some((add_d, add_a, add_b)) = self.last_add_cf {
+                        // setLtU ra, rb, rd means: ra = (rb < rd) ? 1 : 0
+                        // We need: rb == add_d, and (rd == add_a or rd == add_b)
+                        if *rb == add_d && (*rd == add_a || *rd == add_b) {
+                            let d = REG_MAP[*ra];
+                            // CF is valid from the add — use setb directly (no cmp needed).
+                            // Cannot use xor to clear upper bits (it would clobber CF).
+                            // Instead: setb + movzx (2 insns vs xor+cmp+setb = 3 insns).
+                            self.asm.setcc(Cc::B, d);
+                            self.asm.movzx_8_64(d, d);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if !fused {
+                        self.emit_setcc_3reg(*ra, *rb, *rd, Cc::B);
+                    }
                 }
             }
             Opcode::SetLtS => {
