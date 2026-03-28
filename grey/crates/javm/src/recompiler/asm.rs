@@ -147,10 +147,10 @@ pub struct Assembler {
     buf: *mut u8,
     write_pos: usize,
     capacity: usize,
-    /// Label ID → bound offset+1 (0 = unbound).
-    /// Pre-sized via `vec![0; capacity]` which uses calloc (zero-page COW).
-    /// Only pages containing bound labels trigger page faults.
-    labels: Vec<usize>,
+    /// Label ID → bound offset+1 as u32 (0 = unbound). Uses u32 to halve
+    /// memory vs usize (native code always fits in 4GB).
+    /// Pre-sized via `vec![0u32; capacity]` which uses calloc (zero-page COW).
+    labels: Vec<u32>,
     /// Number of labels allocated via new_label/bulk_create_labels.
     /// The Vec is pre-sized but labels_len tracks the logical length.
     labels_len: usize,
@@ -160,7 +160,7 @@ pub struct Assembler {
 /// Unbound label sentinel. We use 0 so that bulk label allocation can use
 /// zeroed memory (calloc / zero-page COW) instead of writing 0xFF to every byte.
 /// Bound labels store `native_offset + 1` to avoid collision with the sentinel.
-const LABEL_UNBOUND: usize = 0;
+const LABEL_UNBOUND: u32 = 0;
 
 impl Default for Assembler {
     fn default() -> Self {
@@ -196,7 +196,7 @@ impl Assembler {
             write_pos: 0,
             capacity,
             // vec![0; n] uses calloc — zero pages via COW, no page faults for untouched entries
-            labels: vec![0usize; label_capacity],
+            labels: vec![0u32; label_capacity],
             labels_len: 0,
             fixups: Vec::with_capacity(2048),
         }
@@ -228,7 +228,7 @@ impl Assembler {
             buf: ptr,
             write_pos: 0,
             capacity: code_capacity,
-            labels: vec![0usize; label_capacity],
+            labels: vec![0u32; label_capacity],
             labels_len: 0,
             // Fixups are far fewer than labels — typically ~2K for large programs
             // (one per forward branch + one per OOG stub jcc). Over-allocating to
@@ -312,7 +312,7 @@ impl Assembler {
 
     /// Bind a label to the current write position.
     pub fn bind_label(&mut self, label: Label) {
-        self.labels[label.0 as usize] = self.write_pos + 1; // +1: 0 is LABEL_UNBOUND
+        self.labels[label.0 as usize] = (self.write_pos + 1) as u32; // +1: 0 is LABEL_UNBOUND
     }
 
     /// Current code offset (write position).
@@ -412,6 +412,7 @@ impl Assembler {
             let target = (bound - 1) as i64;
             let rel = target - (self.write_pos as i64 + 4);
             self.emit_i32(rel as i32);
+
         } else {
             // Forward reference — defer to finalization.
             let offset = self.write_pos;
@@ -1564,7 +1565,7 @@ impl Assembler {
         if off == LABEL_UNBOUND {
             None
         } else {
-            Some(off - 1)
+            Some((off - 1) as usize)
         }
     }
 
