@@ -512,6 +512,7 @@ impl Compiler {
                 raw_rb,
                 reg_byte2 & 0x0F,
             );
+            let is_terminator = fc.is_terminator;
             gas_sim.feed(&fc);
 
             // Peephole fusions
@@ -578,7 +579,7 @@ impl Compiler {
                             // NoArgs, OneImm, OneOffset, TwoRegOneOffset, TwoRegTwoImm:
                             // These either don't write to a register or are terminators
                             // (which invalidate_all_regs at the next gas block boundary).
-                            if opcode.is_terminator() {
+                            if is_terminator {
                                 self.invalidate_all_regs();
                             }
                         }
@@ -587,7 +588,7 @@ impl Compiler {
             }
 
             // After a terminator, the next instruction starts a new gas block.
-            if opcode.is_terminator() {
+            if is_terminator {
                 next_is_gas_start = true;
             }
 
