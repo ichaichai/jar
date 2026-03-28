@@ -294,10 +294,13 @@ impl Compiler {
             pc += 1;
         }
 
+        let code_ptr = code.as_ptr();
+
         while pc < code.len() {
             self.asm.ensure_capacity(512);
 
-            let raw_byte = code[pc];
+            // SAFETY: pc < code_len is guaranteed by the loop condition.
+            let raw_byte = unsafe { *code_ptr.add(pc) };
             let is_gas_start = next_is_gas_start;
             next_is_gas_start = false;
 
@@ -351,8 +354,18 @@ impl Compiler {
             let next_pc = (pc + 1 + skip) as u32;
 
             // Read register bytes once — used by both arg decoding and gas cost.
-            let reg_byte1 = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-            let reg_byte2 = if pc + 2 < code.len() { code[pc + 2] } else { 0 };
+            // SAFETY: pc < code.len(). pc+1/pc+2 may be out of bounds for
+            // instructions at the end, so we bounds-check those.
+            let reg_byte1 = if pc + 1 < code.len() {
+                unsafe { *code_ptr.add(pc + 1) }
+            } else {
+                0
+            };
+            let reg_byte2 = if pc + 2 < code.len() {
+                unsafe { *code_ptr.add(pc + 2) }
+            } else {
+                0
+            };
             let raw_ra = reg_byte1 & 0x0F;
             let raw_rb = reg_byte1 >> 4;
 
