@@ -23,7 +23,7 @@ jobs:
           components: rustfmt
 
       - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all --check
 
   test:
     name: Tests
