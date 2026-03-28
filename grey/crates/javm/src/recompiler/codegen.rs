@@ -349,33 +349,30 @@ impl Compiler {
             };
             let skip = crate::vm::skip_for_bitmask(bitmask, pc);
             let next_pc = (pc + 1 + skip) as u32;
+
+            // Read register bytes once — used by both arg decoding and gas cost.
+            let reg_byte1 = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
+            let reg_byte2 = if pc + 2 < code.len() { code[pc + 2] } else { 0 };
+            let raw_ra = reg_byte1 & 0x0F;
+            let raw_rb = reg_byte1 >> 4;
+
             let decoded_args = match category {
                 crate::instruction::InstructionCategory::ThreeReg => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
                     Args::ThreeReg {
-                        ra: (reg_byte & 0x0F).min(12) as usize,
-                        rb: (reg_byte >> 4).min(12) as usize,
-                        rd: if pc + 2 < code.len() {
-                            code[pc + 2].min(12) as usize
-                        } else {
-                            0
-                        },
+                        ra: raw_ra.min(12) as usize,
+                        rb: raw_rb.min(12) as usize,
+                        rd: reg_byte2.min(12) as usize,
                     }
                 }
                 crate::instruction::InstructionCategory::TwoReg => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
                     Args::TwoReg {
-                        rd: (reg_byte & 0x0F).min(12) as usize,
-                        ra: (reg_byte >> 4).min(12) as usize,
+                        rd: raw_ra.min(12) as usize,
+                        ra: raw_rb.min(12) as usize,
                     }
                 }
                 crate::instruction::InstructionCategory::TwoRegOneImm => {
-                    // Inline decode for the ~30% of instructions that are TwoRegImm
-                    // (load/store indirect, immediate ALU ops). Avoids the decode_args
-                    // function call and its 13-arm category match.
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
-                    let rb = (reg_byte >> 4).min(12) as usize;
+                    let ra = raw_ra.min(12) as usize;
+                    let rb = raw_rb.min(12) as usize;
                     let lx = if skip > 1 { (skip - 1).min(4) } else { 0 };
                     let imm = args::read_signed_imm(code, pc + 2, lx);
                     Args::TwoRegImm { ra, rb, imm }
@@ -388,8 +385,7 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::OneRegOneImm => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
+                    let ra = raw_ra.min(12) as usize;
                     let lx = if skip > 1 { (skip - 1).min(4) } else { 0 };
                     Args::RegImm {
                         ra,
@@ -397,16 +393,14 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::OneRegExtImm => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
+                    let ra = raw_ra.min(12) as usize;
                     Args::RegExtImm {
                         ra,
                         imm: args::read_le_imm(code, pc + 2, 8),
                     }
                 }
                 crate::instruction::InstructionCategory::TwoImm => {
-                    let first = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let lx = (first as usize % 8).min(4);
+                    let lx = (reg_byte1 as usize % 8).min(4);
                     let ly = if skip > lx + 1 {
                         (skip - lx - 1).min(4)
                     } else {
@@ -425,9 +419,8 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::OneRegTwoImm => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
-                    let lx = ((reg_byte as usize / 16) % 8).min(4);
+                    let ra = raw_ra.min(12) as usize;
+                    let lx = ((reg_byte1 as usize / 16) % 8).min(4);
                     let ly = if skip > lx + 1 {
                         (skip - lx - 1).min(4)
                     } else {
@@ -440,9 +433,8 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::OneRegImmOffset => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
-                    let lx = ((reg_byte as usize / 16) % 8).min(4);
+                    let ra = raw_ra.min(12) as usize;
+                    let lx = ((reg_byte1 as usize / 16) % 8).min(4);
                     let ly = if skip > lx + 1 {
                         (skip - lx - 1).min(4)
                     } else {
@@ -457,9 +449,8 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::TwoRegOneOffset => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
-                    let rb = (reg_byte >> 4).min(12) as usize;
+                    let ra = raw_ra.min(12) as usize;
+                    let rb = raw_rb.min(12) as usize;
                     let lx = if skip > 1 { (skip - 1).min(4) } else { 0 };
                     let signed_off = args::read_signed_imm(code, pc + 2, lx) as i64;
                     Args::TwoRegOffset {
@@ -469,11 +460,9 @@ impl Compiler {
                     }
                 }
                 crate::instruction::InstructionCategory::TwoRegTwoImm => {
-                    let reg_byte = if pc + 1 < code.len() { code[pc + 1] } else { 0 };
-                    let ra = (reg_byte & 0x0F).min(12) as usize;
-                    let rb = (reg_byte >> 4).min(12) as usize;
-                    let lx_byte = if pc + 2 < code.len() { code[pc + 2] } else { 0 };
-                    let lx = (lx_byte as usize % 8).min(4);
+                    let ra = raw_ra.min(12) as usize;
+                    let rb = raw_rb.min(12) as usize;
+                    let lx = (reg_byte2 as usize % 8).min(4);
                     let ly = if skip > lx + 2 {
                         (skip - lx - 2).min(4)
                     } else {
@@ -511,13 +500,17 @@ impl Compiler {
             }
 
             // Feed gas simulator via lookup table (single array access + mask
-            // computation, replaces the 256-arm match in fast_cost_from_decoded).
-            let fc = crate::gas_cost::fast_cost_lut(
+            // computation). Uses pre-extracted register bytes to avoid re-reading
+            // code[pc+1] and code[pc+2].
+            let fc = crate::gas_cost::fast_cost_lut_regs(
                 opcode as u8,
                 &decoded_args,
-                pc as u32,
+                pc,
                 code,
                 bitmask,
+                raw_ra,
+                raw_rb,
+                reg_byte2 & 0x0F,
             );
             gas_sim.feed(&fc);
 
@@ -579,12 +572,7 @@ impl Compiler {
                         | crate::instruction::InstructionCategory::OneRegTwoImm
                         | crate::instruction::InstructionCategory::OneRegImmOffset => {
                             // Destination = first register (ra in raw byte low nibble)
-                            let ra = if pc + 1 < code.len() {
-                                (code[pc + 1] & 0x0F).min(12) as usize
-                            } else {
-                                0
-                            };
-                            self.invalidate_reg(ra);
+                            self.invalidate_reg(raw_ra.min(12) as usize);
                         }
                         _ => {
                             // NoArgs, OneImm, OneOffset, TwoRegOneOffset, TwoRegTwoImm:
