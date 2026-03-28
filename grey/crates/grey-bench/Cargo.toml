@@ -10,7 +10,7 @@ default = ["polkavm-generic-sandbox"]
 polkavm-generic-sandbox = ["polkavm/generic-sandbox"]
 
 [dependencies]
-javm = { workspace = true }
+javm = { workspace = true, features = ["signals"] }
 grey-transpiler = { workspace = true }
 polkavm = "0.32.0"
 polkavm-common = "0.32.0"
