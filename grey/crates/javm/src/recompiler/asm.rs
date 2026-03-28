@@ -361,11 +361,11 @@ impl Assembler {
         debug_assert!(self.write_pos + len <= self.capacity);
         unsafe {
             let p = self.buf.add(self.write_pos);
-            // Two u64 writes cover up to 16 bytes (max x86 instruction length).
+            // Always write both halves — the second write may go past the
+            // instruction boundary but the buffer has ample capacity (ensured
+            // by ensure_capacity(512)). Eliminates a branch per emission.
             std::ptr::write_unaligned(p as *mut u64, ib.out as u64);
-            if len > 8 {
-                std::ptr::write_unaligned(p.add(8) as *mut u64, (ib.out >> 64) as u64);
-            }
+            std::ptr::write_unaligned(p.add(8) as *mut u64, (ib.out >> 64) as u64);
         }
         self.write_pos += len;
     }
