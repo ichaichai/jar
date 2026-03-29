@@ -43,10 +43,13 @@ pub fn build_with_options(manifest_dir: &str, min_stack_size: u32) -> PathBuf {
             "-Zunstable-options".to_string(),
             "-Cpanic=immediate-abort".to_string(),
         ],
-        env_overrides: vec![(
-            "CARGO_PROFILE_RELEASE_STRIP".to_string(),
-            "false".to_string(),
-        )],
+        extra_rustc_args: vec![],
+        env_overrides: vec![
+            ("CARGO_PROFILE_RELEASE_STRIP".to_string(), "false".to_string()),
+            ("CARGO_PROFILE_RELEASE_OPT_LEVEL".to_string(), "3".to_string()),
+            ("CARGO_PROFILE_RELEASE_LTO".to_string(), "true".to_string()),
+            ("CARGO_PROFILE_RELEASE_CODEGEN_UNITS".to_string(), "1".to_string()),
+        ],
         rustc_bootstrap: true,
     };
 

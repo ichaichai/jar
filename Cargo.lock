@@ -441,6 +441,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bench-blake2b"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "javm-builtins",
+ "polkavm-derive",
+]
+
+[[package]]
+name = "bench-ecrecover"
+version = "0.1.0"
+dependencies = [
+ "javm-builtins",
+ "k256",
+ "polkavm-derive",
+]
+
+[[package]]
+name = "bench-ed25519"
+version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+ "javm-builtins",
+ "polkavm-derive",
+]
+
+[[package]]
+name = "bench-keccak"
+version = "0.1.0"
+dependencies = [
+ "javm-builtins",
+ "polkavm-derive",
+ "sha3",
+]
+
+[[package]]
+name = "bench-prime-sieve"
+version = "0.1.0"
+dependencies = [
+ "javm-builtins",
+ "polkavm-derive",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -704,6 +748,10 @@ checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "counter-service"
+version = "0.1.0"
 
 [[package]]
 name = "cpufeatures"
@@ -972,6 +1020,12 @@ dependencies = [
  "pkcs8",
  "signature",
 ]
+
+[[package]]
+name = "ed25519-compact"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ce99a9e19c84beb4cc35ece85374335ccc398240712114c85038319ed709bd"
 
 [[package]]
 name = "ed25519-dalek"
@@ -2170,6 +2224,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "javm-builtins"
+version = "0.1.0"
+
+[[package]]
 name = "js-sys"
 version = "0.3.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3139,6 +3197,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "pixels-authorizer"
+version = "0.1.0"
+dependencies = [
+ "ed25519-compact",
+]
+
+[[package]]
+name = "pixels-service"
+version = "0.1.0"
+
+[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3208,6 +3277,37 @@ dependencies = [
  "log",
  "picosimd",
  "polkavm-assembler",
+]
+
+[[package]]
+name = "polkavm-derive"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92147c429bebe93187a5c6963636a1efdfb69734e83b5d9d9aa751775c1dd62f"
+dependencies = [
+ "polkavm-derive-impl-macro",
+]
+
+[[package]]
+name = "polkavm-derive-impl"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a396e7939ae0a723cabf639c23f0704423c8e470d01f52ad0cecf2dc283387f0"
+dependencies = [
+ "polkavm-common",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "polkavm-derive-impl-macro"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19eb3426df09ad4820b9beecd5c6754c5249b8fc5c6e94f0f559fbf7ce082fc3"
+dependencies = [
+ "polkavm-derive-impl",
+ "syn",
 ]
 
 [[package]]
@@ -3839,6 +3939,10 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "sample-service"
+version = "0.1.0"
 
 [[package]]
 name = "scopeguard"

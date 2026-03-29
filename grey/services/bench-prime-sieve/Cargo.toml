@@ -4,15 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "bench_prime_sieve"
-path = "src/main.rs"
-crate-type = ["cdylib"]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+javm-builtins = { path = "../javm-builtins" }
 
 [target.'cfg(target_env = "polkavm")'.dependencies]
 polkavm-derive = "0.32.0"
 
-[profile.release]
-opt-level = 3
-codegen-units = 1
-lto = true
-panic = "abort"
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_env, values("javm", "polkavm"))', 'cfg(target_os, values("none"))'] }
