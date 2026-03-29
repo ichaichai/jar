@@ -590,8 +590,8 @@ fn parse_linked_elf(data: &[u8]) -> Result<LinkedElf, TranspileError> {
 fn rewrite_data_code_ptrs(
     elf: &LinkedElf,
     ctx: &mut TranslationContext,
-    ro_data: &mut Vec<u8>,
-    _rw_data: &mut Vec<u8>,
+    ro_data: &mut [u8],
+    _rw_data: &mut [u8],
 ) {
     let ro_base = elf.stack_size as u64;
     let is_code_addr = |addr: u64| -> bool {
@@ -671,39 +671,35 @@ fn rewrite_data_code_ptrs(
         return;
     }
 
-    let targets: std::collections::HashSet<u64> =
-        entries.iter().map(|e| e.rv_target).collect();
+    let targets: std::collections::HashSet<u64> = entries.iter().map(|e| e.rv_target).collect();
     let rv_to_jt = ctx.build_function_pointer_map(&targets);
 
     for entry in &entries {
-        if let Some(&jt_addr) = rv_to_jt.get(&entry.rv_target) {
-            if entry.data_vaddr >= ro_base
-                && (entry.data_vaddr - ro_base) as usize + entry.size as usize <= ro_data.len()
-            {
-                let off = (entry.data_vaddr - ro_base) as usize;
-                match (entry.size, entry.table_base_rv) {
-                    (8, _) => {
-                        ro_data[off..off + 8]
-                            .copy_from_slice(&(jt_addr as u64).to_le_bytes());
-                    }
-                    (4, None) => {
-                        ro_data[off..off + 4]
-                            .copy_from_slice(&(jt_addr as u32).to_le_bytes());
-                    }
-                    (4, Some(rv_base)) => {
-                        // Relative entry: code does `lw off, table(idx); add target, off, base; jr target`.
-                        // base register holds the PVM mapping of rv_base (from load_imm).
-                        // new_val + pvm_base = jt_addr → new_val = jt_addr - pvm_base.
-                        let pvm_base = ctx
-                            .address_map
-                            .get(&rv_base)
-                            .copied()
-                            .unwrap_or(rv_base as u32);
-                        let new_val = (jt_addr as i64 - pvm_base as i64) as i32;
-                        ro_data[off..off + 4].copy_from_slice(&new_val.to_le_bytes());
-                    }
-                    _ => {}
+        if let Some(&jt_addr) = rv_to_jt.get(&entry.rv_target)
+            && entry.data_vaddr >= ro_base
+            && (entry.data_vaddr - ro_base) as usize + entry.size as usize <= ro_data.len()
+        {
+            let off = (entry.data_vaddr - ro_base) as usize;
+            match (entry.size, entry.table_base_rv) {
+                (8, _) => {
+                    ro_data[off..off + 8].copy_from_slice(&(jt_addr as u64).to_le_bytes());
                 }
+                (4, None) => {
+                    ro_data[off..off + 4].copy_from_slice(&jt_addr.to_le_bytes());
+                }
+                (4, Some(rv_base)) => {
+                    // Relative entry: code does `lw off, table(idx); add target, off, base; jr target`.
+                    // base register holds the PVM mapping of rv_base (from load_imm).
+                    // new_val + pvm_base = jt_addr → new_val = jt_addr - pvm_base.
+                    let pvm_base = ctx
+                        .address_map
+                        .get(&rv_base)
+                        .copied()
+                        .unwrap_or(rv_base as u32);
+                    let new_val = (jt_addr as i64 - pvm_base as i64) as i32;
+                    ro_data[off..off + 4].copy_from_slice(&new_val.to_le_bytes());
+                }
+                _ => {}
             }
         }
     }

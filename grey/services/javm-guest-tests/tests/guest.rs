@@ -54,9 +54,8 @@ fn run_test(test_id: u32, args: &[u8]) {
     );
 
     // --- Recompiler ---
-    let mut recomp =
-        javm::recompiler::initialize_program_recompiled(GUEST_TESTS_BLOB, &[], gas)
-            .expect("blob should be loadable");
+    let mut recomp = javm::recompiler::initialize_program_recompiled(GUEST_TESTS_BLOB, &[], gas)
+        .expect("blob should be loadable");
     // Place input in heap area (same as interpreter)
     let arg_addr = (interp.flat_mem.len() - 4096) as u32;
     recomp.write_bytes(arg_addr, &input);

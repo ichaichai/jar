@@ -27,7 +27,8 @@ static mut OUTPUT: [u8; 4096] = [0; 4096];
 pub fn dispatch(input: &[u8]) -> usize {
     let test_id = u32::from_le_bytes([input[0], input[1], input[2], input[3]]);
     let args = &input[4..];
-    let output = unsafe { &mut *(&raw mut OUTPUT) };
+    #[allow(static_mut_refs)]
+    let output = unsafe { &mut OUTPUT };
     tests::dispatch_by_id(test_id, args, output)
 }
 
