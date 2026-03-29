@@ -1018,13 +1018,13 @@ impl Compiler {
         ra: usize,
         imm_x: i32,
         imm_y: u64,
-        _pvm_pc: u32,
+        pvm_pc: u32,
     ) {
         // Compute address into SCRATCH
         self.emit_addr_to_scratch(ra, imm_x);
 
         let imm_i64 = imm_y as i64;
-        let _fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
+        let fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
 
         #[cfg(feature = "signals")]
         {
@@ -1297,7 +1297,7 @@ impl Compiler {
                     self.asm.mov_ri32(SCRATCH, addr);
                     let imm_val = *imm_y;
                     let imm_i64 = imm_val as i64;
-                    let _fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
+                    let fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
 
                     #[cfg(feature = "signals")]
                     {
