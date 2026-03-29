@@ -1,7 +1,6 @@
 fn main() {
-    // When cross-compiling for RISC-V (as the guest), don't recurse.
-    let target = std::env::var("TARGET").unwrap_or_default();
-    if target.contains("riscv") {
+    // Don't recurse: build-crate sets JAVM_GUEST_BUILD when spawning guest builds.
+    if std::env::var("JAVM_GUEST_BUILD").is_ok() {
         return;
     }
 
