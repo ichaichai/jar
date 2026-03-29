@@ -193,40 +193,6 @@ fn bench_standard(c: &mut Criterion, name: &str, grey_blob: &[u8], pvm_blob: &[u
     group.finish();
 }
 
-/// Like bench_standard but skips cross-VM result validation.
-/// Used when grey and polkavm produce different results due to known transpiler bugs.
-fn bench_standard_no_validate(c: &mut Criterion, name: &str, grey_blob: &[u8], pvm_blob: &[u8]) {
-    let pvm_interp = try_make_polkavm_module(pvm_blob, BackendKind::Interpreter);
-    let pvm_compiler = try_make_polkavm_module(pvm_blob, BackendKind::Compiler);
-
-    let mut group = c.benchmark_group(name);
-
-    group.bench_function("grey-interpreter", |b| {
-        b.iter(|| run_grey_interpreter(grey_blob))
-    });
-
-    group.bench_function("grey-recompiler", |b| {
-        b.iter(|| run_grey_recompiler(grey_blob))
-    });
-
-    if let Some((_, ref pvm_interp_mod)) = pvm_interp {
-        group.bench_function("polkavm-interpreter", |b| {
-            b.iter(|| run_polkavm_module(pvm_interp_mod))
-        });
-    }
-
-    if let Some((ref engine, ref pvm_mod)) = pvm_compiler {
-        group.bench_function("polkavm-compiler-exec", |b| {
-            b.iter(|| run_polkavm_module(pvm_mod))
-        });
-        group.bench_function("polkavm-compiler-full", |b| {
-            b.iter(|| run_polkavm_compile_and_run(pvm_blob, engine))
-        });
-    }
-
-    group.finish();
-}
-
 fn bench_fib(c: &mut Criterion) {
     let grey_blob = grey_fib_blob(FIB_N);
     let pvm_blob = polkavm_fib_blob(FIB_N);
