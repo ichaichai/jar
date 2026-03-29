@@ -60,54 +60,6 @@ pub fn build(manifest_dir: &str, bin_name: &str) -> PathBuf {
     blob_path
 }
 
-/// Build a Grey PVM blob with a custom optimization level.
-///
-/// Same as [`build`] but allows overriding the opt-level (e.g. "1" to avoid
-/// LLVM switch table generation that the transpiler can't handle yet).
-pub fn build_with_opt(manifest_dir: &str, bin_name: &str, opt_level: &str) -> PathBuf {
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-    let blob_path = PathBuf::from(&out_dir).join(format!("{bin_name}.pvm"));
-
-    if std::env::var("SKIP_GUEST_BUILD").is_ok() {
-        if !blob_path.exists() {
-            std::fs::write(&blob_path, b"").ok();
-        }
-        return blob_path;
-    }
-
-    let resolved = build_crate::resolve_manifest_dir(manifest_dir);
-    let target_json_path = build_crate::write_target_json("riscv64em-javm.json", TARGET_JSON);
-
-    let extra_rustflags = vec!["-Cllvm-args=--inline-threshold=275".to_string()];
-    let guest = GuestBuild {
-        manifest_dir: resolved,
-        target_json_path,
-        target_dir_name: TARGET_NAME.to_string(),
-        build_kind: BuildKind::Bin(bin_name.to_string()),
-        extra_rustflags,
-        extra_rustc_args: vec![],
-        env_overrides: vec![
-            (
-                "CARGO_PROFILE_RELEASE_OPT_LEVEL".to_string(),
-                opt_level.to_string(),
-            ),
-            ("CARGO_PROFILE_RELEASE_LTO".to_string(), "true".to_string()),
-            (
-                "CARGO_PROFILE_RELEASE_CODEGEN_UNITS".to_string(),
-                "1".to_string(),
-            ),
-        ],
-        rustc_bootstrap: true,
-    };
-
-    let elf_path = guest.build();
-    let elf_data = std::fs::read(&elf_path).expect("failed to read ELF");
-    let blob = grey_transpiler::link_elf(&elf_data).expect("failed to transpile ELF to PVM blob");
-
-    std::fs::write(&blob_path, &blob).expect("failed to write PVM blob");
-    blob_path
-}
-
 /// Build a Grey PVM blob from a service crate (service program with refine + accumulate).
 ///
 /// Same as [`build`] but uses `link_elf_service` which produces a blob with
