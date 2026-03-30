@@ -55,6 +55,8 @@ pub struct NodeConfig {
     pub genesis_state: Option<State>,
     /// Number of blocks to keep after finalization (0 = archive mode, no pruning).
     pub pruning_depth: u32,
+    /// Optional keystore path for persistent validator keys.
+    pub keystore_path: Option<String>,
 }
 
 // FinalityTracker replaced by GrandpaState (see finality.rs)
@@ -84,6 +86,32 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
     // Get our validator's secrets
     let my_secrets = &all_secrets[config.validator_index as usize];
     let my_bandersnatch = BandersnatchPublicKey(my_secrets.bandersnatch.public_key_bytes());
+
+    // Save keys to keystore if configured (first-time initialization)
+    if let Some(ref ks_path) = config.keystore_path {
+        let ks =
+            crate::keystore::Keystore::open(ks_path).map_err(|e| format!("keystore error: {e}"))?;
+        if !ks.has_keys(config.validator_index) {
+            // Derive seeds for persistence (same deterministic derivation as genesis)
+            let mut ed_seed = [0u8; 32];
+            ed_seed[0] = config.validator_index as u8;
+            ed_seed[1] = (config.validator_index >> 8) as u8;
+            ed_seed[31] = 0xED;
+            let mut band_seed = [0u8; 32];
+            band_seed[0] = config.validator_index as u8;
+            band_seed[1] = (config.validator_index >> 8) as u8;
+            band_seed[31] = 0xBA;
+            let ed_public = my_secrets.ed25519.public_key().0;
+            ks.save_seeds(config.validator_index, &ed_seed, &band_seed, &ed_public)
+                .map_err(|e| format!("keystore save error: {e}"))?;
+        } else {
+            tracing::info!(
+                "Loaded keys for validator {} from keystore at {}",
+                config.validator_index,
+                ks_path
+            );
+        }
+    }
 
     tracing::info!(
         "Validator {} bandersnatch key: 0x{}",

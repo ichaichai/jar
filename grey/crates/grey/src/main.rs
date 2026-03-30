@@ -102,6 +102,12 @@ struct Cli {
     #[arg(long, default_value = "./grey-db")]
     db_path: String,
 
+    /// Path to the keystore directory for validator keys.
+    /// If specified and keys exist for the validator index, they are loaded from disk.
+    /// If not specified, keys are derived deterministically (test mode only).
+    #[arg(long, value_name = "PATH")]
+    keystore_path: Option<String>,
+
     /// Number of blocks to retain after finalization (0 = archive mode, no pruning).
     /// After each finalization, blocks older than finalized_slot - pruning_depth are removed.
     #[arg(long, default_value_t = 0)]
@@ -363,6 +369,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         rpc_cors: cli.rpc_cors,
         genesis_state: None,
         pruning_depth: cli.pruning_depth,
+        keystore_path: cli.keystore_path,
     })
     .await
 }
