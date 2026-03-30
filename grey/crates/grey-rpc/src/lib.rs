@@ -97,6 +97,13 @@ pub trait JamRpc {
     /// Get the chain specification: protocol constants and configuration.
     #[method(name = "jam_getChainSpec")]
     async fn get_chain_spec(&self) -> Result<serde_json::Value, ErrorObjectOwned>;
+
+    /// Get a lightweight state summary for the head (or specified) block.
+    #[method(name = "jam_getState")]
+    async fn get_state_summary(
+        &self,
+        block_hash_hex: Option<String>,
+    ) -> Result<serde_json::Value, ErrorObjectOwned>;
 }
 
 struct RpcImpl {
@@ -355,6 +362,82 @@ impl JamRpcServer for RpcImpl {
             "gas_total_accumulation": c.gas_total_accumulation,
             "gas_refine": c.gas_refine,
             "slot_period": 6,
+        }))
+    }
+
+    async fn get_state_summary(
+        &self,
+        block_hash_hex: Option<String>,
+    ) -> Result<serde_json::Value, ErrorObjectOwned> {
+        // Resolve block hash: use provided hash or default to head
+        let (block_hash, slot) = if let Some(hex) = block_hash_hex {
+            let hash_bytes = hex::decode(hex.trim_start_matches("0x"))
+                .map_err(|e| internal_error(e.to_string()))?;
+            if hash_bytes.len() != 32 {
+                return Err(internal_error("hash must be 32 bytes"));
+            }
+            let mut h = [0u8; 32];
+            h.copy_from_slice(&hash_bytes);
+            let hash = Hash(h);
+            // Look up the block to get the slot
+            let block = self
+                .state
+                .store
+                .get_block(&hash)
+                .map_err(|e| internal_error(e.to_string()))?;
+            (hash, block.header.timeslot)
+        } else {
+            self.state
+                .store
+                .get_head()
+                .map_err(|e| internal_error(e.to_string()))?
+        };
+
+        // Get block header for state_root
+        let block = self
+            .state
+            .store
+            .get_block(&block_hash)
+            .map_err(|e| internal_error(e.to_string()))?;
+
+        // Read entropy: C(6) = 4 × 32 raw bytes
+        let mut entropy_key = [0u8; 31];
+        entropy_key[0] = 6;
+        let entropy_raw = self
+            .state
+            .store
+            .get_state_kv(&block_hash, &entropy_key)
+            .map_err(|e| internal_error(e.to_string()))?
+            .unwrap_or_default();
+        let entropy: Vec<String> = (0..4)
+            .map(|i| {
+                if entropy_raw.len() >= (i + 1) * 32 {
+                    hex::encode(&entropy_raw[i * 32..(i + 1) * 32])
+                } else {
+                    hex::encode([0u8; 32])
+                }
+            })
+            .collect();
+
+        // Read current validators: C(8) = V × 336 bytes
+        let mut validators_key = [0u8; 31];
+        validators_key[0] = 8;
+        let validators_raw = self
+            .state
+            .store
+            .get_state_kv(&block_hash, &validators_key)
+            .map_err(|e| internal_error(e.to_string()))?
+            .unwrap_or_default();
+        let validator_count = validators_raw.len() / 336;
+
+        Ok(serde_json::json!({
+            "block_hash": hex::encode(block_hash.0),
+            "state_root": hex::encode(block.header.state_root.0),
+            "timeslot": slot,
+            "entropy": entropy,
+            "validator_count": validator_count,
+            "core_count": self.state.config.core_count,
+            "epoch_length": self.state.config.epoch_length,
         }))
     }
 }
@@ -897,5 +980,40 @@ mod tests {
         assert_eq!(result["epoch_length"], 12);
         assert_eq!(result["slot_period"], 6);
         assert!(result["gas_total_accumulation"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_state_summary() {
+        let (url, _state, _rx, store, _dir) = setup().await;
+        let config = Config::tiny();
+        let (genesis_state, _secrets) = grey_consensus::genesis::create_genesis(&config);
+
+        let block = test_block(1);
+        let hash = store.put_block(&block).unwrap();
+        store.put_state(&hash, &genesis_state, &config).unwrap();
+        store.set_head(&hash, 1).unwrap();
+
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // Default: head block
+        let result: serde_json::Value = client
+            .request("jam_getState", rpc_params![Option::<String>::None])
+            .await
+            .unwrap();
+        assert_eq!(result["timeslot"], 1);
+        assert!(result["state_root"].is_string());
+        assert!(result["block_hash"].is_string());
+        assert_eq!(result["validator_count"], config.validators_count);
+        // Entropy should be an array of 4 hex strings
+        let entropy = result["entropy"].as_array().unwrap();
+        assert_eq!(entropy.len(), 4);
+
+        // Explicit block hash
+        let result2: serde_json::Value = client
+            .request("jam_getState", rpc_params![Some(hex::encode(hash.0))])
+            .await
+            .unwrap();
+        assert_eq!(result2["timeslot"], 1);
+        assert_eq!(result2["block_hash"], hex::encode(hash.0));
     }
 }
