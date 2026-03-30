@@ -6,6 +6,7 @@
 #[allow(dead_code)]
 mod audit;
 mod chainspec;
+mod config;
 #[allow(dead_code)]
 mod finality;
 mod guarantor;
@@ -34,6 +35,10 @@ enum LogFormat {
 #[derive(Parser, Debug)]
 #[command(name = "grey", about = "JAM blockchain node implementation")]
 struct Cli {
+    /// Path to a TOML configuration file. CLI flags override config file values.
+    #[arg(long, value_name = "PATH")]
+    config: Option<String>,
+
     /// Validator index (0 to V-1)
     #[arg(short = 'i', long, default_value_t = 0)]
     validator_index: u16,
@@ -115,9 +120,54 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
-    // Build EnvFilter: CLI arg > RUST_LOG env var > "info"
+    // Load config file if specified, apply as defaults for unset fields
+    if let Some(ref config_path) = cli.config {
+        let cfg = config::ConfigFile::load(std::path::Path::new(config_path))
+            .map_err(|e| format!("config file error: {e}"))?;
+
+        // Apply config file values as fallbacks. CLI flags take precedence:
+        // for fields with defaults, config file applies only when the CLI
+        // value matches its default.
+        if let Some(v) = cfg.node.validator_index
+            && cli.validator_index == 0
+        {
+            cli.validator_index = v;
+        }
+        if let Some(ref v) = cfg.node.listen_addr
+            && cli.listen_addr == "127.0.0.1"
+        {
+            cli.listen_addr = v.clone();
+        }
+        if let Some(v) = cfg.node.port
+            && cli.port == 9000
+        {
+            cli.port = v;
+        }
+        if let Some(ref v) = cfg.node.db_path
+            && cli.db_path == "./grey-db"
+        {
+            cli.db_path = v.clone();
+        }
+        if let Some(v) = cfg.rpc.port
+            && cli.rpc_port == 9933
+        {
+            cli.rpc_port = v;
+        }
+        if let Some(v) = cfg.rpc.cors
+            && !cli.rpc_cors
+        {
+            cli.rpc_cors = v;
+        }
+        if let Some(ref peers) = cfg.network.boot_peers
+            && cli.peers.is_empty()
+        {
+            cli.peers = peers.clone();
+        }
+    }
+
+    // Build EnvFilter: CLI arg > config file > RUST_LOG env var > "info"
     let env_filter = cli
         .log_level
         .clone()
