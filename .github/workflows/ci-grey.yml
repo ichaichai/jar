@@ -66,16 +66,20 @@ jobs:
 
       - name: Workspace tests (interpreter)
         run: cargo test --locked --workspace
+        env:
+          RUSTFLAGS: "-D warnings"
 
       - name: Workspace tests (recompiler)
         run: cargo test --locked --workspace
         env:
           GREY_PVM: recompiler
+          RUSTFLAGS: "-D warnings"
 
       - name: Workspace tests (recompiler + signals)
         run: cargo test --locked --workspace --features javm/signals
         env:
           GREY_PVM: recompiler
+          RUSTFLAGS: "-D warnings"
 
   harness:
     name: Integration harness

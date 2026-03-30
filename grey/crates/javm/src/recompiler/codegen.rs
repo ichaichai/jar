@@ -1020,17 +1020,20 @@ impl Compiler {
         ra: usize,
         imm_x: i32,
         imm_y: u64,
-        pvm_pc: u32,
+        _pvm_pc: u32,
     ) {
         // Compute address into SCRATCH
         self.emit_addr_to_scratch(ra, imm_x);
 
-        let imm_i64 = imm_y as i64;
-        let fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
+        #[cfg(feature = "signals")]
+        let fits_i32 = {
+            let imm_i64 = imm_y as i64;
+            imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64
+        };
 
         #[cfg(feature = "signals")]
         {
-            self.trap_entries.push((self.asm.offset() as u32, pvm_pc));
+            self.trap_entries.push((self.asm.offset() as u32, _pvm_pc));
 
             match opcode {
                 Opcode::StoreImmIndU8 => {
@@ -1298,8 +1301,12 @@ impl Compiler {
                     let addr = *imm_x as u32;
                     self.asm.mov_ri32(SCRATCH, addr);
                     let imm_val = *imm_y;
-                    let imm_i64 = imm_val as i64;
-                    let fits_i32 = imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64;
+
+                    #[cfg(feature = "signals")]
+                    let fits_i32 = {
+                        let imm_i64 = imm_val as i64;
+                        imm_i64 >= i32::MIN as i64 && imm_i64 <= i32::MAX as i64
+                    };
 
                     #[cfg(feature = "signals")]
                     {
