@@ -83,6 +83,9 @@ pub struct ServiceMetadata {
     pub preimage_count: u32,
 }
 
+/// State key-value pairs: 31-byte key → variable-length value.
+type StateKvs = Vec<([u8; 31], Vec<u8>)>;
+
 /// Persistent store backed by redb.
 pub struct Store {
     db: Database,
@@ -267,6 +270,14 @@ impl Store {
         Ok(true)
     }
 
+    /// Load and decode state KV pairs for a block hash.
+    fn load_state_kvs(&self, block_hash: &Hash) -> Result<StateKvs, StoreError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(STATE)?;
+        let val = table.get(&block_hash.0)?.ok_or(StoreError::NotFound)?;
+        decode_state_kvs(val.value()).ok_or_else(|| StoreError::Codec("invalid state KVs".into()))
+    }
+
     /// Look up a specific service storage entry by computing the expected state key.
     /// Returns None if the entry doesn't exist.
     pub fn get_service_storage(
@@ -275,12 +286,7 @@ impl Store {
         service_id: u32,
         storage_key: &[u8],
     ) -> Result<Option<Vec<u8>>, StoreError> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(STATE)?;
-        let val = table.get(&block_hash.0)?.ok_or(StoreError::NotFound)?;
-        let kvs = decode_state_kvs(val.value())
-            .ok_or_else(|| StoreError::Codec("invalid state KVs".into()))?;
-
+        let kvs = self.load_state_kvs(block_hash)?;
         let expected_key =
             grey_merkle::state_serial::compute_storage_state_key(service_id, storage_key);
         for (key, value) in &kvs {
@@ -298,12 +304,7 @@ impl Store {
         block_hash: &Hash,
         service_id: u32,
     ) -> Result<Option<Hash>, StoreError> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(STATE)?;
-        let val = table.get(&block_hash.0)?.ok_or(StoreError::NotFound)?;
-        let kvs = decode_state_kvs(val.value())
-            .ok_or_else(|| StoreError::Codec("invalid state KVs".into()))?;
-
+        let kvs = self.load_state_kvs(block_hash)?;
         let expected_key = grey_merkle::state_serial::key_for_service_pub(255, service_id);
         for (key, value) in &kvs {
             if *key == expected_key {
@@ -330,12 +331,7 @@ impl Store {
         block_hash: &Hash,
         service_id: u32,
     ) -> Result<Option<ServiceMetadata>, StoreError> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(STATE)?;
-        let val = table.get(&block_hash.0)?.ok_or(StoreError::NotFound)?;
-        let kvs = decode_state_kvs(val.value())
-            .ok_or_else(|| StoreError::Codec("invalid state KVs".into()))?;
-
+        let kvs = self.load_state_kvs(block_hash)?;
         let expected_key = grey_merkle::state_serial::key_for_service_pub(255, service_id);
         for (key, value) in &kvs {
             if *key == expected_key {
@@ -391,12 +387,7 @@ impl Store {
         block_hash: &Hash,
         state_key: &[u8; 31],
     ) -> Result<Option<Vec<u8>>, StoreError> {
-        let txn = self.db.begin_read()?;
-        let table = txn.open_table(STATE)?;
-        let val = table.get(&block_hash.0)?.ok_or(StoreError::NotFound)?;
-        let kvs = decode_state_kvs(val.value())
-            .ok_or_else(|| StoreError::Codec("invalid state KVs".into()))?;
-
+        let kvs = self.load_state_kvs(block_hash)?;
         for (key, value) in &kvs {
             if key == state_key {
                 return Ok(Some(value.clone()));
