@@ -75,6 +75,11 @@ struct Cli {
     #[arg(long)]
     info: bool,
 
+    /// Verify integrity of all stored state data and exit.
+    /// Checks blake2b checksums for every stored state entry.
+    #[arg(long)]
+    verify_state: bool,
+
     /// Run a sequential block production test (no networking)
     #[arg(long)]
     test: bool,
@@ -291,6 +296,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if cli.info {
         chainspec::print_genesis_info(&config);
+        return Ok(());
+    }
+
+    if cli.verify_state {
+        let db_path = format!("{}/node-{}.redb", cli.db_path, cli.validator_index);
+        println!("Verifying state integrity in {}...", db_path);
+        let store = grey_store::Store::open(&db_path)?;
+        let (verified, skipped, failed) = store.verify_all_states()?;
+        println!(
+            "State integrity check complete: {} verified, {} skipped (no checksum), {} FAILED",
+            verified, skipped, failed
+        );
+        if failed > 0 {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 

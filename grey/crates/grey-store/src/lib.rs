@@ -276,6 +276,45 @@ impl Store {
         Ok(true)
     }
 
+    /// Verify integrity of all stored state entries.
+    ///
+    /// Returns `(verified, skipped, failed)` counts:
+    /// - verified: checksum matched
+    /// - skipped: no checksum stored (legacy data)
+    /// - failed: checksum mismatch (corruption detected)
+    ///
+    /// Logs each failure but does not stop on first error.
+    pub fn verify_all_states(&self) -> Result<(u32, u32, u32), StoreError> {
+        let txn = self.db.begin_read()?;
+        let state_table = txn.open_table(STATE)?;
+
+        let mut block_hashes: Vec<[u8; 32]> = Vec::new();
+        for entry in state_table.iter()? {
+            let entry = entry?;
+            block_hashes.push(*entry.0.value());
+        }
+        drop(state_table);
+        drop(txn);
+
+        let mut verified = 0u32;
+        let mut skipped = 0u32;
+        let mut failed = 0u32;
+
+        for hash in &block_hashes {
+            match self.verify_state_integrity(&Hash(*hash)) {
+                Ok(true) => verified += 1,
+                Ok(false) => skipped += 1,
+                Err(StoreError::IntegrityError { .. }) => {
+                    failed += 1;
+                    // Error already logged by verify_state_integrity or caller
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok((verified, skipped, failed))
+    }
+
     /// Load and decode state KV pairs for a block hash.
     fn load_state_kvs(&self, block_hash: &Hash) -> Result<StateKvs, StoreError> {
         let txn = self.db.begin_read()?;
