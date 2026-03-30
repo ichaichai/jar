@@ -32,6 +32,11 @@ struct Cli {
     /// RPC endpoint URL.
     #[arg(long, default_value = "http://localhost:9933")]
     rpc: String,
+
+    /// Run only the named scenario (e.g. "serial", "repeat", "liveness").
+    /// If not specified, all scenarios run in order.
+    #[arg(long, value_name = "NAME")]
+    scenario: Option<String>,
 }
 
 #[tokio::main]
@@ -101,7 +106,23 @@ async fn main() {
 
     // Run scenarios sequentially.
     let mut results = Vec::new();
-    let scenario_list = ["serial", "repeat", "liveness"];
+    let all_scenarios = ["serial", "repeat", "liveness"];
+
+    // Filter to a single scenario if --scenario is specified.
+    let scenario_list: Vec<&str> = if let Some(ref name) = cli.scenario {
+        if !all_scenarios.contains(&name.as_str()) {
+            error!(
+                "unknown scenario: {:?} (available: {})",
+                name,
+                all_scenarios.join(", ")
+            );
+            std::process::exit(1);
+        }
+        vec![name.as_str()]
+    } else {
+        all_scenarios.to_vec()
+    };
+
     for (i, name) in scenario_list.iter().enumerate() {
         println!("[{}/{}] {name}", i + 1, scenario_list.len());
         let result = match *name {
