@@ -53,9 +53,10 @@ jobs:
           SKIP_GUEST_BUILD: 1
 
       - name: cargo doc
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
+          SKIP_GUEST_BUILD: 1
 
   test:
     name: Tests
