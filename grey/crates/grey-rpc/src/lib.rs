@@ -167,6 +167,23 @@ impl JamRpcServer for RpcImpl {
             return Err(internal_error("empty work package"));
         }
 
+        // Reject oversized payloads before further processing (GP constant W_B).
+        if data.len() > grey_types::constants::MAX_WORK_PACKAGE_BLOB_SIZE as usize {
+            return Err(internal_error(format!(
+                "work package too large: {} bytes (max {})",
+                data.len(),
+                grey_types::constants::MAX_WORK_PACKAGE_BLOB_SIZE
+            )));
+        }
+
+        // Verify the payload is a valid JAM-encoded work package.
+        use grey_codec::Decode;
+        if grey_types::work::WorkPackage::decode(&data).is_err() {
+            return Err(internal_error(
+                "invalid work package: JAM codec decode failed",
+            ));
+        }
+
         let hash = grey_crypto::blake2b_256(&data);
 
         self.state
@@ -623,13 +640,36 @@ mod tests {
         assert_eq!(result["slot"], 60);
     }
 
+    /// Build a minimal valid JAM-encoded work package for testing.
+    fn minimal_work_package_bytes() -> Vec<u8> {
+        use grey_codec::Encode;
+        use grey_types::work::{RefinementContext, WorkPackage};
+        let wp = WorkPackage {
+            auth_code_host: 0,
+            auth_code_hash: Hash([0u8; 32]),
+            context: RefinementContext {
+                anchor: Hash([0u8; 32]),
+                state_root: Hash([0u8; 32]),
+                beefy_root: Hash([0u8; 32]),
+                lookup_anchor: Hash([0u8; 32]),
+                lookup_anchor_timeslot: 0,
+                prerequisites: vec![],
+            },
+            authorization: vec![],
+            authorizer_config: vec![],
+            items: vec![],
+        };
+        wp.encode()
+    }
+
     #[tokio::test]
     async fn test_submit_work_package() {
         let (url, _state, mut rx, _store, _dir) = setup().await;
         let client = HttpClientBuilder::default().build(&url).unwrap();
-        let data = hex::encode([0xAB; 16]);
+        let wp_bytes = minimal_work_package_bytes();
+        let data_hex = hex::encode(&wp_bytes);
         let result: serde_json::Value = client
-            .request("jam_submitWorkPackage", rpc_params![data])
+            .request("jam_submitWorkPackage", rpc_params![data_hex])
             .await
             .unwrap();
         assert_eq!(result["status"], "submitted");
@@ -639,7 +679,7 @@ mod tests {
         let cmd = rx.try_recv().unwrap();
         match cmd {
             RpcCommand::SubmitWorkPackage { data } => {
-                assert_eq!(data, vec![0xAB; 16]);
+                assert_eq!(data, wp_bytes);
             }
         }
     }
@@ -650,6 +690,35 @@ mod tests {
         let client = HttpClientBuilder::default().build(&url).unwrap();
         let result: Result<serde_json::Value, _> = client
             .request("jam_submitWorkPackage", rpc_params![""])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_submit_invalid_codec_work_package() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+        // Random bytes that won't decode as a valid WorkPackage
+        let result: Result<serde_json::Value, _> = client
+            .request(
+                "jam_submitWorkPackage",
+                rpc_params![hex::encode([0xAB; 16])],
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_submit_oversized_work_package() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+        // Exceeds MAX_WORK_PACKAGE_BLOB_SIZE (13,791,360 bytes)
+        let oversized = vec![0u8; 14_000_000];
+        let result: Result<serde_json::Value, _> = client
+            .request(
+                "jam_submitWorkPackage",
+                rpc_params![hex::encode(&oversized)],
+            )
             .await;
         assert!(result.is_err());
     }
