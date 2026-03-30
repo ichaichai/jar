@@ -137,68 +137,32 @@ impl Decode for bool {
 
 // --- Fixed-size cryptographic type decoders ---
 
-impl Decode for grey_types::Hash {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 32)?;
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&data[..32]);
-        Ok((grey_types::Hash(bytes), 32))
-    }
+/// Implement Decode for a newtype wrapper around a fixed-size byte array.
+/// All these types are `Type([u8; N])` and decode by reading exactly N bytes.
+macro_rules! impl_decode_fixed_bytes {
+    ($($type:ty => $size:expr),+ $(,)?) => {
+        $(
+            impl Decode for $type {
+                fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
+                    ensure_bytes(data, $size)?;
+                    let mut bytes = [0u8; $size];
+                    bytes.copy_from_slice(&data[..$size]);
+                    Ok((Self(bytes), $size))
+                }
+            }
+        )+
+    };
 }
 
-impl Decode for grey_types::Ed25519PublicKey {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 32)?;
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&data[..32]);
-        Ok((grey_types::Ed25519PublicKey(bytes), 32))
-    }
-}
-
-impl Decode for grey_types::BandersnatchPublicKey {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 32)?;
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&data[..32]);
-        Ok((grey_types::BandersnatchPublicKey(bytes), 32))
-    }
-}
-
-impl Decode for grey_types::BandersnatchSignature {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 96)?;
-        let mut bytes = [0u8; 96];
-        bytes.copy_from_slice(&data[..96]);
-        Ok((grey_types::BandersnatchSignature(bytes), 96))
-    }
-}
-
-impl Decode for grey_types::Ed25519Signature {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 64)?;
-        let mut bytes = [0u8; 64];
-        bytes.copy_from_slice(&data[..64]);
-        Ok((grey_types::Ed25519Signature(bytes), 64))
-    }
-}
-
-impl Decode for grey_types::BlsPublicKey {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 144)?;
-        let mut bytes = [0u8; 144];
-        bytes.copy_from_slice(&data[..144]);
-        Ok((grey_types::BlsPublicKey(bytes), 144))
-    }
-}
-
-impl Decode for grey_types::BandersnatchRingRoot {
-    fn decode(data: &[u8]) -> Result<(Self, usize), CodecError> {
-        ensure_bytes(data, 144)?;
-        let mut bytes = [0u8; 144];
-        bytes.copy_from_slice(&data[..144]);
-        Ok((grey_types::BandersnatchRingRoot(bytes), 144))
-    }
-}
+impl_decode_fixed_bytes!(
+    grey_types::Hash => 32,
+    grey_types::Ed25519PublicKey => 32,
+    grey_types::BandersnatchPublicKey => 32,
+    grey_types::Ed25519Signature => 64,
+    grey_types::BandersnatchSignature => 96,
+    grey_types::BlsPublicKey => 144,
+    grey_types::BandersnatchRingRoot => 144,
+);
 
 // --- Generic container decoders ---
 

@@ -109,35 +109,27 @@ impl Encode for [u8; 96] {
     }
 }
 
-impl Encode for grey_types::Hash {
-    fn encode_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
+/// Implement Encode for newtype wrappers around byte arrays.
+/// All these types are `Type([u8; N])` and encode by writing all bytes.
+macro_rules! impl_encode_fixed_bytes {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl Encode for $type {
+                fn encode_to(&self, buf: &mut Vec<u8>) {
+                    buf.extend_from_slice(&self.0);
+                }
+            }
+        )+
+    };
 }
 
-impl Encode for grey_types::Ed25519PublicKey {
-    fn encode_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-}
-
-impl Encode for grey_types::BandersnatchPublicKey {
-    fn encode_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-}
-
-impl Encode for grey_types::BandersnatchSignature {
-    fn encode_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-}
-
-impl Encode for grey_types::Ed25519Signature {
-    fn encode_to(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-}
+impl_encode_fixed_bytes!(
+    grey_types::Hash,
+    grey_types::Ed25519PublicKey,
+    grey_types::BandersnatchPublicKey,
+    grey_types::BandersnatchSignature,
+    grey_types::Ed25519Signature,
+);
 
 /// Encode a variable-length sequence with length prefix.
 impl<T: Encode> Encode for Vec<T> {

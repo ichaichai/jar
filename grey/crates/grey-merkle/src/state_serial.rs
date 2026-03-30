@@ -422,31 +422,14 @@ fn serialize_safrole(safrole: &SafroleState, config: &Config) -> Vec<u8> {
 /// C(5): ψ judgments — 4 sorted sets.
 fn serialize_judgments(judgments: &Judgments) -> Vec<u8> {
     let mut buf = Vec::new();
-
-    // ↕ψG
-    encode_compact(judgments.good.len() as u64, &mut buf);
-    for hash in &judgments.good {
-        buf.extend_from_slice(&hash.0);
-    }
-
-    // ↕ψB
-    encode_compact(judgments.bad.len() as u64, &mut buf);
-    for hash in &judgments.bad {
-        buf.extend_from_slice(&hash.0);
-    }
-
-    // ↕ψW
-    encode_compact(judgments.wonky.len() as u64, &mut buf);
-    for hash in &judgments.wonky {
-        buf.extend_from_slice(&hash.0);
-    }
-
-    // ↕ψO
+    encode_hash_set(&judgments.good, &mut buf);
+    encode_hash_set(&judgments.bad, &mut buf);
+    encode_hash_set(&judgments.wonky, &mut buf);
+    // ↕ψO — offenders are Ed25519PublicKey (also 32 bytes)
     encode_compact(judgments.offenders.len() as u64, &mut buf);
     for key in &judgments.offenders {
         buf.extend_from_slice(&key.0);
     }
-
     buf
 }
 
@@ -854,6 +837,27 @@ fn read_hash(data: &[u8], pos: &mut usize) -> Result<Hash, String> {
     Ok(Hash(h))
 }
 
+/// Encode a compact-length-prefixed collection of 32-byte hashes.
+fn encode_hash_set(hashes: &std::collections::BTreeSet<Hash>, buf: &mut Vec<u8>) {
+    encode_compact(hashes.len() as u64, buf);
+    for hash in hashes {
+        buf.extend_from_slice(&hash.0);
+    }
+}
+
+/// Decode a compact-length-prefixed collection of 32-byte hashes into a BTreeSet.
+fn decode_hash_set(
+    data: &[u8],
+    pos: &mut usize,
+) -> Result<std::collections::BTreeSet<Hash>, String> {
+    let count = decode_compact(data, pos)? as usize;
+    let mut set = std::collections::BTreeSet::new();
+    for _ in 0..count {
+        set.insert(read_hash(data, pos)?);
+    }
+    Ok(set)
+}
+
 fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
     if *pos + 4 > data.len() {
         return Err("unexpected end reading u32".into());
@@ -1054,37 +1058,30 @@ fn deserialize_safrole(data: &[u8], config: &Config) -> Result<SafroleState, Str
 
 fn deserialize_judgments(data: &[u8]) -> Result<Judgments, String> {
     let mut pos = 0;
-    let mut judgments = Judgments::default();
 
-    let good_count = decode_compact(data, &mut pos)? as usize;
-    for _ in 0..good_count {
-        judgments.good.insert(read_hash(data, &mut pos)?);
-    }
+    let good = decode_hash_set(data, &mut pos)?;
+    let bad = decode_hash_set(data, &mut pos)?;
+    let wonky = decode_hash_set(data, &mut pos)?;
 
-    let bad_count = decode_compact(data, &mut pos)? as usize;
-    for _ in 0..bad_count {
-        judgments.bad.insert(read_hash(data, &mut pos)?);
-    }
-
-    let wonky_count = decode_compact(data, &mut pos)? as usize;
-    for _ in 0..wonky_count {
-        judgments.wonky.insert(read_hash(data, &mut pos)?);
-    }
-
+    // Offenders are Ed25519PublicKey (also 32 bytes, but different type)
     let offender_count = decode_compact(data, &mut pos)? as usize;
+    let mut offenders = std::collections::BTreeSet::new();
     for _ in 0..offender_count {
         if pos + 32 > data.len() {
             return Err("unexpected end reading offender key".into());
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(&data[pos..pos + 32]);
-        judgments
-            .offenders
-            .insert(grey_types::Ed25519PublicKey(key));
+        offenders.insert(grey_types::Ed25519PublicKey(key));
         pos += 32;
     }
 
-    Ok(judgments)
+    Ok(Judgments {
+        good,
+        bad,
+        wonky,
+        offenders,
+    })
 }
 
 fn deserialize_entropy(data: &[u8]) -> Result<[Hash; 4], String> {
