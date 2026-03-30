@@ -4,12 +4,17 @@ on:
   issue_comment:
     types: [created]
 
+concurrency:
+  group: genesis-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
 jobs:
   check-review:
     if: >
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
+    environment: genesis
     permissions:
       pull-requests: write
       actions: write
