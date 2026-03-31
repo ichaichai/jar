@@ -722,91 +722,7 @@ where
         } else if is_get && path == "/metrics" {
             let state = self.state.clone();
             Box::pin(async move {
-                let status = state.status.read().await;
-                let head_slot = status.head_slot;
-                let finalized_slot = status.finalized_slot;
-                let blocks_authored = status.blocks_authored;
-                let blocks_imported = status.blocks_imported;
-                let validator_index = status.validator_index;
-                let grandpa_round = status.grandpa_round;
-                let peer_count = state.peer_count.load(std::sync::atomic::Ordering::Relaxed);
-                let queue_events = state
-                    .queue_depth_events
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let queue_commands = state
-                    .queue_depth_commands
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let queue_rpc = state
-                    .queue_depth_rpc
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let pending_blocks = state
-                    .pending_blocks_depth
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let finality_lag = head_slot.saturating_sub(finalized_slot);
-                let wp_submitted = state
-                    .work_packages_submitted
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                drop(status);
-
-                let stored_blocks = state.store.block_count().unwrap_or(0);
-                let stored_states = state.store.state_count().unwrap_or(0);
-                let stored_chunks = state.store.chunk_count().unwrap_or(0);
-                let stored_votes = state.store.vote_count().unwrap_or(0);
-
-                let body = format!(
-                    "# HELP grey_block_height Current head slot.\n\
-                     # TYPE grey_block_height gauge\n\
-                     grey_block_height {head_slot}\n\
-                     # HELP grey_finalized_height Last finalized slot.\n\
-                     # TYPE grey_finalized_height gauge\n\
-                     grey_finalized_height {finalized_slot}\n\
-                     # HELP grey_blocks_produced_total Blocks authored by this node.\n\
-                     # TYPE grey_blocks_produced_total counter\n\
-                     grey_blocks_produced_total {blocks_authored}\n\
-                     # HELP grey_blocks_imported_total Blocks received and imported.\n\
-                     # TYPE grey_blocks_imported_total counter\n\
-                     grey_blocks_imported_total {blocks_imported}\n\
-                     # HELP grey_stored_blocks Number of blocks in the database.\n\
-                     # TYPE grey_stored_blocks gauge\n\
-                     grey_stored_blocks {stored_blocks}\n\
-                     # HELP grey_stored_states Number of state entries in the database.\n\
-                     # TYPE grey_stored_states gauge\n\
-                     grey_stored_states {stored_states}\n\
-                     # HELP grey_stored_chunks Number of DA chunks in the database.\n\
-                     # TYPE grey_stored_chunks gauge\n\
-                     grey_stored_chunks {stored_chunks}\n\
-                     # HELP grey_stored_votes Number of GRANDPA votes in the database.\n\
-                     # TYPE grey_stored_votes gauge\n\
-                     grey_stored_votes {stored_votes}\n\
-                     # HELP grey_validator_index Validator index of this node.\n\
-                     # TYPE grey_validator_index gauge\n\
-                     grey_validator_index {validator_index}\n\
-                     # HELP grey_grandpa_round Current GRANDPA finality round.\n\
-                     # TYPE grey_grandpa_round gauge\n\
-                     grey_grandpa_round {grandpa_round}\n\
-                     # HELP grey_peer_count Number of connected peers.\n\
-                     # TYPE grey_peer_count gauge\n\
-                     grey_peer_count {peer_count}\n\
-                     # HELP grey_queue_depth_events Network event queue depth.\n\
-                     # TYPE grey_queue_depth_events gauge\n\
-                     grey_queue_depth_events {queue_events}\n\
-                     # HELP grey_queue_depth_commands Network command queue depth.\n\
-                     # TYPE grey_queue_depth_commands gauge\n\
-                     grey_queue_depth_commands {queue_commands}\n\
-                     # HELP grey_queue_depth_rpc RPC command queue depth.\n\
-                     # TYPE grey_queue_depth_rpc gauge\n\
-                     grey_queue_depth_rpc {queue_rpc}\n\
-                     # HELP grey_pending_blocks Pending blocks buffer depth.\n\
-                     # TYPE grey_pending_blocks gauge\n\
-                     grey_pending_blocks {pending_blocks}\n\
-                     # HELP grey_finality_lag Slots between head and last finalized block.\n\
-                     # TYPE grey_finality_lag gauge\n\
-                     grey_finality_lag {finality_lag}\n\
-                     # HELP grey_work_packages_submitted_total Work packages submitted via RPC.\n\
-                     # TYPE grey_work_packages_submitted_total counter\n\
-                     grey_work_packages_submitted_total {wp_submitted}\n"
-                );
-
+                let body = format_metrics(&state).await;
                 Ok(http::Response::builder()
                     .status(200)
                     .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
@@ -940,6 +856,140 @@ where
         let fut = self.inner.call(req);
         Box::pin(fut)
     }
+}
+
+/// Format Prometheus text exposition metrics from the current RPC state.
+pub async fn format_metrics(state: &RpcState) -> String {
+    let status = state.status.read().await;
+    let head_slot = status.head_slot;
+    let finalized_slot = status.finalized_slot;
+    let blocks_authored = status.blocks_authored;
+    let blocks_imported = status.blocks_imported;
+    let validator_index = status.validator_index;
+    let grandpa_round = status.grandpa_round;
+    let peer_count = state.peer_count.load(std::sync::atomic::Ordering::Relaxed);
+    let queue_events = state
+        .queue_depth_events
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let queue_commands = state
+        .queue_depth_commands
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let queue_rpc = state
+        .queue_depth_rpc
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let pending_blocks = state
+        .pending_blocks_depth
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let finality_lag = head_slot.saturating_sub(finalized_slot);
+    let wp_submitted = state
+        .work_packages_submitted
+        .load(std::sync::atomic::Ordering::Relaxed);
+    drop(status);
+
+    let stored_blocks = state.store.block_count().unwrap_or(0);
+    let stored_states = state.store.state_count().unwrap_or(0);
+    let stored_chunks = state.store.chunk_count().unwrap_or(0);
+    let stored_votes = state.store.vote_count().unwrap_or(0);
+
+    format!(
+        "# HELP grey_block_height Current head slot.\n\
+         # TYPE grey_block_height gauge\n\
+         grey_block_height {head_slot}\n\
+         # HELP grey_finalized_height Last finalized slot.\n\
+         # TYPE grey_finalized_height gauge\n\
+         grey_finalized_height {finalized_slot}\n\
+         # HELP grey_blocks_produced_total Blocks authored by this node.\n\
+         # TYPE grey_blocks_produced_total counter\n\
+         grey_blocks_produced_total {blocks_authored}\n\
+         # HELP grey_blocks_imported_total Blocks received and imported.\n\
+         # TYPE grey_blocks_imported_total counter\n\
+         grey_blocks_imported_total {blocks_imported}\n\
+         # HELP grey_stored_blocks Number of blocks in the database.\n\
+         # TYPE grey_stored_blocks gauge\n\
+         grey_stored_blocks {stored_blocks}\n\
+         # HELP grey_stored_states Number of state entries in the database.\n\
+         # TYPE grey_stored_states gauge\n\
+         grey_stored_states {stored_states}\n\
+         # HELP grey_stored_chunks Number of DA chunks in the database.\n\
+         # TYPE grey_stored_chunks gauge\n\
+         grey_stored_chunks {stored_chunks}\n\
+         # HELP grey_stored_votes Number of GRANDPA votes in the database.\n\
+         # TYPE grey_stored_votes gauge\n\
+         grey_stored_votes {stored_votes}\n\
+         # HELP grey_validator_index Validator index of this node.\n\
+         # TYPE grey_validator_index gauge\n\
+         grey_validator_index {validator_index}\n\
+         # HELP grey_grandpa_round Current GRANDPA finality round.\n\
+         # TYPE grey_grandpa_round gauge\n\
+         grey_grandpa_round {grandpa_round}\n\
+         # HELP grey_peer_count Number of connected peers.\n\
+         # TYPE grey_peer_count gauge\n\
+         grey_peer_count {peer_count}\n\
+         # HELP grey_queue_depth_events Network event queue depth.\n\
+         # TYPE grey_queue_depth_events gauge\n\
+         grey_queue_depth_events {queue_events}\n\
+         # HELP grey_queue_depth_commands Network command queue depth.\n\
+         # TYPE grey_queue_depth_commands gauge\n\
+         grey_queue_depth_commands {queue_commands}\n\
+         # HELP grey_queue_depth_rpc RPC command queue depth.\n\
+         # TYPE grey_queue_depth_rpc gauge\n\
+         grey_queue_depth_rpc {queue_rpc}\n\
+         # HELP grey_pending_blocks Pending blocks buffer depth.\n\
+         # TYPE grey_pending_blocks gauge\n\
+         grey_pending_blocks {pending_blocks}\n\
+         # HELP grey_finality_lag Slots between head and last finalized block.\n\
+         # TYPE grey_finality_lag gauge\n\
+         grey_finality_lag {finality_lag}\n\
+         # HELP grey_work_packages_submitted_total Work packages submitted via RPC.\n\
+         # TYPE grey_work_packages_submitted_total counter\n\
+         grey_work_packages_submitted_total {wp_submitted}\n"
+    )
+}
+
+/// Start a standalone metrics HTTP server on the given port.
+/// Serves `/metrics` in Prometheus text exposition format.
+pub async fn start_metrics_server(
+    host: &str,
+    port: u16,
+    state: Arc<RpcState>,
+) -> Result<(SocketAddr, tokio::task::JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
+    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let bound_addr = listener.local_addr()?;
+
+    let join = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::warn!("Metrics server accept error: {e}");
+                    continue;
+                }
+            };
+            let state = state.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                // Read the HTTP request (we only need to know it arrived)
+                let _ = stream.read(&mut buf).await;
+                let body = format_metrics(&state).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n\
+                     {}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    tracing::info!("Metrics server listening on {}", bound_addr);
+    Ok((bound_addr, join))
 }
 
 /// Start the JSON-RPC server. Returns the command receiver for the node event loop.
@@ -1825,5 +1875,35 @@ mod tests {
         let result: Result<serde_json::Value, _> =
             client.request("jam_getContext", rpc_params![2000u32]).await;
         assert!(result.is_err(), "getContext with no head should error");
+    }
+
+    #[tokio::test]
+    async fn test_standalone_metrics_server() {
+        let (_url, state, _rx, _store, _dir) = setup().await;
+
+        // Start metrics server on ephemeral port
+        let (addr, _handle) = start_metrics_server("127.0.0.1", 0, state).await.unwrap();
+        let metrics_url = format!("http://{}/metrics", addr);
+
+        let (status, body) = http_get(&metrics_url).await;
+        assert_eq!(status, 200);
+        assert!(
+            body.contains("grey_block_height"),
+            "metrics should contain grey_block_height"
+        );
+        assert!(
+            body.contains("grey_peer_count"),
+            "metrics should contain grey_peer_count"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_format_metrics_output() {
+        let (_url, state, _rx, _store, _dir) = setup().await;
+        let body = format_metrics(&state).await;
+        assert!(body.contains("# HELP grey_block_height"));
+        assert!(body.contains("# TYPE grey_block_height gauge"));
+        assert!(body.contains("grey_finalized_height"));
+        assert!(body.contains("grey_work_packages_submitted_total"));
     }
 }
