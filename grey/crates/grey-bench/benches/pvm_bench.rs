@@ -177,6 +177,24 @@ fn bench_standard(c: &mut Criterion, name: &str, grey_blob: &[u8], pvm_blob: &[u
         b.iter(|| run_grey_recompiler(grey_blob))
     });
 
+    // Execution-only: compile in setup (not timed), measure only execution.
+    group.bench_function("grey-recompiler-exec", |b| {
+        b.iter_batched(
+            || javm::recompiler::initialize_program_recompiled(grey_blob, &[], GAS_LIMIT).unwrap(),
+            |mut pvm| {
+                loop {
+                    match pvm.run() {
+                        javm::ExitReason::Halt => break,
+                        javm::ExitReason::HostCall(_) => continue,
+                        other => panic!("unexpected exit: {:?}", other),
+                    }
+                }
+                pvm.registers()[7]
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
     group.bench_function("polkavm-interpreter", |b| {
         b.iter(|| run_polkavm_module(&pvm_interp_mod))
     });
