@@ -214,6 +214,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
     // to apply it after the missing ones arrive.
     let mut pending_blocks: std::collections::BTreeMap<Timeslot, (Block, Hash)> =
         std::collections::BTreeMap::new();
+    let mut saturation_tracker = SaturationTracker::new();
 
     tracing::info!(
         "Validator {} node started, genesis_time={}",
@@ -309,6 +310,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         &net_commands,
                         rpc_state.as_ref(),
                         pending_blocks.len(),
+                        &mut saturation_tracker,
                     );
                 }
 
@@ -1333,14 +1335,39 @@ fn create_demo_work_package(
     }
 }
 
+/// Tracks consecutive ticks where queues exceed the warning threshold.
+/// After `ALERT_TICKS` consecutive ticks, escalates from warn to error.
+struct SaturationTracker {
+    events: u32,
+    commands: u32,
+    rpc: u32,
+    pending_blocks: u32,
+}
+
+impl SaturationTracker {
+    fn new() -> Self {
+        Self {
+            events: 0,
+            commands: 0,
+            rpc: 0,
+            pending_blocks: 0,
+        }
+    }
+}
+
+/// Number of consecutive ticks above 80% before escalating to error.
+const SATURATION_ALERT_TICKS: u32 = 10;
+
 /// Check queue depths for all inter-component channels and the pending blocks buffer.
-/// Logs at debug level normally, warns when any queue exceeds 80% capacity.
+/// Logs at debug level normally, warns when any queue exceeds 80% capacity,
+/// and escalates to error after persistent saturation.
 fn check_queue_depths(
     validator_index: u16,
     net_event_tx: &tokio::sync::mpsc::Sender<NetworkEvent>,
     net_cmd_tx: &tokio::sync::mpsc::Sender<NetworkCommand>,
     rpc_state: Option<&std::sync::Arc<grey_rpc::RpcState>>,
     pending_blocks_len: usize,
+    saturation: &mut SaturationTracker,
 ) {
     const WARN_THRESHOLD: f64 = 0.8;
 
@@ -1373,40 +1400,56 @@ fn check_queue_depths(
         MAX_PENDING_BLOCKS,
     );
 
-    if event_depth as f64 > EVENT_CHANNEL_CAPACITY as f64 * WARN_THRESHOLD {
-        tracing::warn!(
-            "Validator {} network event queue at {:.0}% capacity ({}/{})",
-            validator_index,
-            event_depth as f64 / EVENT_CHANNEL_CAPACITY as f64 * 100.0,
-            event_depth,
-            EVENT_CHANNEL_CAPACITY,
-        );
+    // Helper: check a single queue, track saturation, and log at appropriate level.
+    macro_rules! check_queue {
+        ($depth:expr, $capacity:expr, $counter:expr, $name:expr) => {
+            if $depth as f64 > $capacity as f64 * WARN_THRESHOLD {
+                $counter += 1;
+                if $counter >= SATURATION_ALERT_TICKS {
+                    tracing::error!(
+                        "Validator {} {} PERSISTENTLY SATURATED at {:.0}% ({}/{}) for {} ticks",
+                        validator_index,
+                        $name,
+                        $depth as f64 / $capacity as f64 * 100.0,
+                        $depth,
+                        $capacity,
+                        $counter,
+                    );
+                } else {
+                    tracing::warn!(
+                        "Validator {} {} at {:.0}% capacity ({}/{})",
+                        validator_index,
+                        $name,
+                        $depth as f64 / $capacity as f64 * 100.0,
+                        $depth,
+                        $capacity,
+                    );
+                }
+            } else {
+                $counter = 0;
+            }
+        };
     }
-    if cmd_depth as f64 > COMMAND_CHANNEL_CAPACITY as f64 * WARN_THRESHOLD {
-        tracing::warn!(
-            "Validator {} network command queue at {:.0}% capacity ({}/{})",
-            validator_index,
-            cmd_depth as f64 / COMMAND_CHANNEL_CAPACITY as f64 * 100.0,
-            cmd_depth,
-            COMMAND_CHANNEL_CAPACITY,
-        );
+
+    check_queue!(
+        event_depth,
+        EVENT_CHANNEL_CAPACITY,
+        saturation.events,
+        "network event queue"
+    );
+    check_queue!(
+        cmd_depth,
+        COMMAND_CHANNEL_CAPACITY,
+        saturation.commands,
+        "network command queue"
+    );
+    if rpc_state.is_some() {
+        check_queue!(rpc_depth, rpc_capacity, saturation.rpc, "RPC command queue");
     }
-    if rpc_state.is_some() && rpc_depth as f64 > rpc_capacity as f64 * WARN_THRESHOLD {
-        tracing::warn!(
-            "Validator {} RPC command queue at {:.0}% capacity ({}/{})",
-            validator_index,
-            rpc_depth as f64 / rpc_capacity as f64 * 100.0,
-            rpc_depth,
-            rpc_capacity,
-        );
-    }
-    if pending_blocks_len as f64 > MAX_PENDING_BLOCKS as f64 * WARN_THRESHOLD {
-        tracing::warn!(
-            "Validator {} pending blocks buffer at {:.0}% capacity ({}/{})",
-            validator_index,
-            pending_blocks_len as f64 / MAX_PENDING_BLOCKS as f64 * 100.0,
-            pending_blocks_len,
-            MAX_PENDING_BLOCKS,
-        );
-    }
+    check_queue!(
+        pending_blocks_len,
+        MAX_PENDING_BLOCKS,
+        saturation.pending_blocks,
+        "pending blocks buffer"
+    );
 }
