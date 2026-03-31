@@ -1751,4 +1751,60 @@ mod tests {
             .await;
         assert!(result.is_err(), "range > 1000 should return error");
     }
+
+    #[tokio::test]
+    async fn test_get_peers() {
+        let (url, state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // Default peer count is 0
+        let result: serde_json::Value =
+            client.request("jam_getPeers", rpc_params![]).await.unwrap();
+        assert_eq!(result["peer_count"], 0);
+
+        // Set peer count and verify
+        state
+            .peer_count
+            .store(5, std::sync::atomic::Ordering::Relaxed);
+        let result: serde_json::Value =
+            client.request("jam_getPeers", rpc_params![]).await.unwrap();
+        assert_eq!(result["peer_count"], 5);
+    }
+
+    #[tokio::test]
+    async fn test_get_context_with_block() {
+        let (url, _state, _rx, store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // Store a block and set it as head
+        let block = test_block(1);
+        let hash = grey_crypto::blake2b_256(&grey_codec::Encode::encode(&block.header));
+        store.put_block(&block).unwrap();
+        store.set_head(&hash, 1).unwrap();
+
+        // Store state (needed for code_hash lookup)
+        let config = grey_types::config::Config::tiny();
+        let (genesis_state, _) = grey_consensus::genesis::create_genesis(&config);
+        store.put_state(&hash, &genesis_state, &config).unwrap();
+
+        let result: serde_json::Value = client
+            .request("jam_getContext", rpc_params![2000u32])
+            .await
+            .unwrap();
+        assert_eq!(result["slot"], 1);
+        assert!(result["anchor"].is_string());
+        assert!(result["state_root"].is_string());
+        assert!(result["beefy_root"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_context_no_head() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // No head set — should return error
+        let result: Result<serde_json::Value, _> =
+            client.request("jam_getContext", rpc_params![2000u32]).await;
+        assert!(result.is_err(), "getContext with no head should error");
+    }
 }
