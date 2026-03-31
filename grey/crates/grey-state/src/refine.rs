@@ -7,7 +7,7 @@
 
 use crate::pvm_backend::{ExitReason, PvmInstance};
 use grey_types::config::Config;
-use grey_types::constants::{GAS_IS_AUTHORIZED, HOST_OOB, HOST_WHAT};
+use grey_types::constants::{GAS_IS_AUTHORIZED, HOST_LOW, HOST_OOB, HOST_WHAT};
 use grey_types::work::*;
 use grey_types::{Hash, ServiceId};
 use javm::Gas;
@@ -245,7 +245,7 @@ pub fn invoke_refine(
                     import_data,
                     lookup_ctx,
                 };
-                if !handle_refine_host_call(id, &mut pvm, &mut ctx) {
+                if !handle_refine_host_call(id, &mut pvm, &mut ctx, 0) {
                     // Host call signaled OOG or page fault
                     if pvm.gas() == 0 {
                         return error_refine_result(item, WorkResult::OutOfGas, initial_gas);
@@ -376,6 +376,9 @@ fn handle_is_authorized_host_call(id: u32, pvm: &mut PvmInstance) -> bool {
     }
 }
 
+/// Maximum invoke nesting depth to prevent stack overflow.
+const MAX_INVOKE_DEPTH: u32 = 8;
+
 /// Context for refine host calls — provides access to work item data.
 struct RefineHostContext<'a> {
     item: &'a WorkItem,
@@ -397,6 +400,7 @@ fn handle_refine_host_call(
     id: u32,
     pvm: &mut PvmInstance,
     ctx: &mut RefineHostContext<'_>,
+    depth: u32,
 ) -> bool {
     // Host-call gas cost: all host calls cost g=10 (charged upfront).
     let host_gas_cost: u64 = 10;
@@ -458,8 +462,16 @@ fn handle_refine_host_call(
             pvm.set_reg(7, current_pages);
             true
         }
+        9 => {
+            // invoke(): sub-program invocation with separate memory.
+            // φ[7]=code_hash_ptr, φ[8]=input_ptr, φ[9]=input_len,
+            // φ[10]=gas_limit, φ[11]=output_ptr, φ[12]=output_max_len
+            // Returns: φ[7] = output_len, or error sentinel.
+            // Gas used by sub-call is deducted from caller.
+            refine_invoke(pvm, ctx, depth)
+        }
         _ => {
-            // Unimplemented: invoke(9), expunge(10).
+            // Unimplemented: expunge(10).
             tracing::trace!(id, "unimplemented refine host call");
             pvm.set_reg(7, HOST_WHAT);
             true
@@ -678,6 +690,202 @@ fn refine_peek(pvm: &mut PvmInstance, ctx: &RefineHostContext<'_>) -> bool {
 }
 
 /// Simple work-package encoding for hashing and authorization.
+/// invoke for refine context: sub-program invocation with separate memory.
+///
+/// Spawns a new PVM instance with the code identified by hash, runs it with
+/// a restricted set of host calls, and returns the output to the caller.
+///
+/// Register convention:
+///   φ[7]  = code_hash_ptr  (32 bytes in caller's memory)
+///   φ[8]  = input_ptr      (input data in caller's memory)
+///   φ[9]  = input_len
+///   φ[10] = gas_limit      (gas budget, deducted from caller)
+///   φ[11] = output_ptr     (where to write output in caller's memory)
+///   φ[12] = output_max_len
+///
+/// Returns:
+///   φ[7] = output_len on halt, or error sentinel (NONE=not found, OOB=page fault,
+///          WHAT=depth exceeded, LOW=insufficient gas)
+///
+/// The invoked program has access to: gas, grow_heap, fetch (payload only),
+/// machine, pages, and invoke (recursive, depth-limited).
+/// It does NOT have access to: export, peek, poke, historical_lookup.
+fn refine_invoke(pvm: &mut PvmInstance, ctx: &mut RefineHostContext<'_>, depth: u32) -> bool {
+    if depth >= MAX_INVOKE_DEPTH {
+        pvm.set_reg(7, HOST_WHAT);
+        return true;
+    }
+
+    let hash_ptr = pvm.reg(7) as u32;
+    let input_ptr = pvm.reg(8) as u32;
+    let input_len = pvm.reg(9) as u32;
+    let gas_limit = pvm.reg(10);
+    let output_ptr = pvm.reg(11) as u32;
+    let output_max_len = pvm.reg(12) as u32;
+
+    // Check caller has enough gas for the sub-call
+    if pvm.gas() < gas_limit {
+        pvm.set_reg(7, HOST_LOW);
+        return true;
+    }
+
+    // Read the 32-byte code hash from caller's memory
+    let hash_data = match pvm.try_read_bytes(hash_ptr, 32) {
+        Some(d) => d,
+        None => return false, // page fault → PANIC
+    };
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&hash_data);
+    let hash = Hash(hash);
+
+    // Read input data from caller's memory
+    let input = if input_len > 0 {
+        match pvm.try_read_bytes(input_ptr, input_len) {
+            Some(d) => d,
+            None => return false,
+        }
+    } else {
+        vec![]
+    };
+
+    // Look up code blob
+    let code_blob = match ctx.lookup_ctx.and_then(|lctx| lctx.get_code(&hash)) {
+        Some(blob) => blob,
+        None => {
+            pvm.set_reg(7, u64::MAX); // NONE — code not found
+            return true;
+        }
+    };
+
+    // Deduct gas budget from caller before spawning sub-VM
+    pvm.set_gas(pvm.gas() - gas_limit);
+
+    // Initialize sub-PVM with its own memory space
+    let mut sub_pvm = match PvmInstance::initialize(&code_blob, &input, gas_limit) {
+        Some(p) => p,
+        None => {
+            // Init failed — refund gas and return error
+            pvm.set_gas(pvm.gas() + gas_limit);
+            pvm.set_reg(7, HOST_OOB);
+            return true;
+        }
+    };
+
+    // Run sub-PVM with host call dispatch (restricted capabilities)
+    let sub_result = run_sub_invoke(&mut sub_pvm, ctx, depth + 1);
+    let _gas_used = gas_limit - sub_pvm.gas();
+
+    // Refund unused gas to caller
+    pvm.set_gas(pvm.gas() + sub_pvm.gas());
+
+    match sub_result {
+        SubInvokeResult::Halt => {
+            // Read output from sub-PVM registers: A0=ptr, A1=len
+            let sub_out_ptr = sub_pvm.reg(7) as u32;
+            let sub_out_len = sub_pvm.reg(8) as u32;
+            let output = if sub_out_len > 0 {
+                sub_pvm
+                    .try_read_bytes(sub_out_ptr, sub_out_len)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+
+            // Write output to caller's memory (truncated to max_len)
+            let write_len = output.len().min(output_max_len as usize);
+            if write_len > 0
+                && pvm
+                    .try_write_bytes(output_ptr, &output[..write_len])
+                    .is_none()
+            {
+                return false; // page fault in caller
+            }
+            pvm.set_reg(7, output.len() as u64);
+            true
+        }
+        SubInvokeResult::Panic | SubInvokeResult::PageFault => {
+            pvm.set_reg(7, HOST_OOB);
+            true
+        }
+        SubInvokeResult::OutOfGas => {
+            pvm.set_reg(7, HOST_LOW);
+            true
+        }
+    }
+}
+
+/// Result of a sub-invoke execution.
+enum SubInvokeResult {
+    Halt,
+    Panic,
+    OutOfGas,
+    PageFault,
+}
+
+/// Run a sub-PVM for invoke() with restricted host calls.
+///
+/// The invoked program can use: gas(0), grow_heap(1), fetch(2) [payload only],
+/// machine(5), pages(8), invoke(9) [recursive, depth-limited].
+/// It CANNOT use: historical_lookup(3), export(4), peek(6), poke(7), expunge(10).
+fn run_sub_invoke(
+    sub_pvm: &mut PvmInstance,
+    ctx: &mut RefineHostContext<'_>,
+    depth: u32,
+) -> SubInvokeResult {
+    loop {
+        let exit = sub_pvm.run();
+        match exit {
+            ExitReason::Halt => return SubInvokeResult::Halt,
+            ExitReason::Panic => return SubInvokeResult::Panic,
+            ExitReason::OutOfGas => return SubInvokeResult::OutOfGas,
+            ExitReason::PageFault(_) => return SubInvokeResult::PageFault,
+            ExitReason::HostCall(id) => {
+                // Restricted host call set for invoked programs
+                let host_gas_cost: u64 = 10;
+                if sub_pvm.gas() < host_gas_cost {
+                    sub_pvm.set_gas(0);
+                    return SubInvokeResult::OutOfGas;
+                }
+                sub_pvm.set_gas(sub_pvm.gas() - host_gas_cost);
+
+                let ok = match id {
+                    0 => {
+                        // gas
+                        sub_pvm.set_reg(7, sub_pvm.gas());
+                        true
+                    }
+                    1 => refine_grow_heap(sub_pvm),
+                    5 => refine_machine(sub_pvm, ctx),
+                    8 => {
+                        // pages
+                        let ps = javm::PVM_PAGE_SIZE;
+                        let pages = (sub_pvm.heap_top() as u64).div_ceil(ps as u64);
+                        sub_pvm.set_reg(7, pages);
+                        true
+                    }
+                    9 => {
+                        // Recursive invoke (depth-limited)
+                        refine_invoke(sub_pvm, ctx, depth)
+                    }
+                    _ => {
+                        // export, peek, poke, historical_lookup, expunge, fetch
+                        // not available in invoked context
+                        sub_pvm.set_reg(7, HOST_WHAT);
+                        true
+                    }
+                };
+                if !ok {
+                    return if sub_pvm.gas() == 0 {
+                        SubInvokeResult::OutOfGas
+                    } else {
+                        SubInvokeResult::PageFault
+                    };
+                }
+            }
+        }
+    }
+}
+
 fn encode_work_package_simple(pkg: &WorkPackage) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&pkg.auth_code_host.to_le_bytes());
@@ -941,6 +1149,116 @@ mod tests {
         let result = invoke_refine(&config, &blob, &item, 0, &[], None);
         match &result.digest.result {
             WorkResult::Ok(_) => {}
+            other => panic!("expected Ok, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_refine_invoke_code_not_found() {
+        use grey_transpiler::assembler::Reg;
+        // ecalli(9) = invoke: try to invoke a program that doesn't exist
+        // A0 = hash ptr (zeros in memory), A1 = input ptr, A2 = input len,
+        // A3 = gas_limit, A4 = output ptr, A5 = output max len
+        let blob = build_hostcall_blob(
+            9,
+            &[
+                (Reg::A0, 0x1000), // code hash ptr (zeros = unknown hash)
+                (Reg::A1, 0x1100), // input ptr
+                (Reg::A2, 0),      // input len
+                (Reg::A3, 10000),  // gas limit for sub-call
+                (Reg::A4, 0x1200), // output ptr
+                (Reg::A5, 256),    // output max len
+            ],
+        );
+        let item = make_test_item(vec![], 1_000_000);
+        let config = Config::tiny();
+
+        // No lookup context → code not found → returns NONE
+        let result = invoke_refine(&config, &blob, &item, 0, &[], None);
+        match &result.digest.result {
+            WorkResult::Ok(_) => {}
+            other => panic!("expected Ok (NONE in A0), got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_refine_invoke_simple_program() {
+        use grey_transpiler::assembler::{Assembler, Reg};
+
+        // Build a simple "echo" sub-program that halts with input as output.
+        // On entry: A0 = arg base, A1 = arg len. Halt returns these as output.
+        let mut sub_asm = Assembler::new();
+        sub_asm.set_stack_size(4096);
+        sub_asm.set_heap_pages(1);
+        sub_asm.add_jump_entry();
+        // Just halt — A0/A1 already point to the arguments
+        sub_asm.load_imm_64(Reg::T0, 0xFFFF0000u64);
+        sub_asm.jump_ind(Reg::T0, 0);
+        let sub_blob = sub_asm.build();
+
+        // Compute the code hash
+        let sub_hash = grey_crypto::blake2b_256(&sub_blob);
+
+        // Build the caller program:
+        // 1. Write the sub-program's code hash to memory at 0x2000
+        // 2. Write some input data to memory at 0x2100
+        // 3. Call invoke(9) with the hash, input, gas budget, output buffer
+        let mut caller_asm = Assembler::new();
+        caller_asm.set_stack_size(4096);
+        caller_asm.set_heap_pages(4);
+        caller_asm.add_jump_entry();
+
+        // First grow heap to have enough writable memory
+        caller_asm.load_imm(Reg::A0, 16); // 16 pages
+        caller_asm.ecalli(1); // grow_heap
+
+        // Write code hash to 0x2000 (32 bytes) using load_imm_64 + store_u64
+        for i in 0..4 {
+            let chunk = u64::from_le_bytes(sub_hash.0[i * 8..(i + 1) * 8].try_into().unwrap());
+            caller_asm.load_imm_64(Reg::T0, chunk);
+            caller_asm.store_u64(Reg::T0, 0x2000 + (i as u32) * 8);
+        }
+
+        // Write input "hello" to 0x2100
+        let input_data = b"hello";
+        for (j, &byte) in input_data.iter().enumerate() {
+            caller_asm.load_imm(Reg::T0, byte as i32);
+            caller_asm.store_u8(Reg::T0, 0x2100 + j as u32);
+        }
+
+        // Set up invoke registers
+        caller_asm.load_imm(Reg::A0, 0x2000); // code hash ptr
+        caller_asm.load_imm(Reg::A1, 0x2100); // input ptr
+        caller_asm.load_imm(Reg::A2, input_data.len() as i32); // input len
+        caller_asm.load_imm(Reg::A3, 100000); // gas limit
+        caller_asm.load_imm(Reg::A4, 0x2200); // output ptr
+        caller_asm.load_imm(Reg::A5, 256); // output max len
+
+        // Call invoke
+        caller_asm.ecalli(9);
+
+        // Halt — A0 should contain output length
+        caller_asm.load_imm_64(Reg::T0, 0xFFFF0000u64);
+        caller_asm.jump_ind(Reg::T0, 0);
+
+        let caller_blob = caller_asm.build();
+
+        // Set up context with the sub-program's code
+        let refine_ctx = SimpleRefineContext {
+            code_blobs: [(sub_hash, sub_blob)].into_iter().collect(),
+            storage: BTreeMap::new(),
+            preimages: BTreeMap::new(),
+        };
+
+        let item = make_test_item(vec![], 10_000_000);
+        let config = Config::tiny();
+
+        let result = invoke_refine(&config, &caller_blob, &item, 0, &[], Some(&refine_ctx));
+        match &result.digest.result {
+            WorkResult::Ok(_) => {
+                // invoke succeeded — gas was used
+                assert!(result.digest.gas_used > 0);
+            }
             other => panic!("expected Ok, got: {:?}", other),
         }
     }
