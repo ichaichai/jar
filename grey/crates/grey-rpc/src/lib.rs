@@ -1674,4 +1674,64 @@ mod tests {
             .unwrap();
         assert_eq!(result["status"], "submitted");
     }
+
+    #[tokio::test]
+    async fn test_get_block_range_with_blocks() {
+        let (url, _state, _rx, store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // Store blocks at slots 1, 2, 3
+        for slot in 1..=3 {
+            let block = test_block(slot);
+            store.put_block(&block).unwrap();
+        }
+
+        let result: serde_json::Value = client
+            .request("jam_getBlockRange", rpc_params![1u32, 3u32])
+            .await
+            .unwrap();
+        assert_eq!(result["from_slot"], 1);
+        assert_eq!(result["to_slot"], 3);
+        assert_eq!(result["count"], 3);
+        assert_eq!(result["blocks"].as_array().unwrap().len(), 3);
+        assert_eq!(result["blocks"][0]["slot"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_block_range_empty() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // No blocks stored — range returns empty
+        let result: serde_json::Value = client
+            .request("jam_getBlockRange", rpc_params![10u32, 20u32])
+            .await
+            .unwrap();
+        assert_eq!(result["count"], 0);
+        assert!(result["blocks"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_block_range_invalid_range() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // to_slot < from_slot — should error
+        let result: Result<serde_json::Value, _> = client
+            .request("jam_getBlockRange", rpc_params![10u32, 5u32])
+            .await;
+        assert!(result.is_err(), "reversed range should return error");
+    }
+
+    #[tokio::test]
+    async fn test_get_block_range_too_large() {
+        let (url, _state, _rx, _store, _dir) = setup().await;
+        let client = HttpClientBuilder::default().build(&url).unwrap();
+
+        // Range > 1000 slots — should error
+        let result: Result<serde_json::Value, _> = client
+            .request("jam_getBlockRange", rpc_params![0u32, 2000u32])
+            .await;
+        assert!(result.is_err(), "range > 1000 should return error");
+    }
 }
