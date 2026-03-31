@@ -137,6 +137,10 @@ pub trait JamRpc {
         from_slot: u32,
         to_slot: u32,
     ) -> Result<serde_json::Value, ErrorObjectOwned>;
+
+    /// Get peer connectivity information.
+    #[method(name = "jam_getPeers")]
+    async fn get_peers(&self) -> Result<serde_json::Value, ErrorObjectOwned>;
 }
 
 /// WebSocket subscription API.
@@ -580,6 +584,16 @@ impl JamRpcServer for RpcImpl {
             "to_slot": to_slot,
             "blocks": blocks,
             "count": blocks.len(),
+        }))
+    }
+
+    async fn get_peers(&self) -> Result<serde_json::Value, ErrorObjectOwned> {
+        let peer_count = self
+            .state
+            .peer_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Ok(serde_json::json!({
+            "peer_count": peer_count,
         }))
     }
 }
