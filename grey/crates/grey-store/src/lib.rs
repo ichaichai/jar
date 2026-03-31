@@ -1649,4 +1649,105 @@ mod tests {
         // Prune again — no-op
         assert_eq!(store.prune_expired_chunks(200, 100).unwrap(), 0);
     }
+
+    #[test]
+    fn test_pruning_retains_only_recent_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.redb")).unwrap();
+
+        let pruning_depth: u32 = 10;
+        let total_blocks: u32 = 50;
+
+        // Store blocks at slots 0..total_blocks (slot 0 = genesis)
+        for slot in 0..total_blocks {
+            let block = make_block(slot);
+            store.put_block(&block).unwrap();
+        }
+
+        assert_eq!(store.block_count().unwrap(), total_blocks as u64);
+
+        // Prune: keep blocks after slot (total_blocks - pruning_depth)
+        let keep_after = total_blocks - pruning_depth;
+        let pruned = store.prune_before_slot(keep_after).unwrap();
+
+        // Should prune slots 1..keep_after (slot 0 = genesis is preserved)
+        assert_eq!(
+            pruned,
+            keep_after - 1,
+            "should prune all non-genesis blocks before keep_after"
+        );
+
+        // Remaining: genesis (slot 0) + recent `pruning_depth` blocks
+        let remaining = store.block_count().unwrap();
+        assert_eq!(
+            remaining,
+            (pruning_depth + 1) as u64,
+            "should retain genesis + {} recent blocks, got {}",
+            pruning_depth,
+            remaining
+        );
+
+        // Genesis block should still be accessible
+        assert!(
+            store.get_block_hash_by_slot(0).is_ok(),
+            "genesis block should be preserved"
+        );
+
+        // Recent blocks should be accessible
+        for slot in keep_after..total_blocks {
+            assert!(
+                store.get_block_hash_by_slot(slot).is_ok(),
+                "block at slot {} should be retained",
+                slot
+            );
+        }
+
+        // Pruned blocks should be gone
+        for slot in 1..keep_after {
+            assert!(
+                store.get_block_hash_by_slot(slot).is_err(),
+                "block at slot {} should have been pruned",
+                slot
+            );
+        }
+    }
+
+    #[test]
+    fn test_pruning_with_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.redb")).unwrap();
+        let config = grey_types::config::Config::tiny();
+        let (genesis_state, _) = grey_consensus::genesis::create_genesis(&config);
+
+        let pruning_depth: u32 = 5;
+        let total_blocks: u32 = 20;
+
+        // Store blocks and states
+        for slot in 0..total_blocks {
+            let block = make_block(slot);
+            let hash = store.put_block(&block).unwrap();
+            store.put_state(&hash, &genesis_state, &config).unwrap();
+        }
+
+        assert_eq!(store.block_count().unwrap(), total_blocks as u64);
+        assert_eq!(store.state_count().unwrap(), total_blocks as u64);
+
+        // Prune blocks
+        let keep_after = total_blocks - pruning_depth;
+        store.prune_before_slot(keep_after).unwrap();
+
+        // Blocks should be pruned
+        assert_eq!(
+            store.block_count().unwrap(),
+            (pruning_depth + 1) as u64,
+            "blocks: genesis + recent"
+        );
+
+        // States for pruned blocks should also be gone (prune_before_slot removes them)
+        assert_eq!(
+            store.state_count().unwrap(),
+            (pruning_depth + 1) as u64,
+            "states: genesis + recent"
+        );
+    }
 }
