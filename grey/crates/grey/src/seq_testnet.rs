@@ -72,7 +72,7 @@ pub async fn run_seq_testnet(
 
     if rpc_port > 0 {
         let (addr, _handle) =
-            grey_rpc::start_rpc_server(rpc_port, rpc_state.clone(), rpc_cors, 0).await?;
+            grey_rpc::start_rpc_server("0.0.0.0", rpc_port, rpc_state.clone(), rpc_cors, 0).await?;
         tracing::info!("Sequential testnet RPC on {addr}");
     }
 

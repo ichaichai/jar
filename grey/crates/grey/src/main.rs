@@ -204,6 +204,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         {
             cli.rpc_cors = v;
         }
+        if let Some(ref v) = cfg.rpc.host
+            && cli.rpc_host == "127.0.0.1"
+        {
+            cli.rpc_host = v.clone();
+        }
         if let Some(v) = cfg.rpc.rate_limit
             && cli.rpc_rate_limit == 1000
         {
@@ -419,6 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         db_path: cli.db_path,
         rpc_port: cli.rpc_port,
         rpc_cors: cli.rpc_cors,
+        rpc_host: cli.rpc_host,
         rpc_rate_limit: cli.rpc_rate_limit,
         genesis_state: None,
         pruning_depth: cli.pruning_depth,
