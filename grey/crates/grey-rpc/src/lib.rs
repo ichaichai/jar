@@ -60,6 +60,14 @@ pub struct RpcState {
     pub finality_notifications: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// Connected peer count (updated by the node on PeerIdentified events).
     pub peer_count: std::sync::atomic::AtomicU32,
+    /// Network event queue depth (updated by the node each tick).
+    pub queue_depth_events: std::sync::atomic::AtomicU32,
+    /// Network command queue depth (updated by the node each tick).
+    pub queue_depth_commands: std::sync::atomic::AtomicU32,
+    /// RPC command queue depth (updated by the node each tick).
+    pub queue_depth_rpc: std::sync::atomic::AtomicU32,
+    /// Pending blocks buffer depth (updated by the node each tick).
+    pub pending_blocks_depth: std::sync::atomic::AtomicU32,
 }
 
 #[rpc(server)]
@@ -716,6 +724,18 @@ where
                 let validator_index = status.validator_index;
                 let grandpa_round = status.grandpa_round;
                 let peer_count = state.peer_count.load(std::sync::atomic::Ordering::Relaxed);
+                let queue_events = state
+                    .queue_depth_events
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let queue_commands = state
+                    .queue_depth_commands
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let queue_rpc = state
+                    .queue_depth_rpc
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let pending_blocks = state
+                    .pending_blocks_depth
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 drop(status);
 
                 let stored_blocks = state.store.block_count().unwrap_or(0);
@@ -756,7 +776,19 @@ where
                      grey_grandpa_round {grandpa_round}\n\
                      # HELP grey_peer_count Number of connected peers.\n\
                      # TYPE grey_peer_count gauge\n\
-                     grey_peer_count {peer_count}\n"
+                     grey_peer_count {peer_count}\n\
+                     # HELP grey_queue_depth_events Network event queue depth.\n\
+                     # TYPE grey_queue_depth_events gauge\n\
+                     grey_queue_depth_events {queue_events}\n\
+                     # HELP grey_queue_depth_commands Network command queue depth.\n\
+                     # TYPE grey_queue_depth_commands gauge\n\
+                     grey_queue_depth_commands {queue_commands}\n\
+                     # HELP grey_queue_depth_rpc RPC command queue depth.\n\
+                     # TYPE grey_queue_depth_rpc gauge\n\
+                     grey_queue_depth_rpc {queue_rpc}\n\
+                     # HELP grey_pending_blocks Pending blocks buffer depth.\n\
+                     # TYPE grey_pending_blocks gauge\n\
+                     grey_pending_blocks {pending_blocks}\n"
                 );
 
                 Ok(http::Response::builder()
@@ -979,6 +1011,10 @@ pub fn create_rpc_channel(
         block_notifications: block_tx,
         finality_notifications: finality_tx,
         peer_count: std::sync::atomic::AtomicU32::new(0),
+        queue_depth_events: std::sync::atomic::AtomicU32::new(0),
+        queue_depth_commands: std::sync::atomic::AtomicU32::new(0),
+        queue_depth_rpc: std::sync::atomic::AtomicU32::new(0),
+        pending_blocks_depth: std::sync::atomic::AtomicU32::new(0),
     });
 
     (state, rx)
@@ -1562,5 +1598,10 @@ mod tests {
         assert!(body.contains("grey_stored_votes 0"));
         assert!(body.contains("# TYPE grey_block_height gauge"));
         assert!(body.contains("# TYPE grey_blocks_produced_total counter"));
+        // Queue depth metrics should be present (defaulting to 0)
+        assert!(body.contains("grey_queue_depth_events 0"));
+        assert!(body.contains("grey_queue_depth_commands 0"));
+        assert!(body.contains("grey_queue_depth_rpc 0"));
+        assert!(body.contains("grey_pending_blocks 0"));
     }
 }

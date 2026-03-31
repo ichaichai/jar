@@ -1320,6 +1320,17 @@ fn check_queue_depths(
     let rpc_depth = rpc_state.map(|s| 256 - s.commands.capacity()).unwrap_or(0);
     let rpc_capacity: usize = 256;
 
+    // Update RpcState atomics for /metrics endpoint
+    if let Some(state) = rpc_state {
+        use std::sync::atomic::Ordering::Relaxed;
+        state.queue_depth_events.store(event_depth as u32, Relaxed);
+        state.queue_depth_commands.store(cmd_depth as u32, Relaxed);
+        state.queue_depth_rpc.store(rpc_depth as u32, Relaxed);
+        state
+            .pending_blocks_depth
+            .store(pending_blocks_len as u32, Relaxed);
+    }
+
     tracing::debug!(
         "Validator {} queue depths: events={}/{}, commands={}/{}, rpc={}/{}, pending_blocks={}/{}",
         validator_index,
