@@ -461,6 +461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pruning_depth: cli.pruning_depth,
         keystore_path: cli.keystore_path,
         metrics_port: cli.metrics_port,
+        config_path: cli.config.clone(),
     })
     .await
 }

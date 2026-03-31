@@ -72,6 +72,8 @@ pub struct NodeConfig {
     pub keystore_path: Option<String>,
     /// Expose Prometheus metrics on a separate port (0 = disabled).
     pub metrics_port: u16,
+    /// Path to the TOML config file (for SIGHUP reload). None if no config file.
+    pub config_path: Option<String>,
 }
 
 // FinalityTracker replaced by GrandpaState (see finality.rs)
@@ -258,6 +260,11 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
     let mut sigusr1 = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
         .expect("failed to register SIGUSR1 handler");
 
+    // SIGHUP: reload config file
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .expect("failed to register SIGHUP handler");
+    let config_path = config.config_path.clone();
+
     // Main loop: check timeslots every 500ms
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     let mut last_authored_slot: Timeslot = 0;
@@ -321,6 +328,30 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                     blocks_authored,
                     blocks_imported,
                 );
+            }
+            _ = sighup.recv() => {
+                if let Some(ref path) = config_path {
+                    tracing::info!("SIGHUP received — reloading config from {}", path);
+                    match crate::config::ConfigFile::load(std::path::Path::new(path)) {
+                        Ok(new_cfg) => {
+                            if let Some(ref level) = new_cfg.logging.level {
+                                tracing::info!("Config reload: log level = {:?}", level);
+                            }
+                            if let Some(ref peers) = new_cfg.network.boot_peers {
+                                tracing::info!("Config reload: boot_peers = {:?} ({} entries)", peers, peers.len());
+                            }
+                            if let Some(ref format) = new_cfg.logging.format {
+                                tracing::info!("Config reload: log format = {:?}", format);
+                            }
+                            tracing::info!("Config reload complete (note: only logging changes are informational; runtime values are not yet hot-swapped)");
+                        }
+                        Err(e) => {
+                            tracing::warn!("SIGHUP config reload failed: {}", e);
+                        }
+                    }
+                } else {
+                    tracing::info!("SIGHUP received but no config file was specified (--config)");
+                }
             }
             _ = interval.tick() => {
                 let now = SystemTime::now()
