@@ -2485,7 +2485,13 @@ pub fn feed_gas_direct(
             4 => (rb.min(12), rd.min(12)),
             _ => (0xFF, 0xFF),
         };
-        let dst = if entry.dst_pat == 1 { ra.min(12) } else if entry.dst_pat == 2 { rd.min(12) } else { 0xFF };
+        let dst = if entry.dst_pat == 1 {
+            ra.min(12)
+        } else if entry.dst_pat == 2 {
+            rd.min(12)
+        } else {
+            0xFF
+        };
         gas_sim.feed_direct(entry.cycles, entry.decode_slots, src1, src2, dst);
         return (flags & F_TERM != 0, false);
     }

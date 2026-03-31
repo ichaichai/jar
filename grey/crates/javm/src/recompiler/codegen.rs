@@ -502,7 +502,11 @@ impl Compiler {
                 // Fast path: feed gas simulator directly from register bytes,
                 // skipping FastCost struct construction and bitmask iteration.
                 let (term, needs_full) = crate::gas_cost::feed_gas_direct(
-                    opcode as u8, raw_ra, raw_rb, reg_byte2 & 0x0F, &mut gas_sim,
+                    opcode as u8,
+                    raw_ra,
+                    raw_rb,
+                    reg_byte2 & 0x0F,
+                    &mut gas_sim,
                 );
                 if needs_full {
                     // Slow path for branches/overlap/move: use full FastCost
