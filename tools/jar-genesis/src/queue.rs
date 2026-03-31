@@ -7,7 +7,7 @@
 use crate::github;
 
 const POLL_INTERVAL_SECS: u64 = 10;
-const TIMEOUT_SECS: u64 = 600; // 10 minutes
+const TIMEOUT_SECS: u64 = 3600; // 1 hour
 const GENESIS_WORKFLOW_PREFIX: &str = ".github/workflows/genesis-";
 
 /// Resolve workflow IDs for all genesis workflows by path prefix.
