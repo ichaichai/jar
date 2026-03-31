@@ -70,6 +70,8 @@ pub struct NodeConfig {
     pub pruning_depth: u32,
     /// Optional keystore path for persistent validator keys.
     pub keystore_path: Option<String>,
+    /// Expose Prometheus metrics on a separate port (0 = disabled).
+    pub metrics_port: u16,
 }
 
 // FinalityTracker replaced by GrandpaState (see finality.rs)
@@ -159,6 +161,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
             config.validator_index,
         );
         rpc_state = Some(state_arc.clone());
+        let metrics_state = state_arc.clone();
         let (_addr, _handle) = grey_rpc::start_rpc_server(
             &config.rpc_host,
             config.rpc_port,
@@ -168,6 +171,16 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
         )
         .await?;
         rpc_rx = Some(rx);
+
+        // Start separate metrics server if configured
+        if config.metrics_port > 0 {
+            let (_metrics_addr, _metrics_handle) = grey_rpc::start_metrics_server(
+                &config.rpc_host,
+                config.metrics_port,
+                metrics_state,
+            )
+            .await?;
+        }
     } else {
         rpc_state = None;
     }
