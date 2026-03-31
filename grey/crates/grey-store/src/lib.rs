@@ -529,12 +529,14 @@ impl Store {
             .map_err(StoreError::Codec)
     }
 
-    /// Delete state for a given block hash (for pruning).
+    /// Delete state and its checksum for a given block hash (for pruning).
     pub fn delete_state(&self, block_hash: &Hash) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
         {
-            let mut table = txn.open_table(STATE)?;
-            table.remove(&block_hash.0)?;
+            let mut state_table = txn.open_table(STATE)?;
+            state_table.remove(&block_hash.0)?;
+            let mut checksum_table = txn.open_table(STATE_CHECKSUMS)?;
+            checksum_table.remove(&block_hash.0)?;
         }
         txn.commit()?;
         Ok(())
@@ -1377,6 +1379,34 @@ mod tests {
 
         // Integrity check should pass
         assert!(store.verify_state_integrity(&block_hash).unwrap());
+    }
+
+    #[test]
+    fn test_delete_state_removes_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("test.redb")).unwrap();
+        let config = grey_types::config::Config::tiny();
+        let (genesis_state, _) = grey_consensus::genesis::create_genesis(&config);
+
+        let block_hash = Hash([42u8; 32]);
+        store
+            .put_state(&block_hash, &genesis_state, &config)
+            .unwrap();
+
+        // Verify state and checksum exist
+        assert!(store.verify_state_integrity(&block_hash).unwrap());
+
+        // Delete state
+        store.delete_state(&block_hash).unwrap();
+
+        // State should be gone
+        assert!(store.verify_state_integrity(&block_hash).is_err());
+
+        // Verify all_states shows 0 (no orphaned checksums)
+        let (verified, skipped, failed) = store.verify_all_states().unwrap();
+        assert_eq!(verified, 0);
+        assert_eq!(skipped, 0);
+        assert_eq!(failed, 0);
     }
 
     #[test]
