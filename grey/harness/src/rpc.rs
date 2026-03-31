@@ -211,3 +211,123 @@ impl RpcClient {
         })
     }
 }
+
+/// Multi-validator RPC client for querying all nodes in a testnet.
+///
+/// Wraps multiple `RpcClient` instances and provides methods to
+/// query all validators and compare their responses.
+#[allow(dead_code)]
+pub struct MultiRpcClient {
+    clients: Vec<RpcClient>,
+}
+
+#[allow(dead_code)]
+impl MultiRpcClient {
+    /// Create a multi-client from a list of RPC endpoint URLs.
+    pub fn new(endpoints: &[String]) -> Self {
+        Self {
+            clients: endpoints.iter().map(|e| RpcClient::new(e)).collect(),
+        }
+    }
+
+    /// Create a multi-client for sequential testnet validators.
+    /// Assumes validators listen on consecutive ports starting at `base_port`.
+    pub fn for_testnet(host: &str, base_port: u16, count: u16) -> Self {
+        let endpoints: Vec<String> = (0..count)
+            .map(|i| format!("http://{}:{}", host, base_port + i))
+            .collect();
+        Self::new(&endpoints)
+    }
+
+    /// Number of validators/endpoints.
+    pub fn count(&self) -> usize {
+        self.clients.len()
+    }
+
+    /// Get a reference to a specific validator's client.
+    pub fn client(&self, index: usize) -> &RpcClient {
+        &self.clients[index]
+    }
+
+    /// Query status from all validators. Returns (index, result) pairs.
+    pub async fn get_all_status(&self) -> Vec<(usize, Result<NodeStatus, RpcError>)> {
+        let mut results = Vec::with_capacity(self.clients.len());
+        for (i, client) in self.clients.iter().enumerate() {
+            results.push((i, client.get_status().await));
+        }
+        results
+    }
+
+    /// Check if all validators agree on the finalized block hash.
+    /// Returns Ok(hash) if all agree, Err with divergence details if not.
+    pub async fn check_finalized_consensus(&self) -> Result<String, String> {
+        let statuses = self.get_all_status().await;
+        let mut finalized_hashes: Vec<(usize, String)> = Vec::new();
+
+        for (i, result) in &statuses {
+            match result {
+                Ok(status) => {
+                    finalized_hashes.push((*i, status.finalized_hash.clone()));
+                }
+                Err(e) => {
+                    return Err(format!("validator {} unreachable: {}", i, e));
+                }
+            }
+        }
+
+        if finalized_hashes.is_empty() {
+            return Err("no validators responded".to_string());
+        }
+
+        let reference_hash = &finalized_hashes[0].1;
+        let divergent: Vec<_> = finalized_hashes
+            .iter()
+            .filter(|(_, h)| h != reference_hash)
+            .collect();
+
+        if divergent.is_empty() {
+            Ok(reference_hash.clone())
+        } else {
+            let mut msg = format!(
+                "finalized hash divergence: v0={}, divergent: ",
+                reference_hash
+            );
+            for (i, h) in &divergent {
+                msg.push_str(&format!("v{}={}, ", i, h));
+            }
+            Err(msg)
+        }
+    }
+
+    /// Check if all validators are within `max_slot_diff` slots of each other.
+    pub async fn check_head_proximity(&self, max_slot_diff: u32) -> Result<(), String> {
+        let statuses = self.get_all_status().await;
+        let mut slots: Vec<(usize, u32)> = Vec::new();
+
+        for (i, result) in &statuses {
+            match result {
+                Ok(status) => slots.push((*i, status.head_slot)),
+                Err(e) => return Err(format!("validator {} unreachable: {}", i, e)),
+            }
+        }
+
+        if slots.is_empty() {
+            return Err("no validators responded".to_string());
+        }
+
+        let min_slot = slots.iter().map(|(_, s)| *s).min().unwrap();
+        let max_slot = slots.iter().map(|(_, s)| *s).max().unwrap();
+
+        if max_slot - min_slot > max_slot_diff {
+            let details: Vec<String> = slots.iter().map(|(i, s)| format!("v{}={}", i, s)).collect();
+            Err(format!(
+                "head slot spread {} exceeds max {}: [{}]",
+                max_slot - min_slot,
+                max_slot_diff,
+                details.join(", ")
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
