@@ -679,99 +679,31 @@ impl Pvm {
                     self.pc = new_pc;
                 }
             }
-            Opcode::BranchEqImm => {
+            Opcode::BranchEqImm
+            | Opcode::BranchNeImm
+            | Opcode::BranchLtUImm
+            | Opcode::BranchLeUImm
+            | Opcode::BranchGeUImm
+            | Opcode::BranchGtUImm
+            | Opcode::BranchLtSImm
+            | Opcode::BranchLeSImm
+            | Opcode::BranchGeSImm
+            | Opcode::BranchGtSImm => {
                 if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] == imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchNeImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] != imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLtUImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] < imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLeUImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] <= imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGeUImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] >= imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGtUImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = self.registers[ra] > imm;
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLtSImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = (self.registers[ra] as i64) < (imm as i64);
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLeSImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = (self.registers[ra] as i64) <= (imm as i64);
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGeSImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = (self.registers[ra] as i64) >= (imm as i64);
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGtSImm => {
-                if let Args::RegImmOffset { ra, imm, offset } = args {
-                    let cond = (self.registers[ra] as i64) > (imm as i64);
+                    let (a, b) = (self.registers[ra], imm);
+                    let cond = match opcode {
+                        Opcode::BranchEqImm => a == b,
+                        Opcode::BranchNeImm => a != b,
+                        Opcode::BranchLtUImm => a < b,
+                        Opcode::BranchLeUImm => a <= b,
+                        Opcode::BranchGeUImm => a >= b,
+                        Opcode::BranchGtUImm => a > b,
+                        Opcode::BranchLtSImm => (a as i64) < (b as i64),
+                        Opcode::BranchLeSImm => (a as i64) <= (b as i64),
+                        Opcode::BranchGeSImm => (a as i64) >= (b as i64),
+                        Opcode::BranchGtSImm => (a as i64) > (b as i64),
+                        _ => unreachable!(),
+                    };
                     let (exit, new_pc) = self.branch(offset, cond, next_pc);
                     if let Some(e) = exit {
                         return Some(e);
@@ -1207,59 +1139,23 @@ impl Pvm {
             }
 
             // === A.5.11: Two registers + one offset ===
-            Opcode::BranchEq => {
+            Opcode::BranchEq
+            | Opcode::BranchNe
+            | Opcode::BranchLtU
+            | Opcode::BranchGeU
+            | Opcode::BranchLtS
+            | Opcode::BranchGeS => {
                 if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = self.registers[ra] == self.registers[rb];
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchNe => {
-                if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = self.registers[ra] != self.registers[rb];
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLtU => {
-                if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = self.registers[ra] < self.registers[rb];
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchLtS => {
-                if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = (self.registers[ra] as i64) < (self.registers[rb] as i64);
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGeU => {
-                if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = self.registers[ra] >= self.registers[rb];
-                    let (exit, new_pc) = self.branch(offset, cond, next_pc);
-                    if let Some(e) = exit {
-                        return Some(e);
-                    }
-                    self.pc = new_pc;
-                }
-            }
-            Opcode::BranchGeS => {
-                if let Args::TwoRegOffset { ra, rb, offset } = args {
-                    let cond = (self.registers[ra] as i64) >= (self.registers[rb] as i64);
+                    let (a, b) = (self.registers[ra], self.registers[rb]);
+                    let cond = match opcode {
+                        Opcode::BranchEq => a == b,
+                        Opcode::BranchNe => a != b,
+                        Opcode::BranchLtU => a < b,
+                        Opcode::BranchGeU => a >= b,
+                        Opcode::BranchLtS => (a as i64) < (b as i64),
+                        Opcode::BranchGeS => (a as i64) >= (b as i64),
+                        _ => unreachable!(),
+                    };
                     let (exit, new_pc) = self.branch(offset, cond, next_pc);
                     if let Some(e) = exit {
                         return Some(e);
@@ -1912,53 +1808,23 @@ impl Pvm {
                 }
 
                 // === Two registers + one offset (branches) ===
-                Opcode::BranchEq => {
-                    if self.registers[ra] == self.registers[rb] {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchNe => {
-                    if self.registers[ra] != self.registers[rb] {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLtU => {
-                    if self.registers[ra] < self.registers[rb] {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLtS => {
-                    if (self.registers[ra] as i64) < (self.registers[rb] as i64) {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGeU => {
-                    if self.registers[ra] >= self.registers[rb] {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGeS => {
-                    if (self.registers[ra] as i64) >= (self.registers[rb] as i64) {
+                Opcode::BranchEq
+                | Opcode::BranchNe
+                | Opcode::BranchLtU
+                | Opcode::BranchGeU
+                | Opcode::BranchLtS
+                | Opcode::BranchGeS => {
+                    let (a, b) = (self.registers[ra], self.registers[rb]);
+                    let cond = match inst.opcode {
+                        Opcode::BranchEq => a == b,
+                        Opcode::BranchNe => a != b,
+                        Opcode::BranchLtU => a < b,
+                        Opcode::BranchGeU => a >= b,
+                        Opcode::BranchLtS => (a as i64) < (b as i64),
+                        Opcode::BranchGeS => (a as i64) >= (b as i64),
+                        _ => unreachable!(),
+                    };
+                    if cond {
                         if inst.target_idx != u32::MAX {
                             branch_idx = inst.target_idx;
                         } else {
@@ -2464,89 +2330,31 @@ impl Pvm {
                 }
 
                 // === BranchImm variants (cond on reg[ra] vs imm1, target = target_idx) ===
-                Opcode::BranchEqImm => {
-                    if self.registers[ra] == imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchNeImm => {
-                    if self.registers[ra] != imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLtUImm => {
-                    if self.registers[ra] < imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLeUImm => {
-                    if self.registers[ra] <= imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGeUImm => {
-                    if self.registers[ra] >= imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGtUImm => {
-                    if self.registers[ra] > imm1 {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLtSImm => {
-                    if (self.registers[ra] as i64) < (imm1 as i64) {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchLeSImm => {
-                    if (self.registers[ra] as i64) <= (imm1 as i64) {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGeSImm => {
-                    if (self.registers[ra] as i64) >= (imm1 as i64) {
-                        if inst.target_idx != u32::MAX {
-                            branch_idx = inst.target_idx;
-                        } else {
-                            exit = Some(ExitReason::Panic);
-                        }
-                    }
-                }
-                Opcode::BranchGtSImm => {
-                    if (self.registers[ra] as i64) > (imm1 as i64) {
+                Opcode::BranchEqImm
+                | Opcode::BranchNeImm
+                | Opcode::BranchLtUImm
+                | Opcode::BranchLeUImm
+                | Opcode::BranchGeUImm
+                | Opcode::BranchGtUImm
+                | Opcode::BranchLtSImm
+                | Opcode::BranchLeSImm
+                | Opcode::BranchGeSImm
+                | Opcode::BranchGtSImm => {
+                    let (a, b) = (self.registers[ra], imm1);
+                    let cond = match inst.opcode {
+                        Opcode::BranchEqImm => a == b,
+                        Opcode::BranchNeImm => a != b,
+                        Opcode::BranchLtUImm => a < b,
+                        Opcode::BranchLeUImm => a <= b,
+                        Opcode::BranchGeUImm => a >= b,
+                        Opcode::BranchGtUImm => a > b,
+                        Opcode::BranchLtSImm => (a as i64) < (b as i64),
+                        Opcode::BranchLeSImm => (a as i64) <= (b as i64),
+                        Opcode::BranchGeSImm => (a as i64) >= (b as i64),
+                        Opcode::BranchGtSImm => (a as i64) > (b as i64),
+                        _ => unreachable!(),
+                    };
+                    if cond {
                         if inst.target_idx != u32::MAX {
                             branch_idx = inst.target_idx;
                         } else {
@@ -3041,41 +2849,41 @@ fn predecode_instructions(
 
     let mut pc = 0;
     while pc < len {
-        if pc < bitmask.len()
-            && bitmask[pc] == 1
-            && let Some(opcode) = Opcode::from_byte(code[pc])
-        {
-            let skip = skip_at(pc);
-            let next_pc = (pc + 1 + skip) as u32;
-            let category = opcode.category();
-            let args = args::decode_args(code, pc, skip, category);
-            let bb_gas_cost = if pc < gas_block_starts.len() && gas_block_starts[pc] {
-                block_gas_costs[pc]
-            } else {
-                0
-            };
+        #[allow(clippy::collapsible_if)] // let-chain requires Rust 2024
+        if pc < bitmask.len() && bitmask[pc] == 1 {
+            if let Some(opcode) = Opcode::from_byte(code[pc]) {
+                let skip = skip_at(pc);
+                let next_pc = (pc + 1 + skip) as u32;
+                let category = opcode.category();
+                let args = args::decode_args(code, pc, skip, category);
+                let bb_gas_cost = if pc < gas_block_starts.len() && gas_block_starts[pc] {
+                    block_gas_costs[pc]
+                } else {
+                    0
+                };
 
-            // Extract flat operands from decoded args
-            let (ra, rb, rd, imm1, imm2) = flatten_args(&args);
+                // Extract flat operands from decoded args
+                let (ra, rb, rd, imm1, imm2) = flatten_args(&args);
 
-            let idx = insts.len() as u32;
-            pc_to_idx[pc] = idx;
-            insts.push(DecodedInst {
-                opcode,
-                ra,
-                rb,
-                rd,
-                imm1,
-                imm2,
-                pc: pc as u32,
-                next_pc,
-                next_idx: u32::MAX,   // resolved in second pass
-                target_idx: u32::MAX, // resolved in second pass
-                bb_gas_cost,
-            });
+                let idx = insts.len() as u32;
+                pc_to_idx[pc] = idx;
+                insts.push(DecodedInst {
+                    opcode,
+                    ra,
+                    rb,
+                    rd,
+                    imm1,
+                    imm2,
+                    pc: pc as u32,
+                    next_pc,
+                    next_idx: u32::MAX,   // resolved in second pass
+                    target_idx: u32::MAX, // resolved in second pass
+                    bb_gas_cost,
+                });
 
-            pc = next_pc as usize;
-            continue;
+                pc = next_pc as usize;
+                continue;
+            }
         }
         pc += 1;
     }
