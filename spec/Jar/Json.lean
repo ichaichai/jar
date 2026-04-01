@@ -433,29 +433,31 @@ instance : FromJson PendingReport where
 -- ============================================================================
 
 instance : ToJson ServiceAccount where
-  toJson sa := Json.mkObj [
-    ("storage", toJson sa.storage),
-    ("preimages", toJson sa.preimages),
-    ("preimage_info", toJson sa.preimageInfo),
-    ("gratis", toJson sa.gratis),
-    ("code_hash", toJson sa.codeHash),
-    ("balance", toJson sa.balance),
-    ("min_acc_gas", toJson sa.minAccGas),
-    ("min_on_transfer_gas", toJson sa.minOnTransferGas),
-    ("item_count", toJson sa.itemCount),
-    ("creation_slot", toJson sa.creationSlot),
-    ("last_accumulation", toJson sa.lastAccumulation),
-    ("parent_service_id", toJson sa.parentServiceId)]
+  toJson sa :=
+    let econFields := @EconModel.econToJson JamConfig.EconType JamConfig.TransferType _ sa.econ
+    Json.mkObj ([
+      ("storage", toJson sa.storage),
+      ("preimages", toJson sa.preimages),
+      ("preimage_info", toJson sa.preimageInfo)] ++ econFields ++ [
+      ("code_hash", toJson sa.codeHash),
+      ("min_acc_gas", toJson sa.minAccGas),
+      ("min_on_transfer_gas", toJson sa.minOnTransferGas),
+      ("item_count", toJson sa.itemCount),
+      ("creation_slot", toJson sa.creationSlot),
+      ("last_accumulation", toJson sa.lastAccumulation),
+      ("parent_service_id", toJson sa.parentServiceId)])
 
 instance : FromJson ServiceAccount where
   fromJson? j := do
+    let econ ← match @EconModel.econFromJson? JamConfig.EconType JamConfig.TransferType _ j with
+      | .ok e => pure e
+      | .error msg => throw msg
     return {
       storage := ← fromJson? (← j.getObjVal? "storage")
       preimages := ← fromJson? (← j.getObjVal? "preimages")
       preimageInfo := ← fromJson? (← j.getObjVal? "preimage_info")
-      gratis := ← fromJson? (← j.getObjVal? "gratis")
+      econ
       codeHash := ← fromJson? (← j.getObjVal? "code_hash")
-      balance := ← fromJson? (← j.getObjVal? "balance")
       minAccGas := ← fromJson? (← j.getObjVal? "min_acc_gas")
       minOnTransferGas := ← fromJson? (← j.getObjVal? "min_on_transfer_gas")
       itemCount := ← fromJson? (← j.getObjVal? "item_count")
@@ -464,38 +466,51 @@ instance : FromJson ServiceAccount where
       parentServiceId := ← fromJson? (← j.getObjVal? "parent_service_id") }
 
 instance : ToJson DeferredTransfer where
-  toJson dt := Json.mkObj [
-    ("source", toJson dt.source),
-    ("dest", toJson dt.dest),
-    ("amount", toJson dt.amount),
-    ("memo", toJson dt.memo),
-    ("gas", toJson dt.gas)]
+  toJson dt :=
+    let xferFields := @EconModel.xferToJson JamConfig.EconType JamConfig.TransferType _ dt.payload
+    Json.mkObj ([
+      ("source", toJson dt.source),
+      ("dest", toJson dt.dest)] ++ xferFields ++ [
+      ("memo", toJson dt.memo),
+      ("gas", toJson dt.gas)])
 
 instance : FromJson DeferredTransfer where
   fromJson? j := do
+    let payload ← match @EconModel.xferFromJson? JamConfig.EconType JamConfig.TransferType _ j with
+      | .ok p => pure p
+      | .error msg => throw msg
     return {
       source := ← fromJson? (← j.getObjVal? "source")
       dest := ← fromJson? (← j.getObjVal? "dest")
-      amount := ← fromJson? (← j.getObjVal? "amount")
+      payload
       memo := ← fromJson? (← j.getObjVal? "memo")
       gas := ← fromJson? (← j.getObjVal? "gas") }
 
 instance : ToJson PrivilegedServices where
-  toJson ps := Json.mkObj [
-    ("manager", toJson ps.manager),
-    ("assigners", toJson ps.assigners),
-    ("designator", toJson ps.designator),
-    ("registrar", toJson ps.registrar),
-    ("always_accumulate", toJson ps.alwaysAccumulate)]
+  toJson ps :=
+    let base := [
+      ("manager", toJson ps.manager),
+      ("assigners", toJson ps.assigners),
+      ("designator", toJson ps.designator),
+      ("registrar", toJson ps.registrar),
+      ("always_accumulate", toJson ps.alwaysAccumulate)]
+    let extra := if JamConfig.hostcallVersion == 1
+      then [("quota_service", toJson ps.quotaService)]
+      else []
+    Json.mkObj (base ++ extra)
 
 instance : FromJson PrivilegedServices where
   fromJson? j := do
+    let quotaService : ServiceId := match j.getObjVal? "quota_service" with
+      | .ok v => match fromJson? v with | .ok s => s | .error _ => 0
+      | .error _ => 0
     return {
       manager := ← fromJson? (← j.getObjVal? "manager")
       assigners := ← fromJson? (← j.getObjVal? "assigners")
       designator := ← fromJson? (← j.getObjVal? "designator")
       registrar := ← fromJson? (← j.getObjVal? "registrar")
-      alwaysAccumulate := ← fromJson? (← j.getObjVal? "always_accumulate") }
+      alwaysAccumulate := ← fromJson? (← j.getObjVal? "always_accumulate")
+      quotaService }
 
 -- ============================================================================
 -- State types

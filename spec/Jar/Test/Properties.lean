@@ -15,7 +15,7 @@ open Lean (Json ToJson FromJson toJson fromJson?)
 open Plausible Plausible.Arbitrary Plausible.Gen
 open Jar Jar.Json Jar.Codec
 
-variable [JamConfig]
+variable [JamConfig] [Plausible.Arbitrary JamConfig.EconType] [Plausible.Arbitrary JamConfig.TransferType]
 
 -- ============================================================================
 -- Test harness: run N random instances and check a property
