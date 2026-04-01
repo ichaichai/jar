@@ -211,6 +211,24 @@ pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Op
     Some(pvm)
 }
 
+/// Initialize a program with a specific entry point (PC offset).
+///
+/// Service blobs have dual entry points:
+/// - PC=0: refine (stateless computation)
+/// - PC=5: accumulate (stateful effects)
+///
+/// This is identical to `initialize_program` but sets the initial PC.
+pub fn initialize_program_at(
+    program_blob: &[u8],
+    arguments: &[u8],
+    gas: Gas,
+    entry_pc: u32,
+) -> Option<Pvm> {
+    let mut pvm = initialize_program(program_blob, arguments, gas)?;
+    pvm.set_pc(entry_pc);
+    Some(pvm)
+}
+
 /// Memory layout offsets for direct flat-buffer writes.
 pub struct DataLayout {
     pub mem_size: u32,

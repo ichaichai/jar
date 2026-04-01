@@ -134,6 +134,12 @@ impl Pvm {
         }
     }
 
+    /// Set the program counter to a specific offset.
+    /// Used by service blobs to select refine (PC=0) or accumulate (PC=5) entry points.
+    pub fn set_pc(&mut self, pc: u32) {
+        self.pc = pc;
+    }
+
     /// Create a simple PVM for testing (code only, trivial bitmask).
     pub fn new_simple(
         code: Vec<u8>,

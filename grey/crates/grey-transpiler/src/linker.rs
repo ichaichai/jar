@@ -179,14 +179,9 @@ pub fn link_elf_service(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
     let mut rw_data = elf.rw_data.clone();
     rewrite_data_code_ptrs(&elf, &mut ctx, &mut ro_data, &mut rw_data);
 
-    crate::peephole_fuse_load_imm_alu(&mut ctx.code, &mut ctx.bitmask, &ctx.jump_table);
-    crate::ensure_branch_targets_are_block_starts(
-        &mut ctx.code,
-        &mut ctx.bitmask,
-        &mut ctx.jump_table,
-    );
-
-    // Resolve entry points to PVM offsets
+    // Resolve entry points to PVM offsets BEFORE peephole/branch passes,
+    // since ensure_branch_targets_are_block_starts inserts bytes and shifts
+    // all offsets (invalidating address_map entries).
     let refine_pvm = ctx.address_map.get(&refine_addr).copied().ok_or_else(|| {
         TranspileError::InvalidSection(format!(
             "refine symbol at {:#x} not in translated code",
@@ -205,7 +200,9 @@ pub fn link_elf_service(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
             ))
         })?;
 
-    // Patch dispatch header: jump to refine at byte 0, jump to accumulate at byte 5
+    // Patch dispatch header BEFORE the passes so the jumps are treated as
+    // normal branch instructions and their offsets get adjusted automatically
+    // by ensure_branch_targets_are_block_starts.
     ctx.code[0] = 40; // jump opcode
     let refine_rel = refine_pvm as i32;
     ctx.code[1..5].copy_from_slice(&refine_rel.to_le_bytes());
@@ -213,6 +210,21 @@ pub fn link_elf_service(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
     ctx.code[5] = 40; // jump opcode
     let acc_rel = (accumulate_pvm as i32) - 5;
     ctx.code[6..10].copy_from_slice(&acc_rel.to_le_bytes());
+
+    // Mark dispatch targets as instruction starts so the passes see them.
+    if (refine_pvm as usize) < ctx.bitmask.len() {
+        ctx.bitmask[refine_pvm as usize] = 1;
+    }
+    if (accumulate_pvm as usize) < ctx.bitmask.len() {
+        ctx.bitmask[accumulate_pvm as usize] = 1;
+    }
+
+    crate::peephole_fuse_load_imm_alu(&mut ctx.code, &mut ctx.bitmask, &ctx.jump_table);
+    crate::ensure_branch_targets_are_block_starts(
+        &mut ctx.code,
+        &mut ctx.bitmask,
+        &mut ctx.jump_table,
+    );
 
     Ok(emitter::build_standard_program(
         &ro_data,
