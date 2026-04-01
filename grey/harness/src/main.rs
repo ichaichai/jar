@@ -169,6 +169,10 @@ async fn main() {
                 "  FAIL: {} ({dur}s)\n",
                 result.error.as_deref().unwrap_or("unknown")
             );
+            // Include node log tail on failure for debugging
+            if let Some(ref proc) = _testnet {
+                print_log_tail(proc.log_path(), 20);
+            }
         }
         results.push(result);
     }
@@ -243,4 +247,26 @@ async fn main() {
     }
 
     std::process::exit(if passed == results.len() { 0 } else { 1 });
+}
+
+/// Print the last N lines of a log file for debugging failed scenarios.
+fn print_log_tail(path: &std::path::Path, max_lines: usize) {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            println!(
+                "  --- Node log (last {} lines from {}) ---",
+                max_lines,
+                path.display()
+            );
+            for line in &lines[start..] {
+                println!("  | {}", line);
+            }
+            println!("  --- End of log ---\n");
+        }
+        Err(e) => {
+            println!("  (could not read node log at {}: {})\n", path.display(), e);
+        }
+    }
 }
