@@ -16,3 +16,4 @@
 # Shared
 /.claude/settings.local.json
 .devcontainer/
+grey/fuzz/target/
