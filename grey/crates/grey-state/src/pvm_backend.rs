@@ -20,11 +20,11 @@ fn pvm_mode() -> &'static str {
 
 /// Backend-agnostic PVM instance.
 enum Backend {
-    Interpreter(javm::vm::Pvm),
-    Recompiler(javm::RecompiledPvm),
+    Interpreter(Box<javm::vm::Pvm>),
+    Recompiler(Box<javm::RecompiledPvm>),
     Compare {
-        interp: javm::vm::Pvm,
-        recomp: javm::RecompiledPvm,
+        interp: Box<javm::vm::Pvm>,
+        recomp: Box<javm::RecompiledPvm>,
         step: u32,
     },
 }
@@ -40,21 +40,21 @@ impl PvmInstance {
         match pvm_mode() {
             "recompiler" => javm::recompiler::initialize_program_recompiled(code_blob, args, gas)
                 .map(|pvm| PvmInstance {
-                    inner: Backend::Recompiler(pvm),
+                    inner: Backend::Recompiler(Box::new(pvm)),
                 }),
             "compare" => {
                 let interp = javm::program::initialize_program(code_blob, args, gas)?;
                 let recomp = javm::recompiler::initialize_program_recompiled(code_blob, args, gas)?;
                 Some(PvmInstance {
                     inner: Backend::Compare {
-                        interp,
-                        recomp,
+                        interp: Box::new(interp),
+                        recomp: Box::new(recomp),
                         step: 0,
                     },
                 })
             }
             _ => javm::program::initialize_program(code_blob, args, gas).map(|pvm| PvmInstance {
-                inner: Backend::Interpreter(pvm),
+                inner: Backend::Interpreter(Box::new(pvm)),
             }),
         }
     }

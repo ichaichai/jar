@@ -14,7 +14,11 @@ pub mod gas_cost;
 pub mod gas_sim;
 pub mod instruction;
 pub mod program;
-#[cfg(feature = "std")]
+// Real JIT recompiler on Linux x86-64; interpreter-backed shim everywhere else.
+#[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
+pub mod recompiler;
+#[cfg(all(feature = "std", not(all(target_os = "linux", target_arch = "x86_64"))))]
+#[path = "recompiler_shim.rs"]
 pub mod recompiler;
 pub mod vm;
 
