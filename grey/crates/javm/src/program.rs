@@ -370,26 +370,33 @@ fn validate_basic_blocks(code: &[u8], bitmask: &[u8], jump_table: &[u32]) -> boo
     true
 }
 
-/// Decode a variable-length natural number (JAM codec format).
-/// Returns (value, bytes_consumed) or None.
+/// Decode a u32 LE natural number (fixed-width, no compact encoding).
+/// Returns (value, bytes_consumed=4) or None.
 fn decode_natural(data: &[u8], offset: usize) -> Option<(usize, usize)> {
+    if offset + 4 > data.len() {
+        return None;
+    }
+    let val = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+    Some((val, 4))
+}
+
+/// Legacy: kept for reference, no longer used.
+#[allow(dead_code)]
+fn decode_natural_compact(data: &[u8], offset: usize) -> Option<(usize, usize)> {
     if offset >= data.len() {
         return None;
     }
 
     let first = data[offset];
     if first < 128 {
-        // Single byte
         Some((first as usize, 1))
     } else if first < 192 {
-        // Two bytes
         if offset + 2 > data.len() {
             return None;
         }
         let val = ((first as usize & 0x3F) << 8) | data[offset + 1] as usize;
         Some((val, 2))
     } else if first < 224 {
-        // Three bytes: remaining 2 bytes in LE order
         if offset + 3 > data.len() {
             return None;
         }
@@ -398,7 +405,6 @@ fn decode_natural(data: &[u8], offset: usize) -> Option<(usize, usize)> {
             | data[offset + 1] as usize;
         Some((val, 3))
     } else {
-        // Four bytes: remaining 3 bytes in LE order
         if offset + 4 > data.len() {
             return None;
         }
