@@ -4,7 +4,7 @@ use crate::{CoreIndex, Gas, Hash, ServiceId, Timeslot};
 use std::collections::BTreeMap;
 
 /// Work report R (eq 11.2).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct WorkReport {
     /// s: Availability specification (WorkPackageSpec in ASN).
     pub package_spec: AvailabilitySpec,
@@ -32,7 +32,7 @@ pub struct WorkReport {
 }
 
 /// Work-package availability specification (WorkPackageSpec in ASN, eq 11.5).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct AvailabilitySpec {
     /// p: Work-package hash.
     pub package_hash: Hash,
@@ -49,12 +49,13 @@ pub struct AvailabilitySpec {
     /// n: Exports count.
     pub exports_count: u16,
 
-    /// v: Number of erasure-coding shards (GP#514). Equals len(κ').
+    /// v: Number of erasure-coding shards (GP#514). Not part of wire encoding.
+    #[codec(skip)]
     pub erasure_shards: u16,
 }
 
 /// Refinement context C (eq 11.4).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct RefinementContext {
     /// a: Anchor header hash.
     pub anchor: Hash,
@@ -77,7 +78,7 @@ pub struct RefinementContext {
 
 /// Work result (WorkResult in ASN, eq 11.6).
 /// Combines the work digest fields and refine load.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct WorkDigest {
     /// s: Service index.
     pub service_id: ServiceId,
@@ -113,24 +114,30 @@ pub struct WorkDigest {
 
 /// Work execution result (WorkExecResult in ASN, eq 11.7).
 /// Discriminant values: ok=0, out-of-gas=1, panic=2, bad-exports=3, bad-code=4, code-oversize=5.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub enum WorkResult {
     /// Successful refinement output (discriminant 0).
+    #[codec(index = 0)]
     Ok(Vec<u8>),
     /// Out of gas (discriminant 1).
+    #[codec(index = 1)]
     OutOfGas,
     /// Panic (discriminant 2).
+    #[codec(index = 2)]
     Panic,
     /// Invalid export count (discriminant 3).
+    #[codec(index = 3)]
     BadExports,
     /// Invalid code / code not available (discriminant 4).
+    #[codec(index = 4)]
     BadCode,
     /// Code size exceeds limits (discriminant 5).
+    #[codec(index = 5)]
     CodeOversize,
 }
 
 /// Work package P (eq 14.2, WorkPackage in ASN).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct WorkPackage {
     /// Service ID hosting the authorization code.
     pub auth_code_host: ServiceId,
@@ -152,7 +159,7 @@ pub struct WorkPackage {
 }
 
 /// Work item W (eq 14.3).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct WorkItem {
     /// s: Service index.
     pub service_id: ServiceId,
@@ -180,7 +187,7 @@ pub struct WorkItem {
 }
 
 /// An import segment reference (ImportSpec in ASN).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct ImportSegment {
     /// Root hash of the segment tree.
     pub hash: Hash,

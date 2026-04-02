@@ -8,6 +8,7 @@ description = "Core types, constants, and data structures for the JAM protocol."
 [dependencies]
 hex = { workspace = true }
 serde = { workspace = true }
+scale = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

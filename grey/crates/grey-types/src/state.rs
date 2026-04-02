@@ -66,7 +66,7 @@ pub struct State {
 }
 
 /// Safrole consensus state γ (eq 6.3).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct SafroleState {
     /// γP: Pending (next epoch) validator keys.
     pub pending_keys: Vec<ValidatorKey>,
@@ -83,16 +83,18 @@ pub struct SafroleState {
 }
 
 /// The seal-key series for an epoch: either tickets or fallback keys (eq 6.5).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub enum SealKeySeries {
     /// Regular operation: sequence of E tickets.
+    #[codec(index = 0)]
     Tickets(Vec<Ticket>),
     /// Fallback mode: sequence of E Bandersnatch keys.
+    #[codec(index = 1)]
     Fallback(Vec<BandersnatchPublicKey>),
 }
 
 /// Recent block history β (eq 7.1-7.4).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct RecentBlocks {
     /// βH: Information on the most recent H blocks.
     pub headers: Vec<RecentBlockInfo>,
@@ -102,7 +104,7 @@ pub struct RecentBlocks {
 }
 
 /// Info retained for each recent block (eq 7.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct RecentBlockInfo {
     /// h: Header hash.
     pub header_hash: Hash,
@@ -118,7 +120,7 @@ pub struct RecentBlockInfo {
 }
 
 /// A pending work-report assigned to a core.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, scale::Encode, scale::Decode)]
 pub struct PendingReport {
     /// r: The work report.
     pub report: WorkReport,
@@ -127,7 +129,7 @@ pub struct PendingReport {
 }
 
 /// Privileged service indices χ (eq 9.9).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, scale::Encode, scale::Decode)]
 pub struct PrivilegedServices {
     /// χM: Manager (blessed) service.
     pub manager: ServiceId,
@@ -144,7 +146,7 @@ pub struct PrivilegedServices {
 }
 
 /// Past judgments ψ (eq 10.1).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, scale::Encode, scale::Decode)]
 pub struct Judgments {
     /// ψG: Work-reports judged to be correct.
     pub good: BTreeSet<Hash>,
@@ -190,7 +192,7 @@ pub struct ServiceAccount {
 }
 
 /// Validator activity statistics π (eq 13.1).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, scale::Encode, scale::Decode)]
 pub struct ValidatorStatistics {
     /// πV: Per-validator statistics (current epoch accumulator).
     pub current: Vec<ValidatorRecord>,
@@ -203,7 +205,9 @@ pub struct ValidatorStatistics {
 }
 
 /// Per-validator performance record.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, scale::Encode, scale::Decode,
+)]
 pub struct ValidatorRecord {
     /// b: Blocks produced.
     #[serde(rename = "blocks")]
@@ -227,7 +231,7 @@ pub struct ValidatorRecord {
 
 /// Per-core statistics for a single block (GP π_C, eq 13.1).
 /// Fields ordered per GP type definition: d, p, i, x, z, e, l, u.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, scale::Encode, scale::Decode)]
 pub struct CoreStatistics {
     /// d: DA load (total bytes written to DA layer).
     pub da_load: u64,
@@ -249,7 +253,7 @@ pub struct CoreStatistics {
 
 /// Per-service statistics for a single block (GP π_S, eq 13.1).
 /// Fields ordered per GP type definition: p, r, i, x, z, e, a.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, scale::Encode, scale::Decode)]
 pub struct ServiceStatistics {
     /// p.0: Preimages provided — count.
     pub provided_count: u64,

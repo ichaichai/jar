@@ -20,7 +20,7 @@ namespace Jar.Test.BlockTest
 open Lean (Json ToJson FromJson toJson fromJson?)
 open Jar Jar.Json
 
-variable [JamConfig]
+variable [JamVariant]
 
 -- ============================================================================
 -- Block-trace JSON parsing (different field names from STF tests)
@@ -322,7 +322,7 @@ private def isVerbose : IO Bool := do
   return v.isSome
 
 /-- Run a single block test. Returns pass/fail/skip. -/
-def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
+def runBlockTest [JamVariant] (inputPath : System.FilePath) : IO TestResult := do
   let name := inputPath.fileName.getD inputPath.toString
   let outputPath := inputPath.toString.replace ".input." ".output."
 
@@ -469,7 +469,7 @@ def runBlockTest [JamConfig] (inputPath : System.FilePath) : IO TestResult := do
       return .fail
 
 /-- Run all block tests in a trace directory. -/
-def runBlockTestDir [JamConfig] (dir : String) : IO UInt32 := do
+def runBlockTestDir [JamVariant] (dir : String) : IO UInt32 := do
   let dirPath : System.FilePath := dir
   let entries ← dirPath.readDir
   let suffix := s!".input.{JamConfig.name}.json"
@@ -498,7 +498,7 @@ def runBlockTestDir [JamConfig] (dir : String) : IO UInt32 := do
 
 /-- Run block tests sequentially, threading state from block to block.
     Used for conformance traces where only the first block has keyvals. -/
-def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
+def runBlockTestDirSeq [JamVariant] (dir : String) : IO UInt32 := do
   let dirPath : System.FilePath := dir
   let entries ← dirPath.readDir
   let suffix := s!".input.{JamConfig.name}.json"
@@ -643,7 +643,7 @@ def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
           IO.println s!"  PASS {name} (no-op block, post==pre)"
           passed := passed + 1
           currentState := some (state, opaqueData)
-          let headerHash := Crypto.blake2b (Codec.encodeHeader block.header)
+          let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader block.header)
           stateMap := stateMap.push (headerHash, state, opaqueData)
           continue
         let postKvs := (@StateSerialization.serializeState _ postState).map fun (k, v) => (k.data, v)
@@ -667,7 +667,7 @@ def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
           passed := passed + 1
           currentState := some (postState, filteredOpaque)
           -- Save post-state keyed by header hash for fork handling
-          let headerHash := Crypto.blake2b (Codec.encodeHeader block.header)
+          let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader block.header)
           stateMap := stateMap.push (headerHash, postState, filteredOpaque)
         else
           IO.println s!"  FAIL {name}: post_state root mismatch"
@@ -698,7 +698,7 @@ def runBlockTestDirSeq [JamConfig] (dir : String) : IO UInt32 := do
           failed := failed + 1
           -- Continue threading to see if subsequent blocks also fail
           currentState := some (postState, filteredOpaque)
-          let headerHash := Crypto.blake2b (Codec.encodeHeader block.header)
+          let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader block.header)
           stateMap := stateMap.push (headerHash, postState, filteredOpaque)
     | none =>
       if isError then
@@ -729,7 +729,7 @@ private def kvalsToJson (kvs : Array (ByteArray × ByteArray)) : Json :=
 
 /-- Replay a sequential trace and overwrite each block's JSON files with full
     pre/post state keyvals. The transition logic mirrors `runBlockTestDirSeq`. -/
-def runBlockTestDirDump [JamConfig] (dir : String) : IO UInt32 := do
+def runBlockTestDirDump [JamVariant] (dir : String) : IO UInt32 := do
   let dirPath : System.FilePath := dir
   let entries ← dirPath.readDir
   let suffix := s!".input.{JamConfig.name}.json"
@@ -901,7 +901,7 @@ def runBlockTestDirDump [JamConfig] (dir : String) : IO UInt32 := do
 
       -- Thread state forward
       currentState := some (postState, filteredOpaque)
-      let headerHash := Crypto.blake2b (Codec.encodeHeader block.header)
+      let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader block.header)
       stateMap := stateMap.push (headerHash, postState, filteredOpaque)
       IO.println s!"  DUMP {name} (success, {allPostKvs.size} kvs)"
       dumped := dumped + 1

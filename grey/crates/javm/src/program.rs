@@ -370,8 +370,9 @@ fn validate_basic_blocks(code: &[u8], bitmask: &[u8], jump_table: &[u32]) -> boo
     true
 }
 
-/// Decode a variable-length natural number (JAM codec format).
-/// Returns (value, bytes_consumed) or None.
+/// Decode a variable-length natural number (JAM compact encoding).
+/// Used in PVM blob header for |j| and |c|.
+/// TODO: Switch to u32 LE once test vectors are regenerated with new PVM blob format.
 fn decode_natural(data: &[u8], offset: usize) -> Option<(usize, usize)> {
     if offset >= data.len() {
         return None;
@@ -379,17 +380,14 @@ fn decode_natural(data: &[u8], offset: usize) -> Option<(usize, usize)> {
 
     let first = data[offset];
     if first < 128 {
-        // Single byte
         Some((first as usize, 1))
     } else if first < 192 {
-        // Two bytes
         if offset + 2 > data.len() {
             return None;
         }
         let val = ((first as usize & 0x3F) << 8) | data[offset + 1] as usize;
         Some((val, 2))
     } else if first < 224 {
-        // Three bytes: remaining 2 bytes in LE order
         if offset + 3 > data.len() {
             return None;
         }
@@ -398,7 +396,6 @@ fn decode_natural(data: &[u8], offset: usize) -> Option<(usize, usize)> {
             | data[offset + 1] as usize;
         Some((val, 3))
     } else {
-        // Four bytes: remaining 3 bytes in LE order
         if offset + 4 > data.len() {
             return None;
         }

@@ -8,7 +8,6 @@
 //! 5. Signing and broadcasting guarantees
 //! 6. Generating availability assurances for chunks we hold
 
-use grey_codec::Encode;
 use grey_consensus::genesis::ValidatorSecrets;
 use grey_erasure::ErasureParams;
 use grey_state::refine::{self, RefineContext};
@@ -18,6 +17,7 @@ use grey_types::header::{Assurance, Guarantee};
 use grey_types::state::State;
 use grey_types::work::{WorkPackage, WorkReport};
 use grey_types::{Ed25519Signature, Hash};
+use scale::Encode;
 use std::collections::{BTreeMap, HashSet};
 
 /// Tracks pending guarantees and chunks for availability.
@@ -303,7 +303,7 @@ pub fn handle_received_guarantee(
     }
     let report_data = &data[pos..pos + report_len];
 
-    use grey_codec::Decode;
+    use scale::Decode;
     let report = match WorkReport::decode(report_data) {
         Ok((r, _)) => r,
         Err(e) => {

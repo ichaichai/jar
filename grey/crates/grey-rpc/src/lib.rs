@@ -277,7 +277,7 @@ impl JamRpcServer for RpcImpl {
         }
 
         // Verify the payload is a valid JAM-encoded work package.
-        use grey_codec::Decode;
+        use scale::Decode;
         if grey_types::work::WorkPackage::decode(&data).is_err() {
             return Err(internal_error(
                 "invalid work package: JAM codec decode failed",
@@ -566,20 +566,18 @@ impl JamRpcServer for RpcImpl {
             .map_err(|e| internal_error(e.to_string()))?
             .unwrap_or_default();
 
-        // Each validator is exactly 336 bytes: bandersnatch(32) + ed25519(32) + bls(144) + metadata(128)
-        if !raw.is_empty() && !raw.len().is_multiple_of(336) {
-            return Err(internal_error(format!(
-                "validator data length {} not a multiple of 336",
-                raw.len()
-            )));
-        }
+        // Decode validators using scale (u32 count prefix + ValidatorKey entries)
+        let validators: Vec<grey_types::validator::ValidatorKey> = if raw.is_empty() {
+            Vec::new()
+        } else {
+            use scale::Decode;
+            Vec::<grey_types::validator::ValidatorKey>::decode(&raw)
+                .map(|(v, _)| v)
+                .map_err(|e| internal_error(format!("validator decode: {e}")))?
+        };
 
-        let count = raw.len() / 336;
-        let mut entries = Vec::with_capacity(count);
-        for i in 0..count {
-            let v = grey_types::validator::ValidatorKey::from_bytes(
-                raw[i * 336..(i + 1) * 336].try_into().unwrap(),
-            );
+        let mut entries = Vec::with_capacity(validators.len());
+        for (i, v) in validators.iter().enumerate() {
             entries.push(serde_json::json!({
                 "index": i,
                 "ed25519": hex::encode(v.ed25519.0),
@@ -588,6 +586,7 @@ impl JamRpcServer for RpcImpl {
                 "metadata": hex::encode(v.metadata),
             }));
         }
+        let count = validators.len();
 
         Ok(serde_json::json!({
             "set": set_name,
@@ -1168,7 +1167,7 @@ pub fn create_rpc_channel(
 mod tests {
     use super::*;
     use grey_types::BandersnatchSignature;
-    use grey_types::header::{Block, Extrinsic, Header};
+    use grey_types::header::{Block, Extrinsic, Header, UnsignedHeader};
     use jsonrpsee::core::client::ClientT;
     use jsonrpsee::http_client::HttpClientBuilder;
     use jsonrpsee::rpc_params;
@@ -1194,15 +1193,17 @@ mod tests {
     fn test_block(slot: u32) -> Block {
         Block {
             header: Header {
-                parent_hash: Hash([1u8; 32]),
-                state_root: Hash([2u8; 32]),
-                extrinsic_hash: Hash([3u8; 32]),
-                timeslot: slot,
-                epoch_marker: None,
-                tickets_marker: None,
-                author_index: 5,
-                vrf_signature: BandersnatchSignature([7u8; 96]),
-                offenders_marker: vec![],
+                data: UnsignedHeader {
+                    parent_hash: Hash([1u8; 32]),
+                    state_root: Hash([2u8; 32]),
+                    extrinsic_hash: Hash([3u8; 32]),
+                    timeslot: slot,
+                    epoch_marker: None,
+                    tickets_marker: None,
+                    author_index: 5,
+                    vrf_signature: BandersnatchSignature([7u8; 96]),
+                    offenders_marker: vec![],
+                },
                 seal: BandersnatchSignature([8u8; 96]),
             },
             extrinsic: Extrinsic::default(),
@@ -1349,8 +1350,8 @@ mod tests {
 
     /// Build a minimal valid JAM-encoded work package for testing.
     fn minimal_work_package_bytes() -> Vec<u8> {
-        use grey_codec::Encode;
         use grey_types::work::{RefinementContext, WorkPackage};
+        use scale::Encode;
         let wp = WorkPackage {
             auth_code_host: 0,
             auth_code_hash: Hash([0u8; 32]),
@@ -1961,7 +1962,7 @@ mod tests {
 
         // Store a block and set it as head
         let block = test_block(1);
-        let hash = grey_crypto::blake2b_256(&grey_codec::Encode::encode(&block.header));
+        let hash = grey_crypto::blake2b_256(&scale::Encode::encode(&block.header));
         store.put_block(&block).unwrap();
         store.set_head(&hash, 1).unwrap();
 

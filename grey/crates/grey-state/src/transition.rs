@@ -1,7 +1,7 @@
 //! Block state transition implementation (eq 4.1, 4.5-4.20).
 
 use crate::TransitionError;
-use grey_codec::header_codec::compute_header_hash;
+
 use grey_types::Hash;
 use grey_types::config::Config;
 #[cfg(test)]
@@ -91,7 +91,7 @@ pub fn apply_with_config(
 
     // Step 8: Update recent block history β' (Section 7)
     {
-        let header_hash = compute_header_hash(header);
+        let header_hash = grey_crypto::blake2b_256(&scale::Encode::encode(header));
         let work_packages: Vec<(Hash, Hash)> = extrinsic
             .guarantees
             .iter()
@@ -556,15 +556,17 @@ mod tests {
     fn make_empty_block(timeslot: Timeslot) -> Block {
         Block {
             header: Header {
-                parent_hash: Hash::ZERO,
-                state_root: Hash::ZERO,
-                extrinsic_hash: Hash::ZERO,
-                timeslot,
-                epoch_marker: None,
-                tickets_marker: None,
-                author_index: 0,
-                vrf_signature: BandersnatchSignature::default(),
-                offenders_marker: vec![],
+                data: UnsignedHeader {
+                    parent_hash: Hash::ZERO,
+                    state_root: Hash::ZERO,
+                    extrinsic_hash: Hash::ZERO,
+                    timeslot,
+                    epoch_marker: None,
+                    tickets_marker: None,
+                    author_index: 0,
+                    vrf_signature: BandersnatchSignature::default(),
+                    offenders_marker: vec![],
+                },
                 seal: BandersnatchSignature::default(),
             },
             extrinsic: Extrinsic {

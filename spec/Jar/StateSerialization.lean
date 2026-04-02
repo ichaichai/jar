@@ -3,6 +3,7 @@ import Jar.Types
 import Jar.Codec
 import Jar.Crypto
 import Jar.Merkle
+import Jar.Variant
 
 /-!
 # State Serialization T(sigma) -- Gray Paper Appendix D, eq D.2
@@ -33,7 +34,7 @@ Matches the encoding in Grey's `crates/grey-merkle/src/state_serial.rs`.
 
 namespace Jar.StateSerialization
 open Jar.Codec
-variable [JamConfig]
+variable [JamVariant]
 
 -- Instances needed for this module
 instance : Inhabited CoreStatistics where
@@ -295,7 +296,7 @@ private def serializePendingReports (reports : Array (Option PendingReport)) : B
     | none => buf := buf ++ ByteArray.mk #[0]
     | some pr =>
       buf := buf ++ ByteArray.mk #[1]
-      buf := buf ++ Codec.encodeWorkReport pr.report
+      buf := buf ++ JamVariant.codecEncodeWorkReport pr.report
       buf := buf ++ encodeFixedNat 4 pr.timeslot.toNat
   return buf
 
@@ -375,7 +376,7 @@ private def serializeAccumulationQueue
   for slot in queue do
     buf := buf ++ encodeNat slot.size
     for (report, deps) in slot do
-      buf := buf ++ Codec.encodeWorkReport report
+      buf := buf ++ JamVariant.codecEncodeWorkReport report
       buf := buf ++ encodeNat deps.size
       for h in deps do
         buf := buf ++ h.data

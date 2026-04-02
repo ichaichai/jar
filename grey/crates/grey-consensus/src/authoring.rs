@@ -3,13 +3,18 @@
 //! Given the current state and validator secrets, determines whether the
 //! validator is the slot author and constructs a valid block.
 
-use grey_codec::header_codec::encode_header_unsigned;
 use grey_types::config::Config;
 use grey_types::header::*;
 use grey_types::state::{SealKeySeries, State};
 use grey_types::{BandersnatchPublicKey, BandersnatchSignature, Hash, Timeslot};
+use scale::Encode;
 
 use crate::genesis::ValidatorSecrets;
+
+/// Encode the unsigned header EU(H) — for seal signature computation.
+fn encode_header_unsigned(header: &Header) -> Vec<u8> {
+    header.data.encode()
+}
 
 /// Entropy VRF context string (Appendix I.4.5: X_E = $jam_entropy).
 const ENTROPY_CONTEXT: &[u8] = b"jam_entropy";
@@ -201,15 +206,17 @@ pub fn author_block_with_extrinsics(
 
     // Build unsigned header
     let mut header = Header {
-        parent_hash,
-        state_root,
-        extrinsic_hash,
-        timeslot,
-        epoch_marker,
-        tickets_marker,
-        author_index,
-        vrf_signature,
-        offenders_marker: vec![],
+        data: UnsignedHeader {
+            parent_hash,
+            state_root,
+            extrinsic_hash,
+            timeslot,
+            epoch_marker,
+            tickets_marker,
+            author_index,
+            vrf_signature,
+            offenders_marker: vec![],
+        },
         seal: BandersnatchSignature([0u8; 96]), // placeholder
     };
 
@@ -249,23 +256,8 @@ fn compute_unsigned_header_hash_bytes(header: &Header) -> Vec<u8> {
 /// Compute the extrinsic hash for an extrinsic (Merkle commitment).
 /// For empty extrinsics, this is a hash of the empty encoding.
 fn compute_extrinsic_hash(extrinsic: &Extrinsic) -> Hash {
-    // Encode the extrinsic components and hash
-    let mut data = Vec::new();
-
-    // Tickets: compact length + items
-    grey_codec::encode::encode_compact(extrinsic.tickets.len() as u64, &mut data);
-    // Preimages
-    grey_codec::encode::encode_compact(extrinsic.preimages.len() as u64, &mut data);
-    // Guarantees
-    grey_codec::encode::encode_compact(extrinsic.guarantees.len() as u64, &mut data);
-    // Assurances
-    grey_codec::encode::encode_compact(extrinsic.assurances.len() as u64, &mut data);
-    // Disputes: verdicts, culprits, faults all empty
-    grey_codec::encode::encode_compact(extrinsic.disputes.verdicts.len() as u64, &mut data);
-    grey_codec::encode::encode_compact(extrinsic.disputes.culprits.len() as u64, &mut data);
-    grey_codec::encode::encode_compact(extrinsic.disputes.faults.len() as u64, &mut data);
-
-    grey_crypto::blake2b_256(&data)
+    use scale::Encode;
+    grey_crypto::blake2b_256(&extrinsic.encode())
 }
 
 #[cfg(test)]

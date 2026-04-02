@@ -9,7 +9,7 @@ use crate::{BandersnatchPublicKey, BlsPublicKey, Ed25519PublicKey};
 /// - ke: Ed25519 key (bytes 32..64)
 /// - kl: BLS key (bytes 64..208)
 /// - km: Metadata (bytes 208..336)
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, scale::Encode, scale::Decode)]
 pub struct ValidatorKey {
     /// kb: Bandersnatch public key for block sealing and VRF.
     pub bandersnatch: BandersnatchPublicKey,

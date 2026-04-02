@@ -12,7 +12,7 @@ use crate::audit::{self, AuditState};
 use crate::finality::{self, GrandpaState};
 use crate::guarantor::{self, GuarantorState};
 use crate::tickets::{self, TicketState};
-use grey_codec::header_codec::compute_header_hash;
+
 use grey_consensus::authoring;
 
 use grey_network::service::{
@@ -680,7 +680,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                             &[],
                         ) {
                             Ok((new_state, _)) => {
-                                let header_hash = compute_header_hash(&block.header);
+                                let header_hash = grey_crypto::blake2b_256(&scale::Encode::encode(&block.header));
                                 state = new_state;
                                 blocks_authored += 1;
                                 last_authored_slot = current_slot;
@@ -721,7 +721,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 // and mark cores as available for assurance generation
                                 for guarantee in &block.extrinsic.guarantees {
                                     let report_hash = grey_crypto::blake2b_256(
-                                        &grey_codec::header_codec::encode_header(&block.header),
+                                        &scale::Encode::encode(&block.header),
                                     );
                                     let our_tranche = audit::compute_audit_tranche(
                                         &state.entropy[0],
@@ -845,7 +845,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                     NetworkEvent::BlockReceived { data, source } => {
                         match decode_block_message(&data, protocol) {
                             Some((block, _hash)) => {
-                                let block_hash = compute_header_hash(&block.header);
+                                let block_hash = grey_crypto::blake2b_256(&scale::Encode::encode(&block.header));
                                 // Skip blocks we've already seen (dedup)
                                 if seen_block_hashes.contains(&block_hash) {
                                     tracing::trace!(
@@ -948,7 +948,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     // (prevents zombie guarantees that block future work).
                                     for guarantee in &block.extrinsic.guarantees {
                                         let report_hash = grey_crypto::blake2b_256(
-                                            &grey_codec::header_codec::encode_header(&block.header),
+                                            &scale::Encode::encode(&block.header),
                                         );
                                         let our_tranche = audit::compute_audit_tranche(
                                             &state.entropy[0],
@@ -974,7 +974,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     // imported block — otherwise they become zombies that
                                     // endlessly defer and block new work package processing.
                                     if !block.extrinsic.guarantees.is_empty() {
-                                        use grey_codec::Encode;
+                                        use scale::Encode;
                                         let included_hashes: std::collections::HashSet<_> =
                                             block.extrinsic.guarantees.iter().map(|g| {
                                                 grey_crypto::blake2b_256(&g.report.encode())
@@ -1268,7 +1268,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                             );
 
                             // Decode work package from JAM codec and process it
-                            use grey_codec::decode::Decode;
+                            use scale::Decode;
                             match grey_types::work::WorkPackage::decode(&data) {
                                 Ok((wp, _consumed)) => {
                                     tracing::info!(
@@ -1361,7 +1361,7 @@ fn compute_state_root(state: &State) -> Hash {
 /// Encode a block for network transmission.
 /// Format: [header_hash (32)][block_len (4)][JAM-encoded block (header + extrinsic)]
 fn encode_block_message(block: &Block, header_hash: &Hash) -> Vec<u8> {
-    use grey_codec::Encode;
+    use scale::Encode;
     let encoded_block = block.encode();
     let mut msg = Vec::with_capacity(32 + 4 + encoded_block.len());
     msg.extend_from_slice(&header_hash.0);
@@ -1372,8 +1372,8 @@ fn encode_block_message(block: &Block, header_hash: &Hash) -> Vec<u8> {
 
 /// Decode a block message received from the network.
 /// Returns (Block, header_hash) with full extrinsics.
-fn decode_block_message(data: &[u8], config: &Config) -> Option<(Block, Hash)> {
-    use grey_codec::decode::DecodeWithConfig;
+fn decode_block_message(data: &[u8], _config: &Config) -> Option<(Block, Hash)> {
+    use scale::Decode;
     if data.len() < 32 + 4 {
         return None;
     }
@@ -1384,7 +1384,7 @@ fn decode_block_message(data: &[u8], config: &Config) -> Option<(Block, Hash)> {
         return None;
     }
     let block_data = &data[36..36 + block_len];
-    let (block, _consumed) = Block::decode_with_config(block_data, config).ok()?;
+    let (block, _consumed) = Block::decode(block_data).ok()?;
     Some((block, Hash(header_hash)))
 }
 

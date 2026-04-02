@@ -1515,7 +1515,6 @@ dependencies = [
  "build-javm",
  "clap",
  "futures",
- "grey-codec",
  "grey-consensus",
  "grey-crypto",
  "grey-erasure",
@@ -1530,6 +1529,7 @@ dependencies = [
  "javm",
  "libp2p",
  "proptest",
+ "scale",
  "serde",
  "serde_json",
  "tempfile",
@@ -1555,26 +1555,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "grey-codec"
-version = "0.1.0"
-dependencies = [
- "grey-crypto",
- "grey-types",
- "hex",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "grey-consensus"
 version = "0.1.0"
 dependencies = [
- "grey-codec",
  "grey-crypto",
  "grey-state",
  "grey-types",
+ "scale",
  "thiserror 2.0.18",
 ]
 
@@ -1610,11 +1597,12 @@ dependencies = [
 name = "grey-merkle"
 version = "0.1.0"
 dependencies = [
- "grey-codec",
+ "grey-consensus",
  "grey-crypto",
  "grey-types",
  "hex",
  "proptest",
+ "scale",
  "serde",
  "serde_json",
 ]
@@ -1625,7 +1613,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "grey-codec",
  "grey-crypto",
  "grey-types",
  "libp2p",
@@ -1639,7 +1626,6 @@ dependencies = [
 name = "grey-rpc"
 version = "0.1.0"
 dependencies = [
- "grey-codec",
  "grey-consensus",
  "grey-crypto",
  "grey-store",
@@ -1649,6 +1635,7 @@ dependencies = [
  "jsonrpsee",
  "proptest",
  "reqwest",
+ "scale",
  "serde",
  "serde_json",
  "tempfile",
@@ -1673,13 +1660,13 @@ dependencies = [
 name = "grey-state"
 version = "0.1.0"
 dependencies = [
- "grey-codec",
  "grey-crypto",
  "grey-merkle",
  "grey-transpiler",
  "grey-types",
  "hex",
  "javm",
+ "scale",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1691,13 +1678,13 @@ dependencies = [
 name = "grey-store"
 version = "0.1.0"
 dependencies = [
- "grey-codec",
  "grey-consensus",
  "grey-crypto",
  "grey-merkle",
  "grey-types",
  "hex",
  "redb",
+ "scale",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -1719,6 +1706,7 @@ name = "grey-types"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "scale",
  "serde",
  "serde_json",
 ]
@@ -1788,10 +1776,10 @@ name = "harness"
 version = "0.1.0"
 dependencies = [
  "clap",
- "grey-codec",
  "grey-types",
  "hex",
  "reqwest",
+ "scale",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -4330,6 +4318,23 @@ dependencies = [
 [[package]]
 name = "sample-service"
 version = "0.1.0"
+
+[[package]]
+name = "scale"
+version = "0.1.0"
+dependencies = [
+ "scale-derive",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "scale-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "schannel"

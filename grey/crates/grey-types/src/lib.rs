@@ -72,7 +72,9 @@ macro_rules! impl_crypto_type {
 
 /// A 32-byte cryptographic hash value (H in the spec).
 /// Used for Blake2b-256 output, block hashes, state roots, etc.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, scale::Encode, scale::Decode,
+)]
 pub struct Hash(pub [u8; 32]);
 
 impl Hash {
@@ -129,7 +131,9 @@ impl serde::Serialize for Hash {
 }
 
 /// An Ed25519 public key (H̄ in the spec). Subset of B32.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, scale::Encode, scale::Decode,
+)]
 pub struct Ed25519PublicKey(pub [u8; 32]);
 impl_crypto_type!(Ed25519PublicKey, 32, copy, "Ed25519");
 
@@ -141,7 +145,7 @@ impl Ed25519PublicKey {
 }
 
 /// A Bandersnatch public key (H̃ in the spec). Subset of B32.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, scale::Encode, scale::Decode)]
 pub struct BandersnatchPublicKey(pub [u8; 32]);
 impl_crypto_type!(BandersnatchPublicKey, 32, copy, "Bandersnatch");
 
@@ -153,12 +157,12 @@ impl BandersnatchPublicKey {
 }
 
 /// A BLS12-381 public key (B^BLS in the spec). Subset of B144.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, scale::Encode, scale::Decode)]
 pub struct BlsPublicKey(pub [u8; 144]);
 impl_crypto_type!(BlsPublicKey, 144, large, "BLS");
 
 /// A Bandersnatch ring root (B° in the spec). Subset of B144.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, scale::Encode, scale::Decode)]
 pub struct BandersnatchRingRoot(pub [u8; 144]);
 impl_crypto_type!(BandersnatchRingRoot, 144, large, "RingRoot");
 
@@ -170,7 +174,7 @@ impl BandersnatchRingRoot {
 }
 
 /// An Ed25519 signature. B64.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct Ed25519Signature(pub [u8; 64]);
 impl_crypto_type!(Ed25519Signature, 64, large, "Ed25519Sig");
 
@@ -182,16 +186,16 @@ impl Ed25519Signature {
 }
 
 /// A Bandersnatch signature. B96.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct BandersnatchSignature(pub [u8; 96]);
 impl_crypto_type!(BandersnatchSignature, 96, large, "BanderSig");
 
 /// A Bandersnatch Ring VRF proof. B784.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct BandersnatchRingVrfProof(pub Vec<u8>);
 
 /// A BLS signature.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
 pub struct BlsSignature(pub Vec<u8>);
 
 // Balance type removed — coinless design. See docs/ideas/coinless-storage-quota.md.

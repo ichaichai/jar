@@ -5,6 +5,7 @@ import Jar.Codec
 import Jar.Consensus
 import Jar.Accumulation
 import Jar.Merkle
+import Jar.Variant
 
 /-!
 # State Transition — §4–13
@@ -34,7 +35,7 @@ The transition is organized to minimize dependency depth for parallelism:
 -/
 
 namespace Jar
-variable [JamConfig]
+variable [JamVariant]
 
 /-- Stable sort for accumulation outputs by service ID. -/
 private def stableSortOutputs (outputs : Array (ServiceId × Hash)) : Array (ServiceId × Hash) :=
@@ -255,7 +256,7 @@ def updateJudgments (psi : JudgmentsState) (d : DisputesExtrinsic) : JudgmentsSt
 def reportsPostJudgment
     (rho : Array (Option PendingReport)) (badReports : Array Hash) : Array (Option PendingReport) :=
   rho.map fun opt => opt.bind fun pr =>
-    let reportHash := Crypto.blake2b (Codec.encodeWorkReport pr.report)
+    let reportHash := Crypto.blake2b (JamVariant.codecEncodeWorkReport pr.report)
     if badReports.any (· == reportHash) then none else some pr
 
 /-- ρ‡ : Clear reports which have become available or timed out. GP eq (185–188).
@@ -791,7 +792,7 @@ def validateHeader (s : State) (h : Header) : Bool :=
   let sealOk :=
     if h.authorIndex.val < s.currentValidators.size then
       let authorKey := s.currentValidators[h.authorIndex.val]!
-      let unsignedHeader := Codec.encodeUnsignedHeader h
+      let unsignedHeader := JamVariant.codecEncodeUnsignedHeader h
       Crypto.bandersnatchVerify authorKey.bandersnatch
         Crypto.ctxTicketSeal unsignedHeader h.sealSig
     else false
@@ -853,7 +854,7 @@ def validateAuthor (h : Header) (eta' : Entropy) (sealKeys : SealKeySeries)
       if slotInEpoch < tickets.size then
         -- In ticket mode, verify seal with ticket context
         let ticket := tickets[slotInEpoch]!
-        let unsignedHeader := Codec.encodeUnsignedHeader h
+        let unsignedHeader := JamVariant.codecEncodeUnsignedHeader h
         Consensus.verifySealTicketed authorKey eta'.threeBack ticket
           unsignedHeader h.sealSig
       else false
@@ -863,7 +864,7 @@ def validateAuthor (h : Header) (eta' : Entropy) (sealKeys : SealKeySeries)
         let expectedKey := keys[slotInEpoch]!
         if authorKey != expectedKey then false
         else
-          let unsignedHeader := Codec.encodeUnsignedHeader h
+          let unsignedHeader := JamVariant.codecEncodeUnsignedHeader h
           Consensus.verifySealFallback authorKey eta'.threeBack
             unsignedHeader h.sealSig
       else false
@@ -947,7 +948,7 @@ def validateGuaranteeTimeslots (guarantees : GuaranteesExtrinsic)
 def validateGuaranteeSignatures (guarantees : GuaranteesExtrinsic)
     (validators : Array ValidatorKey) : Bool :=
   guarantees.all fun g =>
-    let reportEncoding := Codec.encodeWorkReport g.report
+    let reportEncoding := JamVariant.codecEncodeWorkReport g.report
     let reportHash := Crypto.blake2b reportEncoding
     -- The message to sign is: "jam_guarantee" ++ H(encode(report))
     let message := Crypto.ctxGuarantee ++ reportHash.data
@@ -1030,7 +1031,7 @@ def stateTransition (s : State) (b : Block) : Option State := do
   let accResult := performAccumulation available s t' #[] eta'
 
   -- §7 — Recent history: β'
-  let headerHash := Crypto.blake2b (Codec.encodeHeader h)
+  let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader h)
   let beta' := updateRecentHistory bDag headerHash accResult.outputs ext.guarantees
 
   -- §12.7 — Preimage integration
@@ -1146,7 +1147,7 @@ def stateTransitionWithOpaque (s : State) (b : Block)
   let rho' := reportsPostGuarantees rhoDDag ext.guarantees t'
   let bDag := updateParentStateRoot s.recent h
   let accResult := performAccumulation available s t' opaqueData eta'
-  let headerHash := Crypto.blake2b (Codec.encodeHeader h)
+  let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader h)
   let beta' := updateRecentHistory bDag headerHash accResult.outputs ext.guarantees
   let (delta', remainingOpaque) := integratePreimages accResult.services ext.preimages t' accResult.remainingOpaqueData
   let alpha' := updateAuthPool s.authPool accResult.authQueue h ext.guarantees
@@ -1194,7 +1195,7 @@ def stateTransitionNoSealCheck (s : State) (b : Block)
   let rho' := reportsPostGuarantees rhoDDag ext.guarantees t'
   let bDag := updateParentStateRoot s.recent h
   let accResult := performAccumulation available s t' opaqueData eta'
-  let headerHash := Crypto.blake2b (Codec.encodeHeader h)
+  let headerHash := Crypto.blake2b (JamVariant.codecEncodeHeader h)
   let beta' := updateRecentHistory bDag headerHash accResult.outputs ext.guarantees
   let (delta', remainingOpaque) := integratePreimages accResult.services ext.preimages t' accResult.remainingOpaqueData
   let alpha' := updateAuthPool s.authPool accResult.authQueue h ext.guarantees
