@@ -296,10 +296,10 @@ impl<T: Decode + Ord> Decode for std::collections::BTreeSet<T> {
             let (item, c) = T::decode(&data[off..])?;
             off += c;
             // Enforce strictly ascending order (Encode always produces sorted)
-            if let Some(last) = set.iter().next_back() {
-                if &item <= last {
-                    return Err(DecodeError::NotSorted);
-                }
+            if let Some(last) = set.iter().next_back()
+                && &item <= last
+            {
+                return Err(DecodeError::NotSorted);
             }
             set.insert(item);
         }
@@ -355,10 +355,10 @@ impl<K: Decode + Ord, V: Decode> Decode for std::collections::BTreeMap<K, V> {
             let (k, c) = K::decode(&data[off..])?;
             off += c;
             // Enforce strictly ascending key order (Encode always produces sorted)
-            if let Some(last_key) = map.keys().next_back() {
-                if &k <= last_key {
-                    return Err(DecodeError::NotSorted);
-                }
+            if let Some(last_key) = map.keys().next_back()
+                && &k <= last_key
+            {
+                return Err(DecodeError::NotSorted);
             }
             let (v, c) = V::decode(&data[off..])?;
             off += c;
