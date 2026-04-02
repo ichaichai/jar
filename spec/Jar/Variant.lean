@@ -82,6 +82,7 @@ instance JamVariant.jar1 : JamVariant where
     gasModel := .basicBlockSinglePass
     heapModel := .growHeap
     hostcallVersion := 1
+    variableValidators := true
     EconType := QuotaEcon
     TransferType := QuotaTransfer
   }

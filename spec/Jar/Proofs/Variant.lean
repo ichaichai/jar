@@ -26,6 +26,9 @@ theorem jar1_heapModel_growHeap :
 theorem jar1_hostcallVersion_1 :
     @JamConfig.hostcallVersion JamVariant.jar1.toJamConfig = 1 := by rfl
 
+theorem jar1_variableValidators :
+    @JamConfig.variableValidators JamVariant.jar1.toJamConfig = true := by rfl
+
 -- ============================================================================
 -- gp072_tiny config assertions (contrast)
 -- ============================================================================
@@ -38,5 +41,8 @@ theorem gp072_tiny_gasModel_perInstruction :
 
 theorem gp072_tiny_hostcallVersion_0 :
     @JamConfig.hostcallVersion JamVariant.gp072_tiny.toJamConfig = 0 := by rfl
+
+theorem gp072_tiny_variableValidators_false :
+    @JamConfig.variableValidators JamVariant.gp072_tiny.toJamConfig = false := by rfl
 
 end Jar.Proofs
