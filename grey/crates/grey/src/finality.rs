@@ -438,6 +438,8 @@ impl GrandpaState {
             if *count >= self.threshold() && *slot > self.finalized_slot {
                 self.finalized_hash = *hash;
                 self.finalized_slot = *slot;
+                self.ancestry.retain(|_, &mut (_, slot, _)| slot > self.finalized_slot);
+                self.chain_equivocations.retain(|&slot| slot > self.finalized_slot);
                 // Prune vote archives for finalized rounds to bound memory growth.
                 self.prune_archive(self.round.saturating_sub(1));
                 return Some((*hash, *slot));
@@ -1115,6 +1117,42 @@ mod tests {
         assert_eq!(grandpa.round, 3);
         assert_eq!(grandpa.prevotes.len(), 1, "round 3 vote should replay");
         assert_eq!(grandpa.prevotes[&2].block_hash, hash_a);
+    }
+
+    #[test]
+    fn test_pruning_on_finalize() {
+        let config = Config::tiny(); // V=6, use for secrets
+        let (_, secrets) = grey_consensus::genesis::create_genesis(&config);
+        let mut grandpa = GrandpaState::new(config.validators_count);
+
+        // Register blocks at slots 1-7
+        let hashes: Vec<Hash> = (1u8..=7).map(|i| Hash([i; 32])).collect();
+        grandpa.finalized_hash = hashes[0]; // slot 1 is finalized start
+        for (i, &h) in hashes.iter().enumerate() {
+            let parent = if i == 0 { Hash::ZERO } else { hashes[i - 1] };
+            grandpa.register_block(h, parent, (i + 1) as u32, false);
+        }
+        // Mark slot 3 as having a chain equivocation
+        grandpa.chain_equivocations.insert(3);
+
+        // Drive finalization to slot 5 by adding 4 precommits (threshold for V=6 is 4)
+        let block_hash = hashes[4]; // slot 5
+        grandpa.update_best_block(block_hash, 5);
+        for i in 0..4 {
+            let vote = sign_vote(&block_hash, 5, 1, i as u16, &secrets[i], VoteType::Precommit);
+            grandpa.add_precommit(vote);
+        }
+        // Finalization should have occurred at slot 5
+        assert_eq!(grandpa.finalized_slot, 5);
+
+        // ancestry entries with slot <= 5 must be gone
+        for &h in &hashes {
+            if let Some(&(_, slot, _)) = grandpa.ancestry.get(&h) {
+                assert!(slot > 5, "slot {} should have been pruned", slot);
+            }
+        }
+        // chain_equivocations slot 3 must be gone (3 <= 5)
+        assert!(!grandpa.chain_equivocations.contains(&3));
     }
 
     #[test]
