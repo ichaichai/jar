@@ -195,6 +195,25 @@ impl GrandpaState {
         self.ancestry.insert(hash, (parent, slot, ticket_sealed));
     }
 
+    /// Walk ancestry from `hash` back to `finalized_hash` (inclusive).
+    ///
+    /// Returns the path as `[hash, parent, grandparent, ..., finalized_hash]`.
+    /// Stops early (and omits `finalized_hash`) if ancestry is missing an entry.
+    fn ancestors(&self, hash: Hash) -> Vec<Hash> {
+        let mut result = vec![hash];
+        let mut current = hash;
+        while current != self.finalized_hash {
+            match self.ancestry.get(&current) {
+                Some(&(parent, _, _)) => {
+                    result.push(parent);
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        result
+    }
+
     /// Generate a prevote for the current round.
     pub fn create_prevote(
         &mut self,
@@ -1096,6 +1115,23 @@ mod tests {
         assert_eq!(grandpa.round, 3);
         assert_eq!(grandpa.prevotes.len(), 1, "round 3 vote should replay");
         assert_eq!(grandpa.prevotes[&2].block_hash, hash_a);
+    }
+
+    #[test]
+    fn test_ancestors_chain() {
+        let mut grandpa = GrandpaState::new(6);
+        let hash_a = Hash([1u8; 32]);
+        let hash_b = Hash([2u8; 32]);
+        let hash_c = Hash([3u8; 32]);
+        // Set finalized_hash so the walk terminates
+        grandpa.finalized_hash = hash_a;
+        // Register A→B→C (A is finalized, B is child of A, C is child of B)
+        grandpa.register_block(hash_a, Hash::ZERO, 1, false);
+        grandpa.register_block(hash_b, hash_a, 2, false);
+        grandpa.register_block(hash_c, hash_b, 3, false);
+        let chain = grandpa.ancestors(hash_c);
+        // Should be [C, B, A] — from tip back to finalized_hash
+        assert_eq!(chain, vec![hash_c, hash_b, hash_a]);
     }
 
     #[test]
