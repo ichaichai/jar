@@ -611,12 +611,13 @@ def CoreStatistics.zero : CoreStatistics :=
 def updateStatistics
     (pi : ActivityStatistics) (h : Header)
     (e : Extrinsic) (t t' : Timeslot)
-    (_kappa' : Array ValidatorKey)
+    (kappa' : Array ValidatorKey)
     (available : Array WorkReport)
     (accStats : Dict ServiceId ServiceStatistics) : ActivityStatistics :=
   let epochChanged := isEpochChange t t'
+  let newValCount := if JamConfig.variableValidators then kappa'.size else V
   let (cur, prev) := if epochChanged
-    then (Array.replicate V ValidatorRecord.zero, pi.current)
+    then (Array.replicate newValCount ValidatorRecord.zero, pi.current)
     else (pi.current, pi.previous)
 
   -- §13.1: Block author stats

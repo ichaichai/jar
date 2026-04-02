@@ -256,10 +256,13 @@ def encodeGuarantee (g : Guarantee) : ByteArray :=
         encodeFixedNat 2 vi.val ++ sig.data) g.credentials
 
 open Jar in
-/-- Encode an EpochMarker. -/
+/-- Encode an EpochMarker. GP#514: variable-length validators when variableValidators. -/
 def encodeEpochMarker (em : EpochMarker) : ByteArray :=
   em.entropy.data
     ++ em.entropyPrev.data
+    ++ (if JamConfig.variableValidators
+        then encodeNat em.validators.size  -- variable-length count prefix
+        else ByteArray.empty)
     ++ encodeArray (fun (bk, ek) => bk.data ++ ek.data) em.validators
 
 open Jar in
@@ -706,11 +709,12 @@ def decodeGuaranteeD : Decoder Guarantee := do
 
 open Jar in
 /-- Decode an EpochMarker. Inverse of encodeEpochMarker.
-    Note: validators is a fixed-size array of V entries (no count prefix). -/
+    GP#514: variable-length validators when variableValidators. -/
 def decodeEpochMarkerD : Decoder EpochMarker := do
   let entropy ← decodeHashD
   let entropyPrev ← decodeHashD
-  let validators ← decodeArrayD V do
+  let count ← if JamConfig.variableValidators then decodeNatD else pure V
+  let validators ← decodeArrayD count do
     let bk ← decodeOctetSeqD 32
     let ek ← decodeOctetSeqD 32
     return (bk, ek)
