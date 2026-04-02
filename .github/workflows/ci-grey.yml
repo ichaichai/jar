@@ -100,4 +100,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run harness
-        run: cargo run --locked -p harness -- --seq-testnet
+        run: cargo run --locked --release -p harness -- --seq-testnet
