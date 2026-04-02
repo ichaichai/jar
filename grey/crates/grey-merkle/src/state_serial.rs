@@ -9,10 +9,6 @@ fn encode_u32_le(val: u32, buf: &mut Vec<u8>) {
     buf.extend_from_slice(&val.to_le_bytes());
 }
 
-fn encode_u64_le(val: u64, buf: &mut Vec<u8>) {
-    buf.extend_from_slice(&val.to_le_bytes());
-}
-
 fn decode_u32_le_at(data: &[u8], pos: &mut usize) -> Result<u32, ()> {
     if *pos + 4 > data.len() {
         return Err(());
@@ -25,9 +21,8 @@ fn decode_u32_le_at(data: &[u8], pos: &mut usize) -> Result<u32, ()> {
 use grey_crypto::blake2b_256;
 use grey_types::config::Config;
 use grey_types::state::{
-    CoreStatistics, Judgments, PendingReport, PrivilegedServices, RecentBlockInfo, RecentBlocks,
-    SafroleState, SealKeySeries, ServiceAccount, ServiceStatistics, State, ValidatorRecord,
-    ValidatorStatistics,
+    Judgments, PrivilegedServices, RecentBlocks, SafroleState, SealKeySeries, ServiceAccount,
+    State, ValidatorStatistics,
 };
 use grey_types::{Hash, ServiceId};
 use std::collections::BTreeMap;
@@ -550,10 +545,6 @@ fn classify_key(key: &[u8; 31]) -> KeyType {
 
 // --- Component deserializers ---
 
-fn decode_u32_helper(data: &[u8], pos: &mut usize) -> Result<u32, String> {
-    decode_u32_le_at(data, pos).map_err(|_| "decode error".to_string())
-}
-
 fn read_hash(data: &[u8], pos: &mut usize) -> Result<Hash, String> {
     if *pos + 32 > data.len() {
         return Err("unexpected end reading hash".into());
@@ -599,18 +590,6 @@ fn deserialize_entropy(data: &[u8]) -> Result<[Hash; 4], String> {
 /// Uses the standard block Decode for WorkReport since serialize_pending_reports
 /// uses the standard block Encode (compact for core_index, auth_gas_used, and
 /// RefineLoad fields).
-fn deserialize_work_report(
-    data: &[u8],
-    pos: &mut usize,
-) -> Result<grey_types::work::WorkReport, String> {
-    use scale::Decode;
-
-    let remaining = &data[*pos..];
-    let (report, consumed) = grey_types::work::WorkReport::decode(remaining)
-        .map_err(|e| format!("work report decode error: {e}"))?;
-    *pos += consumed;
-    Ok(report)
-}
 
 fn deserialize_service_account(data: &[u8]) -> Result<ServiceAccount, String> {
     let mut pos = 0;
