@@ -110,7 +110,8 @@ pub fn parse_work_report(json: &serde_json::Value) -> WorkReport {
             exports_count: ps["exports_count"].as_u64().unwrap_or(0) as u16,
             erasure_shards: ps["erasure_shards"]
                 .as_u64()
-                .unwrap_or(Config::full().validators_count as u64) as u16,
+                .unwrap_or(Config::full().validators_count as u64)
+                as u16,
         },
         context: RefinementContext {
             anchor: ctx["anchor"]
