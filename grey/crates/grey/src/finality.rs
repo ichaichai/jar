@@ -1138,8 +1138,8 @@ mod tests {
         // Drive finalization to slot 5 by adding 4 precommits (threshold for V=6 is 4)
         let block_hash = hashes[4]; // slot 5
         grandpa.update_best_block(block_hash, 5);
-        for i in 0..4 {
-            let vote = sign_vote(&block_hash, 5, 1, i as u16, &secrets[i], VoteType::Precommit);
+        for (i, secret) in secrets.iter().enumerate().take(4) {
+            let vote = sign_vote(&block_hash, 5, 1, i as u16, secret, VoteType::Precommit);
             grandpa.add_precommit(vote);
         }
         // Finalization should have occurred at slot 5
