@@ -8,7 +8,7 @@
 # Rust (workspace root)
 /target
 /grey/.cargo/
-/grey/services/*/target
+/grey/services/**/target
 
 # Docs (Zensical build output)
 /site
