@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "grey/crates/grey",
     "grey/crates/grey-types",
-    "grey/crates/grey-codec",
     "grey/crates/grey-crypto",
     "grey/crates/javm",
     "grey/crates/grey-merkle",
@@ -49,7 +48,6 @@ authors = [ "Bitarray GmbH <legal@bitarray.dev>" ]
 [workspace.dependencies]
 # Internal crates
 grey-types = { path = "grey/crates/grey-types" }
-grey-codec = { path = "grey/crates/grey-codec" }
 grey-crypto = { path = "grey/crates/grey-crypto" }
 javm = { path = "grey/crates/javm" }
 grey-merkle = { path = "grey/crates/grey-merkle" }

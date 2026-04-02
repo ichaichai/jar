@@ -1555,19 +1555,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "grey-codec"
-version = "0.1.0"
-dependencies = [
- "grey-crypto",
- "grey-types",
- "hex",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "grey-consensus"
 version = "0.1.0"
 dependencies = [
