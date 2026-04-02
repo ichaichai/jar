@@ -920,14 +920,18 @@ def validateAssuranceOrder (assurances : AssurancesExtrinsic) : Bool :=
           return false
       return true
 
-/-- Validate assurance validator indices are in range. -/
-def validateAssuranceIndices (assurances : AssurancesExtrinsic) : Bool :=
-  assurances.all fun a => a.validatorIndex.val < V
+/-- Validate assurance validator indices are in range.
+    GP#514: bounded by actual active set size when variableValidators. -/
+def validateAssuranceIndices (assurances : AssurancesExtrinsic)
+    (validatorCount : Nat := V) : Bool :=
+  assurances.all fun a => a.validatorIndex.val < validatorCount
 
-/-- Validate guarantee credential validator indices are in range. -/
-def validateGuaranteeIndices (guarantees : GuaranteesExtrinsic) : Bool :=
+/-- Validate guarantee credential validator indices are in range.
+    GP#514: bounded by actual active set size when variableValidators. -/
+def validateGuaranteeIndices (guarantees : GuaranteesExtrinsic)
+    (validatorCount : Nat := V) : Bool :=
   guarantees.all fun g =>
-    g.credentials.all fun (vi, _) => vi.val < V
+    g.credentials.all fun (vi, _) => vi.val < validatorCount
 
 /-- Validate guarantee timeslots: the guarantee timeslot must not be in the future
     relative to the block timeslot. GP eq (11.24): g_t <= H_t.
@@ -1090,9 +1094,10 @@ def stateTransitionWithOpaque (s : State) (b : Block)
   -- Block import validation: assurance ordering (sorted, unique)
   guard (validateAssuranceOrder ext.assurances)
   -- Block import validation: assurance validator indices in range
-  guard (validateAssuranceIndices ext.assurances)
+  let valCount := if JamConfig.variableValidators then s.currentValidators.size else V
+  guard (validateAssuranceIndices ext.assurances valCount)
   -- Block import validation: guarantee credential validator indices in range
-  guard (validateGuaranteeIndices ext.guarantees)
+  guard (validateGuaranteeIndices ext.guarantees valCount)
   -- Block import validation: guarantee timeslots not in future
   guard (validateGuaranteeTimeslots ext.guarantees t')
   -- Block import validation: guarantee credential signatures. GP eq (11.22).
