@@ -1,4 +1,5 @@
 import Jar.Json
+import Jar.Crypto
 import Jar.Test.Accumulate
 
 /-!
@@ -409,6 +410,64 @@ def toJsonGreyState (s : TAState) : Json :=
     ("accounts", accountsJson)]
 
 -- ============================================================================
+-- Blob File Resolution
+-- ============================================================================
+
+/-- Convert a ByteArray to a 0x-prefixed hex string for JSON encoding. -/
+private def toHexString (ba : ByteArray) : String :=
+  let hexChar (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+  let chars := ba.toList.flatMap fun b =>
+    [hexChar (b.toNat / 16), hexChar (b.toNat % 16)]
+  "0x" ++ String.ofList chars
+
+/-- Read a blob file and compute its blake2b hash. -/
+private def readBlobFile (baseDir : System.FilePath) (relPath : String)
+    : IO (ByteArray × Hash) := do
+  let bytes ← IO.FS.readBinFile (baseDir / relPath)
+  pure (bytes, Crypto.blake2b bytes)
+
+/-- Resolve blob_file and code_blob_file references in a parsed JSON tree.
+    - In preimage_blobs entries: {blob_file: "path"} → {hash: "0x...", blob: "0x..."}
+    - In service objects: {code_blob_file: "path", ...} → {code_hash: "0x...", ...}
+    Paths are relative to `baseDir`. Returns the JSON unchanged if no blob_file fields. -/
+def resolveBlobFiles (json : Json) (baseDir : System.FilePath) : IO Json := do
+  let preState ← IO.ofExcept (json.getObjVal? "pre_state")
+  match preState.getObjVal? "accounts" with
+  | .error _ => pure json
+  | .ok (Json.arr accounts) =>
+    let accounts' ← accounts.mapM fun acctJson => do
+      match acctJson.getObjVal? "data" with
+      | .error _ => pure acctJson
+      | .ok dataJson =>
+        let mut dataJson := dataJson
+        -- Resolve code_blob_file in service
+        match dataJson.getObjVal? "service" with
+        | .ok svcJson =>
+          match svcJson.getObjVal? "code_blob_file" with
+          | .ok (Json.str path) =>
+            let (_, hash) ← readBlobFile baseDir path
+            let svcJson' := svcJson.setObjVal! "code_hash" (toJson hash)
+            dataJson := dataJson.setObjVal! "service" svcJson'
+          | _ => pure ()
+        | _ => pure ()
+        -- Resolve blob_file in preimage_blobs
+        match dataJson.getObjVal? "preimage_blobs" with
+        | .ok (Json.arr blobs) =>
+          let blobs' ← blobs.mapM fun item => do
+            match item.getObjVal? "blob_file" with
+            | .ok (Json.str path) =>
+              let (bytes, hash) ← readBlobFile baseDir path
+              pure (Json.mkObj [("hash", Json.str (toHexString hash.data)),
+                                ("blob", Json.str (toHexString bytes))])
+            | _ => pure item
+          dataJson := dataJson.setObjVal! "preimage_blobs" (Json.arr blobs')
+        | _ => pure ()
+        pure (acctJson.setObjVal! "data" dataJson)
+    let preState' := preState.setObjVal! "accounts" (Json.arr accounts')
+    pure (json.setObjVal! "pre_state" preState')
+  | .ok _ => pure json
+
+-- ============================================================================
 -- JSON Test Runner
 -- ============================================================================
 
@@ -416,7 +475,10 @@ def toJsonGreyState (s : TAState) : Json :=
 def runJsonTest (inputPath : System.FilePath) (verbose := false) : IO Bool := do
   let t0 ← IO.monoMsNow
   let inputContent ← IO.FS.readFile inputPath
-  let inputJson ← IO.ofExcept (Json.parse inputContent)
+  let inputJsonRaw ← IO.ofExcept (Json.parse inputContent)
+  -- Resolve blob_file / code_blob_file references (paths relative to input file dir)
+  let baseDir := inputPath.parent.getD "."
+  let inputJson ← resolveBlobFiles inputJsonRaw baseDir
   let outputPath := System.FilePath.mk (inputPath.toString.replace s!".input.{JamConfig.name}.json" s!".output.{JamConfig.name}.json")
   let outputContent ← IO.FS.readFile outputPath
   let outputJson ← IO.ofExcept (Json.parse outputContent)

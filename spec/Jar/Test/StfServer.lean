@@ -139,7 +139,8 @@ def runReports (json : Json) : IO Json := do
 -- ============================================================================
 
 open Jar.Test.Accumulate Jar.Test.AccumulateJson in
-def runAccumulate (json : Json) : IO Json := do
+def runAccumulate (json : Json) (baseDir : System.FilePath := ".") : IO Json := do
+  let json ← resolveBlobFiles json baseDir
   let pre ← IO.ofExcept (parseGreyState (← IO.ofExcept (json.getObjVal? "pre_state")))
   let input ← IO.ofExcept (parseGreyInput (← IO.ofExcept (json.getObjVal? "input")))
   let (hash, post) := accumulateTransition pre input
@@ -154,7 +155,7 @@ def runAccumulate (json : Json) : IO Json := do
 private def allTransitions : String :=
   "safrole, statistics, authorizations, history, disputes, assurances, preimages, reports, accumulate"
 
-def runSubTransition (name : String) (json : Json) : IO Json :=
+def runSubTransition (name : String) (json : Json) (baseDir : System.FilePath := ".") : IO Json :=
   match name with
   | "safrole" => runSafrole json
   | "statistics" => runStatistics json
@@ -164,14 +165,15 @@ def runSubTransition (name : String) (json : Json) : IO Json :=
   | "assurances" => runAssurances json
   | "preimages" => runPreimages json
   | "reports" => runReports json
-  | "accumulate" => runAccumulate json
+  | "accumulate" => runAccumulate json baseDir
   | other => throw (IO.userError s!"unknown sub-transition: {other}\nSupported: {allTransitions}")
 
 private def blessFile (subTransition : String) (inputPath : System.FilePath) : IO Unit := do
   let content ← IO.FS.readFile inputPath
   let json ← IO.ofExcept (Json.parse content)
   -- Run transition on pre_state + input
-  let result ← runSubTransition subTransition json
+  let baseDir := inputPath.parent.getD "."
+  let result ← runSubTransition subTransition json baseDir
   -- Write computed output/post_state to the output file only
   let outputPath := System.FilePath.mk (inputPath.toString.replace s!".input.{JamConfig.name}.json" s!".output.{JamConfig.name}.json")
   IO.FS.writeFile outputPath (result.pretty ++ "\n")

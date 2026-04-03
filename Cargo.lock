@@ -1696,6 +1696,7 @@ name = "grey-transpiler"
 version = "0.1.0"
 dependencies = [
  "javm",
+ "scale",
  "thiserror 2.0.18",
  "tracing",
  "tracing-test",
@@ -2341,6 +2342,7 @@ version = "0.4.0"
 dependencies = [
  "libc",
  "memoffset",
+ "scale",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -4600,6 +4602,21 @@ dependencies = [
  "log",
  "rand 0.8.5",
  "sha1",
+]
+
+[[package]]
+name = "spec-bootstrap"
+version = "0.1.0"
+
+[[package]]
+name = "spec-minimal"
+version = "0.1.0"
+
+[[package]]
+name = "spec-tests"
+version = "0.1.0"
+dependencies = [
+ "build-javm",
 ]
 
 [[package]]
