@@ -66,10 +66,18 @@ fn unpack_bitmask(packed: &[u8], code_len: usize) -> Vec<u8> {
     bitmask
 }
 
+/// Parsed blob components (borrows code from the blob).
+struct ParsedBlob<'a> {
+    header: ProgramHeader,
+    ro_data: &'a [u8],
+    rw_data: &'a [u8],
+    jump_table: Vec<u32>,
+    code: &'a [u8],
+    bitmask: Vec<u8>,
+}
+
 /// Parse a JAR program blob: header + ro + rw + jump_table + code + bitmask.
-///
-/// Returns (header, ro_data, rw_data, jump_table, code_slice, bitmask).
-fn parse_blob(blob: &[u8]) -> Option<(ProgramHeader, &[u8], &[u8], Vec<u32>, &[u8], Vec<u8>)> {
+fn parse_blob(blob: &[u8]) -> Option<ParsedBlob<'_>> {
     let (header, mut offset) = ProgramHeader::decode(blob).ok()?;
 
     if header.magic != JAR_MAGIC {
@@ -128,7 +136,14 @@ fn parse_blob(blob: &[u8]) -> Option<(ProgramHeader, &[u8], &[u8], Vec<u32>, &[u
     }
     let bitmask = unpack_bitmask(&blob[offset..offset + bitmask_bytes], code_len);
 
-    Some((header, ro_data, rw_data, jump_table, code, bitmask))
+    Some(ParsedBlob {
+        header,
+        ro_data,
+        rw_data,
+        jump_table,
+        code,
+        bitmask,
+    })
 }
 
 /// Compute the linear memory layout from header fields and arguments.
@@ -173,7 +188,14 @@ fn compute_layout(header: &ProgramHeader, args_len: u32) -> Option<MemLayout> {
 /// Contiguous layout: [stack | roData | rwData | args | heap | unmapped...]
 /// All mapped pages are read-write. No guard zones.
 pub fn initialize_program(program_blob: &[u8], arguments: &[u8], gas: Gas) -> Option<Pvm> {
-    let (header, ro_data, rw_data, jump_table, code, bitmask) = parse_blob(program_blob)?;
+    let ParsedBlob {
+        header,
+        ro_data,
+        rw_data,
+        jump_table,
+        code,
+        bitmask,
+    } = parse_blob(program_blob)?;
 
     if !validate_basic_blocks(code, &bitmask, &jump_table) {
         return None;
@@ -269,7 +291,14 @@ pub fn parse_program_blob<'a>(
     arguments: &[u8],
     _gas: Gas,
 ) -> Option<ParsedProgram<'a>> {
-    let (header, ro_data, rw_data, jump_table, code, bitmask) = parse_blob(program_blob)?;
+    let ParsedBlob {
+        header,
+        ro_data,
+        rw_data,
+        jump_table,
+        code,
+        bitmask,
+    } = parse_blob(program_blob)?;
 
     if !validate_basic_blocks(code, &bitmask, &jump_table) {
         return None;
@@ -395,7 +424,14 @@ mod tests {
     #[test]
     fn test_parse_blob_minimal() {
         let blob = make_blob(&[], &[], 0, 1, &[0, 1, 0], &[1, 1, 1], &[]);
-        let (header, ro, rw, jt, code, bm) = parse_blob(&blob).unwrap();
+        let ParsedBlob {
+            header,
+            ro_data: ro,
+            rw_data: rw,
+            jump_table: jt,
+            code,
+            bitmask: bm,
+        } = parse_blob(&blob).unwrap();
         assert_eq!(header.magic, JAR_MAGIC);
         assert_eq!(header.ro_size, 0);
         assert_eq!(header.stack_pages, 1);
@@ -409,7 +445,12 @@ mod tests {
     #[test]
     fn test_parse_blob_with_jump_table() {
         let blob = make_blob(&[], &[], 0, 1, &[0, 1], &[1, 1], &[0, 1]);
-        let (_, _, _, jt, code, bm) = parse_blob(&blob).unwrap();
+        let ParsedBlob {
+            jump_table: jt,
+            code,
+            bitmask: bm,
+            ..
+        } = parse_blob(&blob).unwrap();
         assert_eq!(code, &[0, 1]);
         assert_eq!(bm, vec![1, 1]);
         assert_eq!(jt, vec![0, 1]);

@@ -36,7 +36,7 @@ const SIZES: &[(&str, u64)] = &[
 fn init_pvm(blob: &[u8], size_bytes: u64) -> javm::recompiler::RecompiledPvm {
     let gas = gas_for_size(size_bytes);
     let mut pvm = javm::recompiler::initialize_program_recompiled(blob, &[], gas).unwrap();
-    let desired_top = (HEAP_BASE as u64 + size_bytes) as u32;
+    let desired_top = (HEAP_BASE + size_bytes) as u32;
     if desired_top > pvm.heap_top() {
         pvm.set_heap_top(desired_top);
     }
