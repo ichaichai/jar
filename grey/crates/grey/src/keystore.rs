@@ -8,6 +8,11 @@
 
 use std::path::{Path, PathBuf};
 
+use bip39::{Language, Mnemonic};
+
+const ED25519_MNEMONIC_DOMAIN: &[u8] = b"grey-keystore-ed25519-v1";
+const BANDERSNATCH_MNEMONIC_DOMAIN: &[u8] = b"grey-keystore-bandersnatch-v1";
+
 /// A file-based keystore that persists validator key seeds to disk.
 pub struct Keystore {
     /// Directory containing key files.
@@ -27,6 +32,33 @@ struct KeyFile {
     bandersnatch_seed: String,
     /// Ed25519 public key (hex-encoded 32 bytes, for verification).
     ed25519_public: String,
+}
+
+fn derive_domain_separated_seed(
+    master_seed: &[u8; 64],
+    validator_index: u16,
+    domain: &[u8],
+) -> [u8; 32] {
+    let mut input = Vec::with_capacity(domain.len() + std::mem::size_of::<u16>() + 64);
+    input.extend_from_slice(domain);
+    input.extend_from_slice(&validator_index.to_be_bytes());
+    input.extend_from_slice(master_seed);
+    grey_crypto::blake2b_256(&input).0
+}
+
+fn derive_validator_seeds_from_mnemonic(
+    validator_index: u16,
+    mnemonic: &str,
+    passphrase: Option<&str>,
+) -> Result<([u8; 32], [u8; 32]), KeystoreError> {
+    let mnemonic = Mnemonic::parse_in(Language::English, mnemonic.trim())
+        .map_err(|e| KeystoreError::Mnemonic(e.to_string()))?;
+    let master_seed = mnemonic.to_seed(passphrase.unwrap_or(""));
+    let ed25519_seed =
+        derive_domain_separated_seed(&master_seed, validator_index, ED25519_MNEMONIC_DOMAIN);
+    let bandersnatch_seed =
+        derive_domain_separated_seed(&master_seed, validator_index, BANDERSNATCH_MNEMONIC_DOMAIN);
+    Ok((ed25519_seed, bandersnatch_seed))
 }
 
 impl Keystore {
@@ -152,6 +184,27 @@ impl Keystore {
             &ed25519_public,
         )
     }
+
+    /// Import validator keys derived from a BIP-39 mnemonic seed phrase.
+    pub fn import_mnemonic(
+        &self,
+        validator_index: u16,
+        mnemonic: &str,
+        passphrase: Option<&str>,
+    ) -> Result<PathBuf, KeystoreError> {
+        let (ed25519_seed, bandersnatch_seed) =
+            derive_validator_seeds_from_mnemonic(validator_index, mnemonic, passphrase)?;
+
+        let ed25519_keypair = grey_crypto::ed25519::Ed25519Keypair::from_seed(&ed25519_seed);
+        let ed25519_public = ed25519_keypair.public_key().0;
+
+        self.save_seeds(
+            validator_index,
+            &ed25519_seed,
+            &bandersnatch_seed,
+            &ed25519_public,
+        )
+    }
 }
 
 /// Errors from the keystore.
@@ -159,6 +212,8 @@ impl Keystore {
 pub enum KeystoreError {
     #[error("I/O error: {0}")]
     Io(String),
+    #[error("invalid mnemonic: {0}")]
+    Mnemonic(String),
     #[error("key not found for validator {0}")]
     NotFound(u16),
 }
@@ -282,5 +337,63 @@ mod tests {
             ks.import_raw_hex(0, "zz".repeat(32).as_str(), "aa".repeat(32).as_str())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_import_mnemonic_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ks = Keystore::open(dir.path().join("keys")).unwrap();
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let path = ks.import_mnemonic(4, mnemonic, None).unwrap();
+        assert!(path.exists());
+
+        let (expected_ed, expected_band) =
+            derive_validator_seeds_from_mnemonic(4, mnemonic, None).unwrap();
+        let (loaded_ed, loaded_band) = ks.load_seeds(4).unwrap();
+        assert_eq!(loaded_ed, expected_ed);
+        assert_eq!(loaded_band, expected_band);
+
+        let json = std::fs::read_to_string(path).unwrap();
+        let key_file: KeyFile = serde_json::from_str(&json).unwrap();
+        let expected_public = grey_crypto::ed25519::Ed25519Keypair::from_seed(&expected_ed)
+            .public_key()
+            .0;
+        assert_eq!(key_file.ed25519_public, hex::encode(expected_public));
+    }
+
+    #[test]
+    fn test_mnemonic_derivation_is_validator_specific() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let validator_0 = derive_validator_seeds_from_mnemonic(0, mnemonic, None).unwrap();
+        let validator_1 = derive_validator_seeds_from_mnemonic(1, mnemonic, None).unwrap();
+
+        assert_ne!(validator_0.0, validator_1.0);
+        assert_ne!(validator_0.1, validator_1.1);
+    }
+
+    #[test]
+    fn test_mnemonic_derivation_honors_passphrase() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let without_passphrase = derive_validator_seeds_from_mnemonic(2, mnemonic, None).unwrap();
+        let with_passphrase =
+            derive_validator_seeds_from_mnemonic(2, mnemonic, Some("validator-passphrase"))
+                .unwrap();
+
+        assert_ne!(without_passphrase.0, with_passphrase.0);
+        assert_ne!(without_passphrase.1, with_passphrase.1);
+    }
+
+    #[test]
+    fn test_import_mnemonic_invalid_phrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let ks = Keystore::open(dir.path().join("keys")).unwrap();
+
+        let err = ks
+            .import_mnemonic(1, "not a valid bip39 phrase", None)
+            .unwrap_err();
+        assert!(matches!(err, KeystoreError::Mnemonic(_)));
     }
 }
