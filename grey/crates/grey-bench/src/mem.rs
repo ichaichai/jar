@@ -12,7 +12,7 @@ const SWEEPS: u32 = 15;
 /// Heap base address in the linear memory model.
 /// With stack_size=4096 and no ro/rw/args data:
 ///   heap_start = page_round(4096) + page_round(0) + page_round(0) + page_round(0) = 0x1000
-const HEAP_BASE: u64 = 0x1000;
+pub const HEAP_BASE: u64 = 0x1000;
 
 // PVM register indices (JAR v0.8.0 linear memory layout)
 const RA: u8 = 0;
@@ -193,10 +193,13 @@ fn build_blob(c: Vec<u8>, m: Vec<u8>, stack_size: u32, heap_pages: u16) -> Vec<u
 /// Build a sequential memory sweep benchmark blob.
 ///
 /// Allocates `size_bytes` of heap, initializes with a pattern, then performs
-/// 16 sequential sweeps reading every u32 and XOR-accumulating a checksum.
-pub fn grey_mem_seq_blob(size_bytes: u32) -> Vec<u8> {
+/// 15 sequential sweeps reading every u32 and ADD-accumulating a checksum.
+///
+/// For sizes > 256MB, the harness must call `set_heap_top` on the PVM after init
+/// to expand the heap beyond the u16 heap_pages limit.
+pub fn grey_mem_seq_blob(size_bytes: u64) -> Vec<u8> {
     assert!(size_bytes >= 4096 && size_bytes % 4096 == 0);
-    let heap_pages = size_bytes / 4096;
+    let heap_pages = (size_bytes / 4096).min(u16::MAX as u64) as u32;
 
     let mut c = Vec::new();
     let mut m = Vec::new();
@@ -204,7 +207,7 @@ pub fn grey_mem_seq_blob(size_bytes: u32) -> Vec<u8> {
     // Setup: RA = halt addr, S0 = base, S1 = end, A0 = 0 (checksum)
     load_imm_64(&mut c, &mut m, RA, 0xFFFF0000u64);
     load_imm_64(&mut c, &mut m, S0, HEAP_BASE);
-    load_imm_64(&mut c, &mut m, S1, HEAP_BASE + size_bytes as u64);
+    load_imm_64(&mut c, &mut m, S1, HEAP_BASE + size_bytes);
     load_imm_64(&mut c, &mut m, A0, 0);
     load_imm_64(&mut c, &mut m, A1, SWEEPS as u64);
 
@@ -281,11 +284,11 @@ pub fn grey_mem_seq_blob(size_bytes: u32) -> Vec<u8> {
 ///
 /// Allocates `size_bytes` of heap, initializes with a pattern, then performs
 /// N_ELEMS * 16 random reads using xorshift32 for index generation.
-pub fn grey_mem_rand_blob(size_bytes: u32) -> Vec<u8> {
+pub fn grey_mem_rand_blob(size_bytes: u64) -> Vec<u8> {
     assert!(size_bytes >= 4096 && size_bytes % 4096 == 0);
     let n_elems = size_bytes / 4;
-    let heap_pages = size_bytes / 4096;
-    let total_loads = n_elems * SWEEPS;
+    let heap_pages = (size_bytes / 4096).min(u16::MAX as u64) as u32;
+    let total_loads = n_elems * SWEEPS as u64;
 
     let mut c = Vec::new();
     let mut m = Vec::new();
@@ -294,12 +297,12 @@ pub fn grey_mem_rand_blob(size_bytes: u32) -> Vec<u8> {
     load_imm_64(&mut c, &mut m, RA, 0xFFFF0000u64);
     load_imm_64(&mut c, &mut m, S0, HEAP_BASE); // base
     load_imm_64(&mut c, &mut m, A0, 0); // checksum
-    load_imm_64(&mut c, &mut m, A1, total_loads as u64); // iteration counter
-    load_imm_64(&mut c, &mut m, A2, (n_elems - 1) as u64); // mask (n_elems is power of 2)
-    load_imm_64(&mut c, &mut m, T0, 0x12345678u64); // xorshift state (seed)
+    load_imm_64(&mut c, &mut m, A1, total_loads); // iteration counter
+    load_imm_64(&mut c, &mut m, A2, n_elems - 1); // mask (n_elems is power of 2)
+    load_imm_64(&mut c, &mut m, T0, 0x12345678u64); // stride state (seed)
 
     // --- Init loop: same as sequential ---
-    load_imm_64(&mut c, &mut m, S1, HEAP_BASE + size_bytes as u64); // end
+    load_imm_64(&mut c, &mut m, S1, HEAP_BASE + size_bytes); // end
     mov(&mut c, &mut m, T1, S0);
     let _init_jump_pc = pc(&c);
     jump(&mut c, &mut m, 5);
@@ -359,14 +362,14 @@ mod tests {
 
     #[test]
     fn test_mem_seq_blob_halts() {
-        let blob = grey_mem_seq_blob(4096);
+        let blob = grey_mem_seq_blob(4096u64);
         let (result, _gas) = crate::run_grey_recompiler(&blob, 10_000_000);
         assert_ne!(result, 0, "seq checksum should be non-zero");
     }
 
     #[test]
     fn test_mem_rand_blob_halts() {
-        let blob = grey_mem_rand_blob(4096);
+        let blob = grey_mem_rand_blob(4096u64);
         let (result, _gas) = crate::run_grey_recompiler(&blob, 1_000_000);
         assert_ne!(result, 0, "rand checksum should be non-zero");
     }
