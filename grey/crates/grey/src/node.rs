@@ -761,7 +761,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     block.header.timeslot,
                                     ticket_sealed,
                                 );
-                                grandpa.update_best_block(header_hash, current_slot);
+                                grandpa.update_best_block(header_hash, &audit_state.completed_audits);
 
                                 // Send prevote for the new block
                                 if let Some(prevote_msg) = grandpa.create_prevote(
@@ -1023,7 +1023,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         block.header.timeslot,
                                         ticket_sealed,
                                     );
-                                    grandpa.update_best_block(import_hash, slot);
+                                    grandpa.update_best_block(import_hash, &audit_state.completed_audits);
                                     if let Some(prevote_msg) = grandpa.create_prevote(
                                         config.validator_index,
                                         my_secrets,
