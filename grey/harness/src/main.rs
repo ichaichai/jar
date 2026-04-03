@@ -33,7 +33,7 @@ struct Cli {
     #[arg(long, default_value = "http://localhost:9933")]
     rpc: String,
 
-    /// Run only the named scenario (e.g. "serial", "repeat", "liveness").
+    /// Run only the named scenario (e.g. "serial", "repeat", "throughput").
     /// If not specified, all scenarios run in order.
     #[arg(long, value_name = "NAME")]
     scenario: Option<String>,
@@ -115,6 +115,14 @@ async fn main() {
     // Run scenarios sequentially.
     let mut results = Vec::new();
     let consistency_supported = !cli.no_testnet && !cli.seq_testnet;
+    let default_scenarios = [
+        "serial",
+        "repeat",
+        "liveness",
+        "invalid_wp",
+        "recovery",
+        "metrics",
+    ];
     let mut all_scenarios = vec![
         "serial",
         "repeat",
@@ -122,6 +130,7 @@ async fn main() {
         "invalid_wp",
         "recovery",
         "metrics",
+        "throughput",
     ];
     if consistency_supported {
         all_scenarios.push("consistency");
@@ -143,7 +152,9 @@ async fn main() {
         }
         vec![name.as_str()]
     } else {
-        all_scenarios.to_vec()
+        // Keep throughput opt-in for now; it is benchmark-style and substantially
+        // slower than the default correctness scenarios used in CI.
+        default_scenarios.to_vec()
     };
 
     for (i, name) in scenario_list.iter().enumerate() {
@@ -156,12 +167,14 @@ async fn main() {
             "recovery" => scenarios::recovery::run(&client).await,
             "metrics" => scenarios::metrics::run(&client).await,
             "consistency" => scenarios::consistency::run(&client).await,
+            "throughput" => scenarios::throughput::run(&client).await,
             _ => unreachable!(),
         };
         let dur = result.duration.as_secs();
         if result.pass {
             println!("  PASS ({dur}s)");
             result.print_latency_summary();
+            result.print_metric_summary();
             if cli.perf && !result.latencies.is_empty() {
                 println!("  Per-operation timing:");
                 for sample in &result.latencies {
@@ -214,6 +227,20 @@ async fn main() {
                         })
                         .collect();
                     obj["latencies"] = serde_json::Value::Array(latencies);
+                }
+                if !r.metrics.is_empty() {
+                    let metrics: Vec<serde_json::Value> = r
+                        .metrics
+                        .iter()
+                        .map(|m| {
+                            serde_json::json!({
+                                "label": m.label,
+                                "value": m.value,
+                                "unit": m.unit,
+                            })
+                        })
+                        .collect();
+                    obj["metrics"] = serde_json::Value::Array(metrics);
                 }
                 obj
             })

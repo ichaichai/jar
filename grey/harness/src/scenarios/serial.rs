@@ -30,6 +30,7 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
                 duration: start.elapsed(),
                 error: Some(e.to_string()),
                 latencies,
+                metrics: vec![],
             };
         }
         latencies.push(LatencySample {
@@ -43,5 +44,6 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
         duration: start.elapsed(),
         error: None,
         latencies,
+        metrics: vec![],
     }
 }
