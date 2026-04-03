@@ -20,7 +20,7 @@ const SIZES: &[(&str, u32)] = &[
     ("1M", 1024 * 1024),
     ("8M", 8 * 1024 * 1024),
     ("32M", 32 * 1024 * 1024),
-    ("128M", 128 * 1024 * 1024),
+    // 128M omitted: requires ~128MB contiguous allocation, may OOM in constrained environments
 ];
 
 fn bench_mem_seq(c: &mut Criterion) {
