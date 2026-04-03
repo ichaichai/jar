@@ -61,6 +61,9 @@ pub struct JitContext {
     /// Fast re-entry flag (offset 200).
     pub fast_reentry: u32,
     _pad2: u32,
+    /// Maximum heap pages — grow_heap refuses beyond this (offset 208).
+    pub max_heap_pages: u32,
+    _pad3: u32,
 }
 
 /// Compiled native code buffer (mmap'd as executable).
@@ -471,6 +474,15 @@ extern "sysv64" fn sbrk_helper(ctx: *mut JitContext, size: u64) -> u64 {
     }
 
     let new_top_u32 = new_top as u32;
+
+    // Check max_heap_pages limit
+    if ctx.max_heap_pages > 0 {
+        let max_top = ctx.heap_base as u64 + (ctx.max_heap_pages as u64) * (ps as u64);
+        if new_top > max_top {
+            return 0;
+        }
+    }
+
     // Map any pages in [old_top, new_top) that aren't mapped yet
     let start_page = old_top / ps;
     let end_page = if new_top_u32 == 0 {
@@ -596,6 +608,8 @@ impl RecompiledPvm {
                 flat_perms: flat_memory.perms,
                 fast_reentry: 0,
                 _pad2: 0,
+                max_heap_pages: 0,
+                _pad3: 0,
             });
         }
         // SAFETY: ctx_raw was just initialized above; valid for the lifetime of flat_memory.
@@ -1004,6 +1018,7 @@ pub fn initialize_program_recompiled(
 
     rpvm.ctx_mut().heap_base = parsed.heap_base;
     rpvm.ctx_mut().heap_top = parsed.heap_top;
+    rpvm.ctx_mut().max_heap_pages = parsed.max_heap_pages;
 
     #[cfg(feature = "signals")]
     if let Some(ref fm) = rpvm.flat_memory {
@@ -1048,6 +1063,8 @@ mod tests {
             flat_perms: std::ptr::null(),
             fast_reentry: 0,
             _pad2: 0,
+            max_heap_pages: 0,
+            _pad3: 0,
         };
         let base = &ctx as *const JitContext as usize;
         // Convert codegen offset (negative from R15) to struct offset:
