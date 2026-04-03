@@ -40,6 +40,7 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
                 e
             )),
             latencies: vec![],
+            metrics: vec![],
         };
     }
     let latency = LatencySample {
@@ -55,6 +56,7 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
             duration: start.elapsed(),
             error: Some(format!("node unhealthy after recovery: {}", e)),
             latencies: vec![latency],
+            metrics: vec![],
         };
     }
 
@@ -64,5 +66,6 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
         duration: start.elapsed(),
         error: None,
         latencies: vec![latency],
+        metrics: vec![],
     }
 }

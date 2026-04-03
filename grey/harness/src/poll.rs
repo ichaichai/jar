@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 use crate::pixel;
-use crate::rpc::RpcClient;
+use crate::rpc::{RpcClient, SubmitResult};
 
 #[derive(Debug, thiserror::Error)]
 #[error("timed out waiting for {label} ({timeout:?})")]
@@ -71,6 +71,16 @@ pub async fn wait_for_service(
 }
 
 /// Check if a pixel at (x,y) with color (r,g,b) is written in storage.
+pub fn pixel_matches(value: &str, x: u8, y: u8, r: u8, g: u8, b: u8) -> bool {
+    let offset = (y as usize * 100 + x as usize) * 3 * 2; // hex offset
+    if offset + 6 > value.len() {
+        return false;
+    }
+    let expected = format!("{r:02x}{g:02x}{b:02x}");
+    value[offset..offset + 6] == expected
+}
+
+/// Check if a pixel at (x,y) with color (r,g,b) is written in storage.
 pub async fn check_pixel(
     client: &RpcClient,
     service_id: u32,
@@ -86,17 +96,12 @@ pub async fn check_pixel(
     let Some(value) = &storage.value else {
         return false;
     };
-    let offset = (y as usize * 100 + x as usize) * 3 * 2; // hex offset
-    if offset + 6 > value.len() {
-        return false;
-    }
-    let expected = format!("{r:02x}{g:02x}{b:02x}");
-    value[offset..offset + 6] == expected
+    pixel_matches(value, x, y, r, g, b)
 }
 
-/// Submit a pixel work package and wait for it to appear in storage.
+/// Submit a pixel work package but do not wait for confirmation.
 #[allow(clippy::too_many_arguments)]
-pub async fn submit_and_verify_pixel(
+pub async fn submit_pixel_work_package(
     client: &RpcClient,
     service_id: u32,
     x: u8,
@@ -104,8 +109,7 @@ pub async fn submit_and_verify_pixel(
     r: u8,
     g: u8,
     b: u8,
-    timeout: Duration,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<SubmitResult, Box<dyn std::error::Error>> {
     let ctx = client.get_context(service_id).await?;
     assert!(
         ctx.code_hash.is_some(),
@@ -120,16 +124,48 @@ pub async fn submit_and_verify_pixel(
         "submitted ({x},{y}) {color_hex} hash={}...",
         &result.hash[..16.min(result.hash.len())]
     );
+    Ok(result)
+}
 
+/// Wait for a previously-submitted pixel to appear in storage.
+#[allow(clippy::too_many_arguments)]
+pub async fn wait_for_pixel(
+    client: &RpcClient,
+    service_id: u32,
+    x: u8,
+    y: u8,
+    r: u8,
+    g: u8,
+    b: u8,
+    timeout: Duration,
+) -> Result<(), TimeoutError> {
+    let color_hex = format!("#{r:02x}{g:02x}{b:02x}");
     wait_until(
         || async { check_pixel(client, service_id, x, y, r, g, b).await },
         Duration::from_secs(2),
         timeout,
         &format!("pixel ({x},{y}) {color_hex}"),
     )
-    .await?;
+    .await
+}
+
+/// Submit a pixel work package and wait for it to appear in storage.
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_and_verify_pixel(
+    client: &RpcClient,
+    service_id: u32,
+    x: u8,
+    y: u8,
+    r: u8,
+    g: u8,
+    b: u8,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    submit_pixel_work_package(client, service_id, x, y, r, g, b).await?;
+    wait_for_pixel(client, service_id, x, y, r, g, b, timeout).await?;
 
     let storage = client.read_storage(service_id, "00").await?;
+    let color_hex = format!("#{r:02x}{g:02x}{b:02x}");
     info!("({x},{y}) {color_hex} ok (slot {})", storage.slot);
     Ok(())
 }

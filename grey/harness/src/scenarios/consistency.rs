@@ -51,6 +51,7 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
             duration: start.elapsed(),
             error: None,
             latencies,
+            metrics: Vec::new(),
         },
         Err(e) => ScenarioResult {
             name: "consistency",
@@ -58,6 +59,7 @@ pub async fn run(client: &RpcClient) -> ScenarioResult {
             duration: start.elapsed(),
             error: Some(e),
             latencies,
+            metrics: Vec::new(),
         },
     }
 }
