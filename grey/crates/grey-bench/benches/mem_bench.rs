@@ -10,8 +10,14 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use grey_bench::mem::*;
 
-/// High gas limit — large working sets need many instructions.
-const MEM_GAS: u64 = 10_000_000_000;
+/// Compute gas limit proportional to working set size.
+/// Each u32 element needs ~10 gas per load (BB overhead + instruction cost),
+/// times 15 sweeps, plus init overhead.
+fn gas_for_size(size_bytes: u32) -> u64 {
+    let n_elems = size_bytes as u64 / 4;
+    let loads = n_elems * 15; // SWEEPS
+    loads * 100 + 10_000_000 // generous: ~100 gas per load iteration in BB model
+}
 
 const SIZES: &[(&str, u32)] = &[
     ("4K", 4 * 1024),
@@ -20,7 +26,8 @@ const SIZES: &[(&str, u32)] = &[
     ("1M", 1024 * 1024),
     ("8M", 8 * 1024 * 1024),
     ("32M", 32 * 1024 * 1024),
-    // 128M omitted: requires ~128MB contiguous allocation, may OOM in constrained environments
+    ("128M", 128 * 1024 * 1024),
+    ("256M", 65535 * 4096), // max heap: u16::MAX pages × 4096 ≈ 256MB
 ];
 
 fn bench_mem_seq(c: &mut Criterion) {
@@ -28,9 +35,15 @@ fn bench_mem_seq(c: &mut Criterion) {
         let blob = grey_mem_seq_blob(size);
 
         let mut group = c.benchmark_group(format!("mem_seq/{label}"));
+        if size >= 8 * 1024 * 1024 {
+            group.sample_size(10);
+        }
         group.bench_function("grey-recompiler-exec", |b| {
             b.iter_batched(
-                || javm::recompiler::initialize_program_recompiled(&blob, &[], MEM_GAS).unwrap(),
+                || {
+                    javm::recompiler::initialize_program_recompiled(&blob, &[], gas_for_size(size))
+                        .unwrap()
+                },
                 |mut pvm| {
                     loop {
                         match pvm.run() {
@@ -53,9 +66,15 @@ fn bench_mem_rand(c: &mut Criterion) {
         let blob = grey_mem_rand_blob(size);
 
         let mut group = c.benchmark_group(format!("mem_rand/{label}"));
+        if size >= 8 * 1024 * 1024 {
+            group.sample_size(10);
+        }
         group.bench_function("grey-recompiler-exec", |b| {
             b.iter_batched(
-                || javm::recompiler::initialize_program_recompiled(&blob, &[], MEM_GAS).unwrap(),
+                || {
+                    javm::recompiler::initialize_program_recompiled(&blob, &[], gas_for_size(size))
+                        .unwrap()
+                },
                 |mut pvm| {
                     loop {
                         match pvm.run() {
