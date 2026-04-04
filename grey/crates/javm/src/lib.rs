@@ -16,6 +16,8 @@ pub mod cap;
 pub mod gas_cost;
 pub mod gas_sim;
 pub mod instruction;
+#[cfg(feature = "std")]
+pub mod kernel;
 pub mod program;
 pub mod program_v2;
 pub mod vm_pool;
