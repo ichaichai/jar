@@ -105,6 +105,7 @@ private def jar1Config : JamConfig where
   hostcallVersion := 1
   useCompactDeblob := false
   variableValidators := true
+  capabilityModel := .v2
   EconType := QuotaEcon
   TransferType := QuotaTransfer
 

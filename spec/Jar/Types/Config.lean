@@ -125,6 +125,14 @@ inductive HeapModel where
   | growHeap
   deriving BEq, Inhabited
 
+/-- PVM capability model. -/
+inductive CapabilityModel where
+  /-- No capability model (v0.7.2 / jar1 v1). -/
+  | none
+  /-- Capability-based execution (JAVM v2). -/
+  | v2
+  deriving BEq, Inhabited
+
 -- ============================================================================
 -- Economic Model Typeclass (defined here so JamConfig can reference it)
 -- ============================================================================
@@ -194,6 +202,8 @@ class JamConfig where
   heapModel : HeapModel := .sbrk
   /-- Hostcall numbering version: 0 = v0.7.2, 1 = v0.8.0 (+1 shift for grow_heap). -/
   hostcallVersion : Nat := 0
+  /-- PVM capability model: .none = flat memory, .v2 = capability-based. -/
+  capabilityModel : CapabilityModel := .none
   /-- PVM blob deblob encoding: true = JAM compact natural, false = u32 LE (jar1). -/
   useCompactDeblob : Bool := true
   /-- Whether validator set size is variable (GP#514). When true, designate
