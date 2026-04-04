@@ -10,10 +10,12 @@
 extern crate alloc;
 
 pub mod args;
+pub mod cap;
 pub mod gas_cost;
 pub mod gas_sim;
 pub mod instruction;
 pub mod program;
+pub mod vm_pool;
 // Real JIT recompiler on Linux x86-64; interpreter-backed shim everywhere else.
 #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
 pub mod recompiler;
