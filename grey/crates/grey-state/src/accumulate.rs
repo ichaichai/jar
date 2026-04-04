@@ -470,18 +470,36 @@ fn accumulate_single_service(
     }
     let code_blob = code_blob.unwrap();
 
-    // Run PVM
-    let (final_context, gas_used) = run_accumulate_pvm(
-        config,
-        &code_blob,
-        total_gas,
-        &args,
-        regular,
-        exceptional,
-        timeslot,
-        entropy,
-        &service_fetch_ctx,
-    );
+    // Run PVM — auto-detect blob version
+    let is_v2 = code_blob.len() >= 4
+        && u32::from_le_bytes([code_blob[0], code_blob[1], code_blob[2], code_blob[3]])
+            == javm::program_v2::JAR_V2_MAGIC;
+
+    let (final_context, gas_used) = if is_v2 {
+        run_accumulate_pvm_v2(
+            config,
+            &code_blob,
+            total_gas,
+            &args,
+            regular,
+            exceptional,
+            timeslot,
+            entropy,
+            &service_fetch_ctx,
+        )
+    } else {
+        run_accumulate_pvm(
+            config,
+            &code_blob,
+            total_gas,
+            &args,
+            regular,
+            exceptional,
+            timeslot,
+            entropy,
+            &service_fetch_ctx,
+        )
+    };
 
     tracing::debug!(
         service_id,
@@ -707,6 +725,136 @@ fn run_accumulate_pvm(
                     return (exceptional, gas_used);
                 }
             }
+        }
+    }
+}
+
+/// Run accumulation using the v2 capability kernel.
+/// Protocol cap CALLs exit the kernel and are dispatched here.
+#[allow(clippy::too_many_arguments)]
+fn run_accumulate_pvm_v2(
+    config: &Config,
+    code_blob: &[u8],
+    gas: Gas,
+    args: &[u8],
+    mut regular: AccContext,
+    mut exceptional: AccContext,
+    timeslot: Timeslot,
+    _entropy: &Hash,
+    fetch_ctx: &FetchContext,
+) -> (AccContext, Gas) {
+    use javm::kernel::KernelResult;
+
+    let mut pvm = match PvmInstance::initialize_v2(code_blob, args, gas) {
+        Some(p) => p,
+        None => {
+            return (exceptional, 0);
+        }
+    };
+
+    let initial_gas = pvm.gas();
+
+    loop {
+        let result = pvm.kernel_run();
+
+        match result {
+            KernelResult::Halt(exit_value) => {
+                let gas_used = initial_gas - pvm.gas();
+
+                // Check if output hash is valid (32 bytes accessible)
+                // In v2, the output is set via the OUTPUT protocol cap,
+                // but we also support the v1 convention of φ[7]/φ[8] pointing to output.
+                if exit_value != 0 {
+                    // v2 programs set output via OUTPUT protocol cap
+                    // (already stored in regular.output by host_output_v2)
+                }
+
+                return (regular, gas_used);
+            }
+            KernelResult::Panic => {
+                let gas_used = initial_gas - pvm.gas();
+                return (exceptional, gas_used);
+            }
+            KernelResult::OutOfGas => {
+                return (exceptional, initial_gas);
+            }
+            KernelResult::PageFault(_) => {
+                let gas_used = initial_gas - pvm.gas();
+                return (exceptional, gas_used);
+            }
+            KernelResult::ProtocolCall { slot, regs, gas: _ } => {
+                // Charge host call gas (10)
+                let host_gas_cost: u64 = 10;
+                if pvm.gas() < host_gas_cost {
+                    pvm.set_gas(0);
+                    let gas_used = initial_gas;
+                    return (exceptional, gas_used);
+                }
+                pvm.set_gas(pvm.gas() - host_gas_cost);
+
+                // Dispatch by protocol cap slot number (matches GP host call IDs directly)
+                let ok = handle_v2_host_call(
+                    config, slot, &mut pvm, &regs, &mut regular, &mut exceptional, timeslot,
+                    fetch_ctx,
+                );
+                if !ok {
+                    let gas_used = initial_gas - pvm.gas();
+                    return (exceptional, gas_used);
+                }
+                // Resume kernel execution
+            }
+        }
+    }
+}
+
+/// Handle a v2 protocol cap call. Slot numbers match GP host call IDs.
+/// Returns true to continue, false to abort.
+#[allow(clippy::too_many_arguments)]
+fn handle_v2_host_call(
+    _config: &Config,
+    slot: u8,
+    pvm: &mut PvmInstance,
+    regs: &[u64; 13],
+    regular: &mut AccContext,
+    exceptional: &mut AccContext,
+    _timeslot: Timeslot,
+    fetch_ctx: &FetchContext,
+) -> bool {
+    // v2 protocol cap slots match GP host call numbers (no grow_heap shift)
+    match slot {
+        0 => {
+            // GAS: return remaining gas
+            pvm.kernel_resume(pvm.gas(), 0);
+            true
+        }
+        1 => {
+            // FETCH: read context data
+            host_fetch(pvm, fetch_ctx);
+            true
+        }
+        17 => {
+            // CHECKPOINT: y' = x
+            host_checkpoint(pvm, regular, exceptional);
+            true
+        }
+        25 => {
+            // OUTPUT (yield in GP): set accumulation output hash
+            // In v2, the hash is read from the IPC DATA cap
+            let hash_off = regs[7] as u32;
+            let data_cap = regs[12] as u8;
+            if let Some(hash_bytes) = pvm.kernel_read_data(data_cap, hash_off, 32) {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&hash_bytes);
+                regular.output = Some(grey_types::Hash(hash));
+            }
+            pvm.kernel_resume(0, 0);
+            true
+        }
+        // For now, other protocol calls return WHAT (unimplemented)
+        // These will be wired in as host call handlers are adapted for v2
+        _ => {
+            pvm.kernel_resume(HOST_WHAT, 0);
+            true
         }
     }
 }

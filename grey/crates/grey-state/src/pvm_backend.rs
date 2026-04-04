@@ -184,6 +184,38 @@ impl PvmInstance {
         }
     }
 
+    /// Run kernel until protocol call or termination.
+    pub fn kernel_run(&mut self) -> javm::kernel::KernelResult {
+        match &mut self.inner {
+            Backend::Kernel(k) => k.run(),
+            _ => panic!("kernel_run called on non-kernel backend"),
+        }
+    }
+
+    /// Read from a DATA cap in the kernel's active VM.
+    pub fn kernel_read_data(&self, cap_idx: u8, offset: u32, len: u32) -> Option<Vec<u8>> {
+        match &self.inner {
+            Backend::Kernel(k) => k.read_data_cap(cap_idx, offset, len),
+            _ => None,
+        }
+    }
+
+    /// Write to a DATA cap in the kernel's active VM.
+    pub fn kernel_write_data(&self, cap_idx: u8, offset: u32, data: &[u8]) -> bool {
+        match &self.inner {
+            Backend::Kernel(k) => k.write_data_cap(cap_idx, offset, data),
+            _ => false,
+        }
+    }
+
+    /// Resume kernel after a protocol call was handled by the host.
+    pub fn kernel_resume(&mut self, result0: u64, result1: u64) {
+        match &mut self.inner {
+            Backend::Kernel(k) => k.resume_protocol_call(result0, result1),
+            _ => panic!("kernel_resume called on non-kernel backend"),
+        }
+    }
+
     /// Mutable access to the kernel (only for Kernel backend).
     pub fn kernel_mut(&mut self) -> Option<&mut javm::kernel::InvocationKernel> {
         match &mut self.inner {
