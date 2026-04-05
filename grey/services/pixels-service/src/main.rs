@@ -193,7 +193,7 @@ mod service {
 
     /// Heap base address. For this service: stack_pages=4, no RO/RW data,
     /// so heap DATA cap (68) is at base_page=4 → address 0x4000.
-    /// This is deterministic from the build_service_v2 memory layout.
+    /// This is deterministic from the build_service memory layout.
     const HEAP_BASE_ADDR: u32 = 4 * 4096;
 
     #[panic_handler]

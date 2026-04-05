@@ -81,7 +81,7 @@ pub struct ProgramHeaderV2 {
 
 /// Parsed JAR v2 blob.
 #[derive(Debug)]
-pub struct ParsedBlobV2<'a> {
+pub struct ParsedBlob<'a> {
     /// Header fields.
     pub header: ProgramHeaderV2,
     /// Capability manifest entries.
@@ -114,7 +114,7 @@ fn read_u32_le(blob: &[u8], offset: &mut usize) -> Option<u32> {
 }
 
 /// Parse a JAR v2 program blob.
-pub fn parse_v2_blob(blob: &[u8]) -> Option<ParsedBlobV2<'_>> {
+pub fn parse_blob(blob: &[u8]) -> Option<ParsedBlob<'_>> {
     if blob.len() < HEADER_SIZE {
         return None;
     }
@@ -180,7 +180,7 @@ pub fn parse_v2_blob(blob: &[u8]) -> Option<ParsedBlobV2<'_>> {
         }
     }
 
-    Some(ParsedBlobV2 {
+    Some(ParsedBlob {
         header: ProgramHeaderV2 {
             memory_pages,
             cap_count,
@@ -261,7 +261,7 @@ fn unpack_bitmask(packed: &[u8], code_len: usize) -> Vec<u8> {
 
 /// Build a minimal JAR v2 blob with a single CODE cap from raw components.
 /// Useful for tests — no DATA caps, small memory budget.
-pub fn build_simple_v2_blob(code: &[u8], bitmask: &[u8], jump_table: &[u32]) -> Vec<u8> {
+pub fn build_simple_blob(code: &[u8], bitmask: &[u8], jump_table: &[u32]) -> Vec<u8> {
     use crate::cap::Access;
 
     // Build code sub-blob: jump_len(4) + entry_size(1) + code_len(4) + jt + code + packed_bitmask
@@ -293,11 +293,11 @@ pub fn build_simple_v2_blob(code: &[u8], bitmask: &[u8], jump_table: &[u32]) -> 
         data_offset: 0,
         data_len: code_data.len() as u32,
     }];
-    build_v2_blob(4, 64, &caps, &code_data)
+    build_blob(4, 64, &caps, &code_data)
 }
 
 /// Build a JAR v2 blob from components.
-pub fn build_v2_blob(
+pub fn build_blob(
     memory_pages: u32,
     invoke_cap: u8,
     caps: &[CapManifestEntry],
@@ -401,8 +401,8 @@ mod tests {
             },
         ];
 
-        let blob = build_v2_blob(10, 64, &caps, &data_section);
-        let parsed = parse_v2_blob(&blob).expect("parse failed");
+        let blob = build_blob(10, 64, &caps, &data_section);
+        let parsed = parse_blob(&blob).expect("parse failed");
 
         assert_eq!(parsed.header.memory_pages, 10);
         assert_eq!(parsed.header.cap_count, 3);
@@ -436,22 +436,22 @@ mod tests {
 
     #[test]
     fn test_bad_magic() {
-        let blob = build_v2_blob(10, 64, &[], &[]);
+        let blob = build_blob(10, 64, &[], &[]);
         let mut bad = blob.clone();
         bad[3] = 0x99; // corrupt version byte
-        assert!(parse_v2_blob(&bad).is_none());
+        assert!(parse_blob(&bad).is_none());
     }
 
     #[test]
     fn test_truncated_blob() {
         // Too short for header
-        assert!(parse_v2_blob(&[0; 5]).is_none());
+        assert!(parse_blob(&[0; 5]).is_none());
 
         // Header says 1 cap but blob is too short
-        let blob = build_v2_blob(10, 64, &[], &[]);
+        let blob = build_blob(10, 64, &[], &[]);
         let mut bad = blob;
         bad[8] = 1; // cap_count = 1 but no cap entries follow
-        assert!(parse_v2_blob(&bad).is_none());
+        assert!(parse_blob(&bad).is_none());
     }
 
     #[test]
@@ -465,20 +465,20 @@ mod tests {
             data_offset: 0,
             data_len: 100, // references 100 bytes but data section is empty
         }];
-        let blob = build_v2_blob(10, 64, &caps, &[]);
-        assert!(parse_v2_blob(&blob).is_none());
+        let blob = build_blob(10, 64, &caps, &[]);
+        assert!(parse_blob(&blob).is_none());
     }
 
     #[test]
     fn test_no_args_cap() {
-        let blob = build_v2_blob(5, 64, &[], &[]);
-        let _parsed = parse_v2_blob(&blob).unwrap();
+        let blob = build_blob(5, 64, &[], &[]);
+        let _parsed = parse_blob(&blob).unwrap();
     }
 
     #[test]
     fn test_empty_manifest() {
-        let blob = build_v2_blob(0, 0, &[], &[]);
-        let parsed = parse_v2_blob(&blob).unwrap();
+        let blob = build_blob(0, 0, &[], &[]);
+        let parsed = parse_blob(&blob).unwrap();
         assert_eq!(parsed.caps.len(), 0);
         assert_eq!(parsed.data_section.len(), 0);
     }
@@ -508,9 +508,9 @@ mod tests {
     }
 
     #[test]
-    fn test_build_simple_v2_blob_roundtrip() {
-        let blob = build_simple_v2_blob(&[0, 1, 0], &[1, 1, 1], &[]);
-        let parsed = parse_v2_blob(&blob).expect("should parse");
+    fn test_build_simple_blob_roundtrip() {
+        let blob = build_simple_blob(&[0, 1, 0], &[1, 1, 1], &[]);
+        let parsed = parse_blob(&blob).expect("should parse");
         assert_eq!(parsed.caps.len(), 1); // 1 CODE cap
         let code_cap = &parsed.caps[0];
         assert_eq!(code_cap.cap_type, CapEntryType::Code);

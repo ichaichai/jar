@@ -110,7 +110,7 @@ pub fn build_standard_program(
 /// The simplest v2 blob has one CODE cap and one DATA cap (stack).
 /// More complex blobs have separate ro_data, rw_data, heap DATA caps.
 #[allow(clippy::too_many_arguments)]
-pub fn build_v2_service_program(
+pub fn build_service_program(
     code: &[u8],
     bitmask: &[u8],
     jump_table: &[u32],
@@ -121,7 +121,7 @@ pub fn build_v2_service_program(
     memory_pages: u32,
 ) -> Vec<u8> {
     use javm::cap::Access;
-    use javm::program_v2::{CapEntryType, CapManifestEntry, build_v2_blob};
+    use javm::program::{CapEntryType, CapManifestEntry, build_blob};
 
     // Build the CODE blob (jump_table + code + packed_bitmask) as a sub-blob
     // that will be the data for the CODE cap.
@@ -253,7 +253,7 @@ pub fn build_v2_service_program(
     next_page += 1;
 
     let total = memory_pages.max(next_page + heap_pages);
-    build_v2_blob(total, 64, &caps, &data_section)
+    build_blob(total, 64, &caps, &data_section)
 }
 
 #[cfg(test)]
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_build_v2_minimal() {
-        let blob = javm::program_v2::build_simple_v2_blob(&[0, 1, 0], &[1, 1, 1], &[]);
+        let blob = javm::program::build_simple_blob(&[0, 1, 0], &[1, 1, 1], &[]);
         let kernel = javm::kernel::InvocationKernel::new(&blob, &[], 100_000);
         assert!(
             kernel.is_ok(),
@@ -282,7 +282,7 @@ mod tests {
     fn test_build_v2_service_round_trip() {
         let code = vec![0, 1, 0]; // trap, fallthrough, trap
         let bitmask = vec![1, 1, 1];
-        let blob = build_v2_service_program(&code, &bitmask, &[], &[], &[], 1, 0, 4);
+        let blob = build_service_program(&code, &bitmask, &[], &[], &[], 1, 0, 4);
         let kernel = javm::kernel::InvocationKernel::new(&blob, &[], 100_000);
         assert!(
             kernel.is_ok(),

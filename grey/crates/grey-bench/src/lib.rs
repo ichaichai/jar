@@ -396,7 +396,7 @@ pub fn grey_sort_blob(n: u32) -> Vec<u8> {
 
     // Build v2 blob with CODE cap + stack DATA cap
     use javm::cap::Access;
-    use javm::program_v2::{CapEntryType, CapManifestEntry, build_v2_blob};
+    use javm::program::{CapEntryType, CapManifestEntry, build_blob};
 
     // Code sub-blob: jump_len(4) + entry_size(1) + code_len(4) + code + packed_bitmask
     let mut code_data = Vec::new();
@@ -434,7 +434,7 @@ pub fn grey_sort_blob(n: u32) -> Vec<u8> {
         },
     ];
     let total_pages = stack_pages + 4; // stack + headroom
-    build_v2_blob(total_pages, 64, &caps, &code_data)
+    build_blob(total_pages, 64, &caps, &code_data)
 }
 
 fn emit_branch_lt_u(asm: &mut Assembler, ra: Reg, rb: Reg, rel_offset: i32) {
@@ -653,14 +653,14 @@ mod tests_sort {
     fn test_ecrecover_code_size() {
         let blob = grey_ecrecover_blob();
         // Parse the v2 blob to inspect code structure
-        let parsed = javm::program_v2::parse_v2_blob(blob).expect("should parse v2 blob");
+        let parsed = javm::program::parse_blob(blob).expect("should parse v2 blob");
         let code_cap = parsed
             .caps
             .iter()
-            .find(|c| c.cap_type == javm::program_v2::CapEntryType::Code);
+            .find(|c| c.cap_type == javm::program::CapEntryType::Code);
         if let Some(cc) = code_cap {
-            let code_data = javm::program_v2::cap_data(cc, parsed.data_section);
-            if let Some(code_blob) = javm::program_v2::parse_code_blob(code_data) {
+            let code_data = javm::program::cap_data(cc, parsed.data_section);
+            if let Some(code_blob) = javm::program::parse_code_blob(code_data) {
                 let inst_count: usize = code_blob.bitmask.iter().filter(|&&b| b == 1).count();
                 eprintln!(
                     "Grey PVM:  code={} bytes, {} instructions",

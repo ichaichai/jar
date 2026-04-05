@@ -470,7 +470,7 @@ fn accumulate_single_service(
     let code_blob = code_blob.unwrap();
 
     // Run PVM (v2 kernel)
-    let (final_context, gas_used) = run_accumulate_pvm_v2(
+    let (final_context, gas_used) = run_accumulate_pvm(
         config,
         &code_blob,
         total_gas,
@@ -617,7 +617,7 @@ struct FetchContext {
 /// Run accumulation using the v2 capability kernel.
 /// Protocol cap CALLs exit the kernel and are dispatched here.
 #[allow(clippy::too_many_arguments)]
-fn run_accumulate_pvm_v2(
+fn run_accumulate_pvm(
     config: &Config,
     code_blob: &[u8],
     gas: Gas,

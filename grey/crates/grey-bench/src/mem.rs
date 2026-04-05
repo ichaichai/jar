@@ -181,7 +181,7 @@ fn pc(c: &[u8]) -> u32 {
 
 fn build_blob(c: Vec<u8>, m: Vec<u8>, stack_pages: u32, heap_pages: u32) -> Vec<u8> {
     use javm::cap::Access;
-    use javm::program_v2::{CapEntryType, CapManifestEntry, build_v2_blob};
+    use javm::program::{CapEntryType, CapManifestEntry, build_blob};
 
     // Code sub-blob: jump_len(4) + entry_size(1) + code_len(4) + code + packed_bitmask
     let mut code_data = Vec::new();
@@ -235,7 +235,7 @@ fn build_blob(c: Vec<u8>, m: Vec<u8>, stack_pages: u32, heap_pages: u32) -> Vec<
         next_page += heap_pages;
     }
     let total_pages = next_page + 4; // headroom
-    build_v2_blob(total_pages, 64, &caps, &code_data)
+    build_blob(total_pages, 64, &caps, &code_data)
 }
 
 // ---------------------------------------------------------------------------

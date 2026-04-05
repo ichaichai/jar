@@ -17,7 +17,7 @@ use crate::backing::{BackingStore, CodeWindow};
 use crate::cap::{
     Access, CallableCap, Cap, CapTable, CodeCap, DataCap, HandleCap, IPC_SLOT, UntypedCap,
 };
-use crate::program_v2::{self, CapEntryType, CapManifestEntry, ParsedBlobV2};
+use crate::program::{self, CapEntryType, CapManifestEntry, ParsedBlob};
 use crate::vm_pool::{CallFrame, MAX_CODE_CAPS, MAX_VMS, VmInstance, VmState};
 
 /// ecalli immediate ranges.
@@ -97,7 +97,7 @@ impl InvocationKernel {
         gas: u64,
         backend: crate::backend::PvmBackend,
     ) -> Result<Self, KernelError> {
-        let parsed = program_v2::parse_v2_blob(blob).ok_or(KernelError::InvalidBlob)?;
+        let parsed = program::parse_blob(blob).ok_or(KernelError::InvalidBlob)?;
 
         let backing =
             BackingStore::new(parsed.header.memory_pages).ok_or(KernelError::MemoryError)?;
@@ -210,11 +210,11 @@ impl InvocationKernel {
     fn create_cap_from_manifest(
         &mut self,
         entry: &CapManifestEntry,
-        parsed: &ParsedBlobV2<'_>,
+        parsed: &ParsedBlob<'_>,
     ) -> Result<Cap, KernelError> {
         match entry.cap_type {
             CapEntryType::Code => {
-                let code_data = program_v2::cap_data(entry, parsed.data_section);
+                let code_data = program::cap_data(entry, parsed.data_section);
                 let id = self.next_code_id;
                 self.next_code_id += 1;
                 if self.code_caps.len() >= MAX_CODE_CAPS {
@@ -223,7 +223,7 @@ impl InvocationKernel {
 
                 // Parse the code sub-blob (jump_table + code + bitmask)
                 let code_blob =
-                    program_v2::parse_code_blob(code_data).ok_or(KernelError::InvalidBlob)?;
+                    program::parse_code_blob(code_data).ok_or(KernelError::InvalidBlob)?;
 
                 // Compile via selected backend (interpreter or recompiler)
                 let compiled = crate::backend::compile(
@@ -260,7 +260,7 @@ impl InvocationKernel {
 
                 // Write initial data if present
                 if entry.data_len > 0 {
-                    let data = program_v2::cap_data(entry, parsed.data_section);
+                    let data = program::cap_data(entry, parsed.data_section);
                     if !self.backing.write_init_data(backing_offset, data) {
                         return Err(KernelError::MemoryError);
                     }
@@ -1352,7 +1352,7 @@ impl core::fmt::Display for KernelError {
 mod tests {
     use super::*;
     use crate::cap::ProtocolCap;
-    use crate::program_v2::{CapEntryType, CapManifestEntry, build_v2_blob};
+    use crate::program::{CapEntryType, CapManifestEntry, build_blob};
 
     /// Build a minimal code sub-blob (code_header + jump_table + code + bitmask).
     /// Contains a single `trap` instruction (opcode 0).
@@ -1397,7 +1397,7 @@ mod tests {
                 data_len: 0,
             },
         ];
-        build_v2_blob(memory_pages, 64, &caps, &code_data)
+        build_blob(memory_pages, 64, &caps, &code_data)
     }
 
     #[test]

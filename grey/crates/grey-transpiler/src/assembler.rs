@@ -343,7 +343,7 @@ impl Assembler {
 
     /// Finalize and produce the standard program blob.
     pub fn build(&self) -> Vec<u8> {
-        emitter::build_v2_service_program(
+        emitter::build_service_program(
             &self.code,
             &self.bitmask,
             &self.jump_table,
@@ -697,7 +697,7 @@ pub fn build_sample_service_precise() -> Vec<u8> {
     let jump_table = vec![0u32, 5, refine_offset];
 
     // Build a v2 service blob
-    emitter::build_v2_service_program(
+    emitter::build_service_program(
         &code,
         &bitmask,
         &jump_table,
