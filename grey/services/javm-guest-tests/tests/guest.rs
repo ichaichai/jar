@@ -5,8 +5,14 @@
 
 include!(concat!(env!("OUT_DIR"), "/guest_blob.rs"));
 
-/// Run the kernel with a specific backend, return output bytes.
-fn run_kernel(backend: javm::PvmBackend, input: &[u8], test_id: u32) -> Vec<u8> {
+/// Result from running a guest test on a kernel backend.
+struct KernelRun {
+    output: Vec<u8>,
+    gas_used: u64,
+}
+
+/// Run the kernel with a specific backend, return output bytes and gas consumed.
+fn run_kernel(backend: javm::PvmBackend, input: &[u8], test_id: u32) -> KernelRun {
     use javm::kernel::{InvocationKernel, KernelResult};
     use javm::vm_pool::VmState;
 
@@ -19,6 +25,7 @@ fn run_kernel(backend: javm::PvmBackend, input: &[u8], test_id: u32) -> Vec<u8> 
     let packed = kernel.vms[kernel.active_vm as usize].registers[7];
     let ptr = (packed >> 32) as u32;
     let len = (packed & 0xFFFFFFFF) as u32;
+    let gas_used = gas - kernel.gas();
 
     let label = match backend {
         javm::PvmBackend::ForceInterpreter => "interpreter",
@@ -38,27 +45,35 @@ fn run_kernel(backend: javm::PvmBackend, input: &[u8], test_id: u32) -> Vec<u8> 
         }
     }
 
-    kernel
-        .read_data_cap_window(ptr, len)
-        .unwrap_or_else(|| panic!("test {test_id}: {label} read failed at ptr=0x{ptr:X} len={len}"))
+    let output = kernel.read_data_cap_window(ptr, len).unwrap_or_else(|| {
+        panic!("test {test_id}: {label} read failed at ptr=0x{ptr:X} len={len}")
+    });
+
+    KernelRun { output, gas_used }
 }
 
-/// Run a guest test on native host, interpreter, and recompiler. Assert all outputs match.
+/// Run a guest test on native host, interpreter, and recompiler.
+/// Assert all outputs match AND interpreter/recompiler consume identical gas.
 fn run_test(test_id: u32, args: &[u8]) {
     let mut input = test_id.to_le_bytes().to_vec();
     input.extend_from_slice(args);
 
     let host_output = javm_guest_tests::dispatch_to_vec(&input);
-    let interp_output = run_kernel(javm::PvmBackend::ForceInterpreter, &input, test_id);
-    let recomp_output = run_kernel(javm::PvmBackend::ForceRecompiler, &input, test_id);
+    let interp = run_kernel(javm::PvmBackend::ForceInterpreter, &input, test_id);
+    let recomp = run_kernel(javm::PvmBackend::ForceRecompiler, &input, test_id);
 
     assert_eq!(
-        host_output, interp_output,
-        "test {test_id}: host vs interpreter mismatch"
+        host_output, interp.output,
+        "test {test_id}: host vs interpreter output mismatch"
     );
     assert_eq!(
-        host_output, recomp_output,
-        "test {test_id}: host vs recompiler mismatch"
+        host_output, recomp.output,
+        "test {test_id}: host vs recompiler output mismatch"
+    );
+    assert_eq!(
+        interp.gas_used, recomp.gas_used,
+        "test {test_id}: gas mismatch: interpreter={} recompiler={}",
+        interp.gas_used, recomp.gas_used
     );
 }
 
