@@ -370,6 +370,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   let gas' := if gas.toNat >= hostCallGas then gas - UInt64.ofNat hostCallGas else 0
   let (result, ctx') : PVM.InvocationResult × AccContext :=
   match callNum with
+  -- ===== REPLY (255): program termination via ecalli(0xFF) =====
+  | 255 =>
+    ({ exitReason := .halt, exitValue := if 7 < regs.size then regs[7]! else 0,
+       gas := Int64.ofUInt64 gas', registers := regs, memory := mem }, ctx)
+
   -- ===== gas (0): Return remaining gas in reg[7] =====
   | 0 =>
     let regs' := setR7 regs gas'

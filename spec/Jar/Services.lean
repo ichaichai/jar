@@ -98,6 +98,10 @@ private def handleRefineHostCall
     let gas' := gas - hostGasCost
     let regs' := regs -- will be modified per host call
     match callId with
+    | 255 =>
+      -- REPLY: program termination via ecalli(0xFF)
+      ({ exitReason := .halt, exitValue := if 7 < regs.size then regs[7]! else 0,
+         gas := Int64.ofUInt64 gas', registers := regs, memory := mem }, ctx)
     | 0 =>
       -- gas(): return remaining gas in φ[7]
       let regs' := regs.set! 7 gas'
