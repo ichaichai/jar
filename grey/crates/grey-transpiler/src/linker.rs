@@ -296,8 +296,9 @@ pub fn link_elf_v2(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
 
 /// Transpile an rv64em ELF into a JAR v2 service PVM blob (refine + accumulate).
 ///
-/// Layout: dispatch_header(10) + refine_sp_preamble(10) + acc_sp_preamble(10) + translated_code
-/// Dispatch header jumps to the SP preambles, which fall through to the real code.
+/// Layout: SP_preamble(10) + dispatch_header(10) + translated_code
+/// SP preamble sets SP for all entry points (shared stack). Dispatch header
+/// at bytes 10-19 jumps to refine/accumulate code (same as v1 but shifted by 10).
 pub fn link_elf_service_v2(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
     let elf = parse_linked_elf(elf_data)?;
     let stack_pages = elf.stack_size / 4096;
@@ -317,76 +318,19 @@ pub fn link_elf_service_v2(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
     let mut ctx = TranslationContext::new(elf.is_64bit);
     ctx.code_ranges = elf.code_ranges.clone();
 
-    // Reserve: dispatch_header(10) + refine_sp(10) + accumulate_sp(10) = 30 bytes
-    let header_size = 30u32;
-    for _ in 0..header_size {
+    // SP preamble at bytes 0-9: load_imm_64 SP, stack_top
+    emit_sp_preamble(&mut ctx.code, &mut ctx.bitmask, stack_top);
+
+    // Dispatch header at bytes 10-19 (same structure as v1 but shifted)
+    let dispatch_start = ctx.code.len(); // = 10
+    for _ in 0..10 {
         ctx.code.push(0);
         ctx.bitmask.push(0);
     }
-    // Dispatch header at bytes 0-9
-    ctx.bitmask[0] = 1;  // jump to refine_sp at byte 10
-    ctx.bitmask[5] = 1;  // jump to accumulate_sp at byte 20
-    // SP preamble instruction starts
-    ctx.bitmask[10] = 1; // refine SP preamble
-    ctx.bitmask[20] = 1; // accumulate SP preamble
+    ctx.bitmask[dispatch_start] = 1;     // jump at byte 10
+    ctx.bitmask[dispatch_start + 5] = 1; // jump at byte 15
 
-    // Write SP preambles (load_imm_64 SP, stack_top)
-    // Refine SP preamble at bytes 10-19
-    ctx.code[10] = 20; // load_imm_64
-    ctx.code[11] = 1;  // rD = SP (register 1)
-    ctx.code[12..20].copy_from_slice(&stack_top.to_le_bytes());
-    // Accumulate SP preamble at bytes 20-29
-    ctx.code[20] = 20; // load_imm_64
-    ctx.code[21] = 1;  // rD = SP (register 1)
-    ctx.code[22..30].copy_from_slice(&stack_top.to_le_bytes());
-
-    // Dispatch header jumps: byte 0 → byte 10 (refine_sp), byte 5 → byte 20 (acc_sp)
-    ctx.code[0] = 40; // jump
-    ctx.code[1..5].copy_from_slice(&10i32.to_le_bytes()); // jump to byte 10
-    ctx.code[5] = 40; // jump
-    ctx.code[6..10].copy_from_slice(&15i32.to_le_bytes()); // jump to byte 20 (relative from byte 5)
-
-    // Layout:
-    //   [0..4]   jump → refine trampoline (byte 10)
-    //   [5..9]   jump → accumulate trampoline (byte 25)
-    //   [10..19] load_imm_64 SP, stack_top (refine SP preamble)
-    //   [20..24] jump → refine_code
-    //   [25..34] load_imm_64 SP, stack_top (accumulate SP preamble)
-    //   [35..39] jump → accumulate_code
-    //   [40+]    translated code
-
-    let trampoline_size = 40u32;
-    for _ in 0..trampoline_size {
-        ctx.code.push(0);
-        ctx.bitmask.push(0);
-    }
-
-    // Instruction starts
-    ctx.bitmask[0] = 1;  // dispatch jump to refine
-    ctx.bitmask[5] = 1;  // dispatch jump to accumulate
-    ctx.bitmask[10] = 1; // refine SP preamble
-    ctx.bitmask[20] = 1; // refine jump to code
-    ctx.bitmask[25] = 1; // accumulate SP preamble
-    ctx.bitmask[35] = 1; // accumulate jump to code
-
-    // Dispatch: jump to trampolines
-    ctx.code[0] = 40; // jump to byte 10
-    ctx.code[1..5].copy_from_slice(&10i32.to_le_bytes());
-    ctx.code[5] = 40; // jump to byte 25 (relative from 5 = offset 20)
-    ctx.code[6..10].copy_from_slice(&20i32.to_le_bytes());
-
-    // Refine trampoline: load_imm_64 SP + jump to refine_code
-    ctx.code[10] = 20; ctx.code[11] = 1;
-    ctx.code[12..20].copy_from_slice(&stack_top.to_le_bytes());
-    ctx.code[20] = 40; // jump placeholder (patched below)
-
-    // Accumulate trampoline: load_imm_64 SP + jump to accumulate_code
-    ctx.code[25] = 20; ctx.code[26] = 1;
-    ctx.code[27..35].copy_from_slice(&stack_top.to_le_bytes());
-    ctx.code[35] = 40; // jump placeholder (patched below)
-
-    // Re-translate with offset
-    ctx.code_ranges = elf.code_ranges.clone();
+    // Translate code (appended starting at byte 20)
     for (_file_off, vaddr, data) in &elf.code_sections {
         translate_section_linked(&mut ctx, data, *vaddr, &elf)?;
     }
@@ -414,11 +358,14 @@ pub fn link_elf_service_v2(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
             ))
         })?;
 
-    // Patch jumps from trampolines to real code
-    let refine_rel = (refine_pvm as i32) - 20; // relative from byte 20
-    ctx.code[21..25].copy_from_slice(&refine_rel.to_le_bytes());
-    let acc_rel = (accumulate_pvm as i32) - 35; // relative from byte 35
-    ctx.code[36..40].copy_from_slice(&acc_rel.to_le_bytes());
+    // Patch dispatch header jumps
+    ctx.code[dispatch_start] = 40; // jump to refine
+    let refine_rel = (refine_pvm as i32) - dispatch_start as i32;
+    ctx.code[dispatch_start + 1..dispatch_start + 5].copy_from_slice(&refine_rel.to_le_bytes());
+
+    ctx.code[dispatch_start + 5] = 40; // jump to accumulate
+    let acc_rel = (accumulate_pvm as i32) - (dispatch_start as i32 + 5);
+    ctx.code[dispatch_start + 6..dispatch_start + 10].copy_from_slice(&acc_rel.to_le_bytes());
 
     // Mark entry points as instruction starts
     if (refine_pvm as usize) < ctx.bitmask.len() {
