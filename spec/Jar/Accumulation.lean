@@ -348,11 +348,14 @@ private def encodeAccountInfo (acct : ServiceAccount) : ByteArray :=
 def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
     (mem : PVM.Memory) (ctx : AccContext) : PVM.InvocationResult × AccContext :=
   let rawCallNum := callId.toNat
-  -- v0.8.0 hostcall numbering: grow_heap inserted at 1, everything else shifts +1.
-  -- Translate back to v0.7.2 numbering for the existing match, except grow_heap (callNum = 1
-  -- in v0.8.0) which is handled separately before the match.
-  let isGrowHeap := JamConfig.hostcallVersion == 1 && rawCallNum == 1
-  let callNum := if JamConfig.hostcallVersion == 1 && rawCallNum > 1
+  -- v2 capability model: ecalli immediates map directly to protocol cap slots.
+  -- No grow_heap shift. callNum = rawCallNum.
+  -- For v0.8.0 (hostcallVersion == 1): grow_heap inserted at 1, everything else shifts +1.
+  let isGrowHeap := JamConfig.capabilityModel != .v2
+    && JamConfig.hostcallVersion == 1 && rawCallNum == 1
+  let callNum := if JamConfig.capabilityModel == .v2
+    then rawCallNum  -- v2: direct mapping, no shift
+    else if JamConfig.hostcallVersion == 1 && rawCallNum > 1
     then rawCallNum - 1
     else rawCallNum
   let inputLog := s!"hc({rawCallNum}) r7={getReg regs 7} r8={getReg regs 8} r9={getReg regs 9} r10={getReg regs 10} r11={getReg regs 11} r12={getReg regs 12}"

@@ -86,6 +86,16 @@ structure RefineContext where
 private def handleRefineHostCall
     (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers) (mem : PVM.Memory)
     (ctx : RefineContext) : PVM.InvocationResult × RefineContext :=
+  -- v2 capability model: ecalli immediates are protocol cap slots (GP numbers).
+  -- Map v2 slot numbers to the v0.7.2 callId numbers used in the match below.
+  let callId := if JamConfig.capabilityModel == .v2
+    then match callId with
+      | 0 => 0   -- GAS (slot 0) → callId 0
+      | 1 => 2   -- FETCH (slot 1) → callId 2
+      | 6 => 3   -- HISTORICAL (slot 6) → callId 3
+      | 7 => 4   -- EXPORT (slot 7) → callId 4
+      | _ => callId
+    else callId
   -- Host call gas cost: g=10
   let hostGasCost : Gas := 10
   if gas < hostGasCost then
