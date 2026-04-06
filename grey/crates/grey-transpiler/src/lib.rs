@@ -126,10 +126,15 @@ pub fn peephole_fuse_load_imm_alu(
     let imm_opcode = |three_reg_op: u8| -> Option<u8> {
         match three_reg_op {
             200 => Some(149), // add_64 → add_imm_64
+            202 => Some(150), // mul_64 → mul_imm_64
+            207 => Some(151), // shl_64 → shl_imm_64
+            208 => Some(152), // shr_64 → shr_imm_64
+            209 => Some(153), // sar_64 → sar_imm_64
             210 => Some(132), // and → and_imm
             211 => Some(133), // xor → xor_imm
             212 => Some(134), // or → or_imm
-            202 => Some(150), // mul_64 → mul_imm_64
+            216 => Some(136), // set_lt_u → set_lt_u_imm
+            217 => Some(137), // set_lt_s → set_lt_s_imm
             _ => None,
         }
     };
