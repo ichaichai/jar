@@ -33,12 +33,12 @@ pub fn run_kernel_with_backend(blob: &[u8], gas: u64, backend: javm::PvmBackend)
             javm::kernel::KernelResult::Halt(v) => return (v, gas - kernel.gas()),
             javm::kernel::KernelResult::Panic => {
                 let vm = &kernel.vms[kernel.active_vm as usize];
-                panic!("kernel panicked at PC={} gas={}", vm.pc, vm.gas);
+                panic!("kernel panicked at PC={} gas={}", vm.pc, vm.gas());
             }
             javm::kernel::KernelResult::OutOfGas => panic!("kernel out of gas"),
             javm::kernel::KernelResult::PageFault(a) => {
                 let vm = &kernel.vms[kernel.active_vm as usize];
-                panic!("kernel page fault at {a:#x} PC={} gas={}", vm.pc, vm.gas);
+                panic!("kernel page fault at {a:#x} PC={} gas={}", vm.pc, vm.gas());
             }
             javm::kernel::KernelResult::ProtocolCall { .. } => continue,
         }

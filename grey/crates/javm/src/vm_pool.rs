@@ -29,8 +29,9 @@ pub struct VmInstance {
     pub state: VmState,
     /// Index of the CODE cap this VM runs (in the kernel's code_caps list).
     pub code_cap_id: u16,
-    /// PVM registers (13 × 64-bit).
-    pub registers: [u64; PVM_REGISTER_COUNT],
+    /// PVM registers (13 × 64-bit). Private — use reg()/set_reg() for cold access,
+    /// or kernel's active_reg()/set_active_reg() for the active VM (routes via live_ctx).
+    pub(crate) registers: [u64; PVM_REGISTER_COUNT],
     /// Program counter.
     pub pc: u32,
     /// Per-VM capability table.
@@ -39,8 +40,9 @@ pub struct VmInstance {
     pub caller: Option<u16>,
     /// Jump table entry index (used on first CALL).
     pub entry_index: u32,
-    /// Gas remaining for this VM.
-    pub gas: u64,
+    /// Gas remaining for this VM. Private — use gas()/set_gas() for cold access,
+    /// or kernel's gas() for the active VM.
+    pub(crate) gas: u64,
 }
 
 impl VmInstance {
@@ -57,6 +59,31 @@ impl VmInstance {
             entry_index,
             gas,
         }
+    }
+
+    /// Read a register (cold path — for non-active or suspended VMs).
+    pub fn reg(&self, idx: usize) -> u64 {
+        self.registers[idx]
+    }
+
+    /// Write a register (cold path — for non-active or suspended VMs).
+    pub fn set_reg(&mut self, idx: usize, val: u64) {
+        self.registers[idx] = val;
+    }
+
+    /// Get all registers (cold snapshot).
+    pub fn regs(&self) -> &[u64; PVM_REGISTER_COUNT] {
+        &self.registers
+    }
+
+    /// Get gas (cold path).
+    pub fn gas(&self) -> u64 {
+        self.gas
+    }
+
+    /// Set gas (cold path).
+    pub fn set_gas(&mut self, gas: u64) {
+        self.gas = gas;
     }
 
     /// Transition to a new state. Returns error if the transition is invalid.

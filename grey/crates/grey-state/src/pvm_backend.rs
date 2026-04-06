@@ -61,16 +61,13 @@ impl PvmInstance {
     }
 
     pub fn gas(&self) -> Gas {
-        self.kernel
-            .vms
-            .get(self.kernel.active_vm as usize)
-            .map(|v| v.gas)
-            .unwrap_or(0)
+        self.kernel.gas()
     }
 
     pub fn set_gas(&mut self, gas: Gas) {
+        // Cold path — only used before/after execution, not during live_ctx
         if let Some(vm) = self.kernel.vms.get_mut(self.kernel.active_vm as usize) {
-            vm.gas = gas;
+            vm.set_gas(gas);
         }
     }
 
@@ -78,13 +75,13 @@ impl PvmInstance {
         self.kernel
             .vms
             .get(self.kernel.active_vm as usize)
-            .map(|v| v.registers[index])
+            .map(|v| v.reg(index))
             .unwrap_or(0)
     }
 
     pub fn set_reg(&mut self, index: usize, value: u64) {
         if let Some(vm) = self.kernel.vms.get_mut(self.kernel.active_vm as usize) {
-            vm.registers[index] = value;
+            vm.set_reg(index, value);
         }
     }
 }
