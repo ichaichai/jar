@@ -471,14 +471,12 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                             ) {
                                 Ok(report_hash) => {
                                     // Add a second guarantor co-signature (minimum 2 required)
-                                    let co_signer_idx = if config.validator_index == 0 { 1u16 } else { 0 };
-                                    let co_secrets = &all_secrets[co_signer_idx as usize];
-                                    let co_sig = crate::guarantor::sign_guarantee(&report_hash, co_secrets);
-                                    // Only co-sign the newly created guarantee (the last one),
-                                    // not all pending guarantees — they have different report hashes.
-                                    if let Some(g) = guarantor_state.pending_guarantees.last_mut() {
-                                        g.credentials.push((co_signer_idx, co_sig));
-                                    }
+                                    crate::guarantor::cosign_last_guarantee(
+                                        &mut guarantor_state,
+                                        &report_hash,
+                                        config.validator_index,
+                                        &all_secrets,
+                                    );
 
                                     tracing::info!(
                                         "Validator {} created WP guarantee (2 signers), report_hash=0x{}",
@@ -1308,14 +1306,12 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     ) {
                                         Ok(report_hash) => {
                                             // Co-sign with a second validator (testnet only)
-                                            let co_idx = if config.validator_index == 0 { 1u16 } else { 0 };
-                                            let co_secrets = &all_secrets[co_idx as usize];
-                                            let co_sig = crate::guarantor::sign_guarantee(&report_hash, co_secrets);
-                                            // Only co-sign the newly created guarantee (the last one),
-                                            // not all pending guarantees — they have different report hashes.
-                                            if let Some(g) = guarantor_state.pending_guarantees.last_mut() {
-                                                g.credentials.push((co_idx, co_sig));
-                                            }
+                                            crate::guarantor::cosign_last_guarantee(
+                                                &mut guarantor_state,
+                                                &report_hash,
+                                                config.validator_index,
+                                                &all_secrets,
+                                            );
                                             // Broadcast only the new guarantee to peers
                                             if let Some(g) = guarantor_state.pending_guarantees.last() {
                                                 let g_data = guarantor::encode_guarantee(g);

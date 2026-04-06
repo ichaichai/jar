@@ -30,6 +30,25 @@ pub fn sign_guarantee(report_hash: &Hash, secrets: &ValidatorSecrets) -> Ed25519
     secrets.ed25519.sign(&message)
 }
 
+/// Add a co-signature to the most recently created guarantee.
+///
+/// In testnet mode, a second validator co-signs every guarantee to meet
+/// the minimum-2 guarantor requirement. This helper picks the co-signer
+/// (index 1 if we're 0, else 0), signs, and appends the credential.
+pub fn cosign_last_guarantee(
+    guarantor_state: &mut GuarantorState,
+    report_hash: &Hash,
+    validator_index: u16,
+    all_secrets: &[ValidatorSecrets],
+) {
+    let co_idx = if validator_index == 0 { 1u16 } else { 0 };
+    let co_secrets = &all_secrets[co_idx as usize];
+    let co_sig = sign_guarantee(report_hash, co_secrets);
+    if let Some(g) = guarantor_state.pending_guarantees.last_mut() {
+        g.credentials.push((co_idx, co_sig));
+    }
+}
+
 /// Tracks pending guarantees and chunks for availability.
 #[derive(Default)]
 pub struct GuarantorState {
