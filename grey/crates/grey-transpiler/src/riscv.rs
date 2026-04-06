@@ -82,8 +82,11 @@ pub struct TranslationContext {
     /// Enables fusion with a subsequent ADD/AND/OR/XOR/load/store into the
     /// immediate form, eliminating the load_imm instruction entirely.
     pub(crate) pending_load_imm: Option<(u8, i64, usize)>,
-    /// Last immediate loaded into t0 (x5) — used for ecall → ecalli translation.
+    /// Last immediate loaded into t0 (x5) — used for ecalli cap slot.
     last_t0_imm: Option<i32>,
+    /// CSR marker for ecall/ecalli distinction.
+    /// 0x800 = next ecall → PVM ecall, 0x801 = next ecall → PVM ecalli.
+    ecall_marker: Option<u32>,
     /// RISC-V code address ranges (lo, hi) — used to detect function pointers
     /// loaded via auipc+addi that need jump table entries.
     pub code_ranges: Vec<(u64, u64)>,
@@ -104,6 +107,7 @@ impl TranslationContext {
             pending_lui: None,
             pending_load_imm: None,
             last_t0_imm: None,
+            ecall_marker: None,
             code_ranges: Vec::new(),
         }
     }
@@ -260,16 +264,43 @@ impl TranslationContext {
                         let csr = (inst >> 20) & 0xFFF;
                         match csr {
                             0 => {
-                                // ECALL → ecalli N, where N is the last value loaded into t0
-                                let id = self.last_t0_imm.unwrap_or(0) as u32;
-                                self.emit_ecalli(id);
-                                self.last_t0_imm = None;
+                                // ECALL — dispatch based on CSR marker
+                                match self.ecall_marker.take() {
+                                    Some(0x800) => {
+                                        // CSR 0x800 → PVM ecall (management ops)
+                                        self.emit_ecall();
+                                    }
+                                    Some(0x801) => {
+                                        // CSR 0x801 → PVM ecalli (CALL a cap)
+                                        let id = self.last_t0_imm.unwrap_or(0) as u32;
+                                        self.emit_ecalli(id);
+                                        self.last_t0_imm = None;
+                                    }
+                                    _ => {
+                                        // No marker (legacy) — treat as ecalli for backward compat
+                                        let id = self.last_t0_imm.unwrap_or(0) as u32;
+                                        self.emit_ecalli(id);
+                                        self.last_t0_imm = None;
+                                    }
+                                }
                             }
                             1 => self.emit_inst(0), // EBREAK → trap
                             _ => self.emit_inst(0), // unimp/unknown CSR → trap
                         }
                     }
-                    _ => self.emit_inst(0), // CSR ops → trap
+                    1 => {
+                        // CSRRW: check for custom markers 0x800, 0x801
+                        let csr = (inst >> 20) & 0xFFF;
+                        match csr {
+                            0x800 | 0x801 => {
+                                // Custom CSR marker for ecall/ecalli distinction
+                                self.ecall_marker = Some(csr);
+                                // Don't emit any PVM instruction — marker consumed on next ecall
+                            }
+                            _ => self.emit_inst(0), // unknown CSR → trap
+                        }
+                    }
+                    _ => self.emit_inst(0), // other CSR ops → trap
                 }
             }
             0x0F => {
@@ -1767,6 +1798,12 @@ impl TranslationContext {
     pub(crate) fn emit_ecalli(&mut self, id: u32) {
         self.emit_inst(10);
         self.emit_var_imm(id as i32);
+    }
+
+    /// Emit PVM ecall (opcode 3, NoArgs). Management ops + dynamic CALL.
+    /// φ[11]=op, φ[12]=subject|object — all operands in registers.
+    pub(crate) fn emit_ecall(&mut self) {
+        self.emit_inst(3);
     }
 
     /// Emit a OneRegImmOffset instruction (used by branch_*_imm opcodes).

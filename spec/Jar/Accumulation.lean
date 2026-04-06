@@ -22,11 +22,12 @@ References: `graypaper/text/accumulation.tex`, `graypaper/text/pvm_invocations.t
 - §12.3: accone — single-service accumulation
 - §12.4: accpar — parallelized accumulation
 - §12.5: accseq — sequential orchestration
-- Host calls: gas(0), fetch(1), lookup(2), read(3), write(4), info(5),
-  historical_lookup(6), export(7), machine(8), peek(9), poke(10),
-  pages(11), invoke(12), bless(14), assign(15), designate(16),
-  checkpoint(17), new(18), upgrade(19), transfer(20), eject(21),
-  query(22), solicit(23), forget(24), yield(25), provide(26), set_quota(27)
+- Slot 0 = IPC (REPLY). Protocol caps at slots 1-28:
+  gas(1), fetch(2), lookup(3), read(4), write(5), info(6),
+  historical_lookup(7), export(8), machine(9), 10-14 reserved,
+  bless(15), assign(16), designate(17), checkpoint(18), new(19),
+  upgrade(20), transfer(21), eject(22), query(23), solicit(24),
+  forget(25), yield(26), provide(27), set_quota(28)
 -/
 
 namespace Jar.Accumulation
@@ -365,20 +366,20 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   let gas' := if gas.toNat >= hostCallGas then gas - UInt64.ofNat hostCallGas else 0
   let (result, ctx') : PVM.InvocationResult × AccContext :=
   match callNum with
-  -- ===== REPLY (255): program termination via ecalli(0xFF) =====
-  | 255 =>
+  -- ===== REPLY (0): program termination via ecalli(0x00) =====
+  | 0 =>
     ({ exitReason := .halt, exitValue := if 7 < regs.size then regs[7]! else 0,
        gas := Int64.ofUInt64 gas', registers := regs, memory := mem }, ctx)
 
-  -- ===== gas (0): Return remaining gas in reg[7] =====
-  | 0 =>
+  -- ===== gas (1): Return remaining gas in reg[7] =====
+  | 1 =>
     let regs' := setR7 regs gas'
     (mkResult regs' mem gas', ctx)
 
-  -- ===== fetch (1): ΩY — read protocol/context data =====
+  -- ===== fetch (2): ΩY — read protocol/context data =====
   -- φ[7]=buf_ptr, φ[8]=offset, φ[9]=max_len, φ[10]=mode, φ[11]=sub1, φ[12]=sub2
   -- Returns: φ'[7] = |v| (total data length) or NONE (u64::MAX)
-  | 1 =>
+  | 2 =>
     let bufPtr := getReg regs 7
     let offset := (getReg regs 8).toNat
     let maxLen := (getReg regs 9).toNat
@@ -415,11 +416,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
         let regs' := setR7 regs (UInt64.ofNat dataLen)
         (mkResult regs' mem gas', ctx)
 
-  -- ===== lookup (2): Preimage lookup by hash =====
+  -- ===== lookup (3): Preimage lookup by hash =====
   -- φ[7]=service_id (u64::MAX=self), φ[8]=hash_ptr, φ[9]=out_ptr,
   -- φ[10]=offset, φ[11]=max_len
   -- Returns: φ'[7] = total preimage length or NONE
-  | 2 =>
+  | 3 =>
     let rawSid := getReg regs 7
     let hashPtr := getReg regs 8
     let outPtr := getReg regs 9
@@ -473,11 +474,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== read (3): Read from service storage =====
+  -- ===== read (4): Read from service storage =====
   -- φ[7]=service_id (u64::MAX=self), φ[8]=key_ptr, φ[9]=key_len,
   -- φ[10]=out_ptr, φ[11]=offset, φ[12]=max_len
   -- Returns: φ'[7] = total value length or NONE
-  | 3 =>
+  | 4 =>
     let rawSid := getReg regs 7
     let keyPtr := getReg regs 8
     let keyLen := (getReg regs 9).toNat
@@ -530,10 +531,10 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on key read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== write (4): Write to own storage =====
+  -- ===== write (5): Write to own storage =====
   -- φ[7]=key_ptr, φ[8]=key_len, φ[9]=val_ptr, φ[10]=val_len
   -- Returns: φ'[7] = old value length (or NONE if key didn't exist)
-  | 4 =>
+  | 5 =>
     let keyPtr := getReg regs 7
     let keyLen := (getReg regs 8).toNat
     let valPtr := getReg regs 9
@@ -604,10 +605,10 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on key read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== info (5): Service account information =====
+  -- ===== info (6): Service account information =====
   -- φ[7]=service_id (2^64-1=self), φ[8]=out_ptr, φ[9]=offset, φ[10]=max_len
   -- Returns: φ'[7] = |v| (96) or NONE
-  | 5 =>
+  | 6 =>
     let rawSid := getReg regs 7
     let outPtr := getReg regs 8
     let offset := (getReg regs 9).toNat
@@ -647,12 +648,12 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   -- expunge) are refine-only (GP eq:refinemutator). They are NOT available in the
   -- accumulation context (GP eq:accinvocation) and fall through to the default WHAT.
 
-  -- ===== bless (14): Set privileged services (GP ΩB) =====
+  -- ===== bless (15): Set privileged services (GP ΩB) =====
   -- φ[7] = m (manager), φ[8] = a (assigners ptr, C × 4 bytes),
   -- φ[9] = v (designator), φ[10] = r (registrar),
   -- φ[11] = o (always-acc ptr), φ[12] = n (always-acc count)
   -- GP order: read memory FIRST, then check validity.
-  | 14 =>
+  | 15 =>
     let newManager := getReg regs 7
     let assignPtr := getReg regs 8
     let newDesignator := getReg regs 9
@@ -725,12 +726,12 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       | _ => (mkPanic regs mem gas', ctx)
     | _ => (mkPanic regs mem gas', ctx)
 
-  -- ===== assign (15): Assign core authorization (GP ΩA) =====
+  -- ===== assign (16): Assign core authorization (GP ΩA) =====
   -- φ[7] = c (core index), φ[8] = o (pointer to Q auth hashes, 32 bytes each),
   -- φ[9] = a (new assigner service ID)
   -- GP order: read memory FIRST, then check privileges.
   -- Memory read failure → PANIC (⚡), takes priority over all other checks.
-  | 15 =>
+  | 16 =>
     let coreIdx := (getReg regs 7).toNat
     let hashPtr := getReg regs 8
     let newAssigner := getReg regs 9
@@ -774,11 +775,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on queue read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== designate (16): Set pending validator keys (GP ΩD) =====
+  -- ===== designate (17): Set pending validator keys (GP ΩD) =====
   -- φ[7] = o (pointer to validator keys, 336 bytes each)
   -- GP#514: φ[8] = z (validator count) when variableValidators
   -- GP order: read memory FIRST, then check privileges.
-  | 16 =>
+  | 17 =>
     let keysPtr := getReg regs 7
     let keySize := 336
     -- Determine validator count: fixed V or variable from reg[8]
@@ -818,16 +819,16 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on keys read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== checkpoint (17): Save accumulation checkpoint =====
+  -- ===== checkpoint (18): Save accumulation checkpoint =====
   -- GP: y ← x. Save the full regular context so it can be restored on panic/OOG.
-  | 17 =>
+  | 18 =>
     let ctx' := { ctx with checkpoint := some (ctx.state, ctx.opaqueData, ctx.yieldHash, ctx.transfers, ctx.provisions) }
     let regs' := setR7 regs gas'
     (mkResult regs' mem gas', ctx')
 
-  -- ===== new (18): Create new service account =====
+  -- ===== new (19): Create new service account =====
   -- φ[7]=o (code hash ptr), φ[8]=l (preimage length), φ[9]=g, φ[10]=m, φ[11]=f, φ[12]=i
-  | 18 =>
+  | 19 =>
     let codeHashPtr := getReg regs 7
     let preimLen := getReg regs 8
     let minAccGas := getReg regs 9
@@ -907,8 +908,8 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on code hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== upgrade (19): Upgrade service code hash =====
-  | 19 =>
+  -- ===== upgrade (20): Upgrade service code hash =====
+  | 20 =>
     -- reg[7] = new code hash pointer (32 bytes),
     -- reg[8] = new min_acc_gas, reg[9] = new min_on_transfer_gas
     let hashPtr := getReg regs 7
@@ -934,8 +935,8 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== transfer (20): Create deferred transfer =====
-  | 20 =>
+  -- ===== transfer (21): Create deferred transfer =====
+  | 21 =>
     -- reg[7] = destination, reg[8] = amount, reg[9] = gas limit,
     -- reg[10] = memo pointer (M_T bytes)
     let dest := UInt32.ofNat (getReg regs 7).toNat
@@ -990,10 +991,10 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on memo read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== eject (21): Remove service account (GP eq ΩJ) =====
+  -- ===== eject (22): Remove service account (GP eq ΩJ) =====
   -- φ[7] = d (target service), φ[8] = o (hash_ptr, 32 bytes)
   -- Full GP checks: code_hash, item count, preimage request, age
-  | 21 =>
+  | 22 =>
     let sid := UInt32.ofNat (getReg regs 7).toNat
     let hashPtr := getReg regs 8
     -- Read hash h from memory first (page fault → panic)
@@ -1073,7 +1074,7 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== query (22): Query preimage request status (GP ΩQ) =====
+  -- ===== query (23): Query preimage request status (GP ΩQ) =====
   -- φ[7] = o (hash pointer), φ[8] = z (blob length)
   -- Always queries self service. Returns packed timeslot info:
   --   0 timeslots: r7=0, r8=0
@@ -1081,7 +1082,7 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
   --   2 timeslots: r7 = 2 + (ts[0] << 32), r8 = ts[1]
   --   3+ timeslots: r7 = 3 + (ts[0] << 32), r8 = ts[1] + (ts[2] << 32)
   --   Not found: r7 = NONE, r8 = 0
-  | 22 =>
+  | 23 =>
     let hashPtr := getReg regs 7
     let blobLen := UInt32.ofNat (getReg regs 8).toNat
     match PVM.readByteArray mem hashPtr 32 with
@@ -1130,9 +1131,9 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== solicit (23): Request preimage (GP ΩS) =====
+  -- ===== solicit (24): Request preimage (GP ΩS) =====
   -- φ[7] = hash pointer, φ[8] = blob length
-  | 23 =>
+  | 24 =>
     let hashPtr := getReg regs 7
     let blobLen := UInt32.ofNat (getReg regs 8).toNat
     match PVM.readByteArray mem hashPtr 32 with
@@ -1185,9 +1186,9 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== forget (24): Forget preimage request (GP ΩF) =====
+  -- ===== forget (25): Forget preimage request (GP ΩF) =====
   -- φ[7] = hash pointer, φ[8] = blob length
-  | 24 =>
+  | 25 =>
     let hashPtr := getReg regs 7
     let blobLen := UInt32.ofNat (getReg regs 8).toNat
     match PVM.readByteArray mem hashPtr 32 with
@@ -1269,8 +1270,8 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== yield (25): Set accumulation output hash =====
-  | 25 =>
+  -- ===== yield (26): Set accumulation output hash =====
+  | 26 =>
     -- reg[7] = hash pointer (32 bytes in memory)
     let hashPtr := getReg regs 7
     match PVM.readByteArray mem hashPtr 32 with
@@ -1282,9 +1283,9 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on hash read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== provide (26): Provide preimage data (GP ΩP) =====
+  -- ===== provide (27): Provide preimage data (GP ΩP) =====
   -- φ[7] = s (target service, NONE = self), φ[8] = o (data ptr), φ[9] = z (data len)
-  | 26 =>
+  | 27 =>
     let rawTarget := getReg regs 7
     let targetSid := if rawTarget == PVM.RESULT_NONE then ctx.serviceId
       else if rawTarget.toNat <= UInt32.toNat (UInt32.ofNat (2^32 - 1)) then UInt32.ofNat rawTarget.toNat
@@ -1328,11 +1329,11 @@ def handleHostCall (callId : PVM.Reg) (gas : Gas) (regs : PVM.Registers)
       -- Page fault on data read → panic (GP: ⚡)
       (mkPanic regs mem gas', ctx)
 
-  -- ===== set_quota (27): Set storage quota (jar1 coinless, GP ΩQ) =====
+  -- ===== set_quota (28): Set storage quota (jar1 coinless, GP ΩQ) =====
   -- φ[7] = target service ID, φ[8] = max_items, φ[9] = max_bytes
   -- Only callable by the quota service (χ_Q). Only functional in jar1.
-  -- set_quota (27): Only available in jar1 (v2 capability model).
-  | 27 =>
+  -- set_quota (28): Only available in jar1 (v2 capability model).
+  | 28 =>
     if JamConfig.capabilityModel != .v2 then
       let regs' := setR7 regs PVM.RESULT_WHAT
       (mkResult regs' mem gas', ctx)
