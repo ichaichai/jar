@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{discover_test_stems, ed25519_from_hex, hash_from_hex, sig_from_hex};
+use common::{
+    discover_test_stems, ed25519_from_hex, hash_from_hex, parse_pending_reports, sig_from_hex,
+};
 use grey_state::disputes::process_disputes;
 use grey_types::Ed25519PublicKey;
 use grey_types::config::Config;
@@ -82,22 +84,6 @@ fn parse_disputes_extrinsic(json: &serde_json::Value) -> DisputesExtrinsic {
             })
             .collect(),
     }
-}
-
-fn parse_pending_reports(json: &serde_json::Value) -> Vec<Option<PendingReport>> {
-    json.as_array()
-        .unwrap()
-        .iter()
-        .map(|v| {
-            if v.is_null() {
-                None
-            } else {
-                // Simplified: we'd need to parse WorkReport for full fidelity
-                // For disputes tests, rho is usually all-null
-                None
-            }
-        })
-        .collect()
 }
 
 fn run_disputes_test(dir: &str, stem: &str) {
