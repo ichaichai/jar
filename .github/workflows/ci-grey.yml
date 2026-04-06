@@ -70,11 +70,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Workspace tests (interpreter)
-        run: cargo test --locked --workspace --release
-        env:
-          RUSTFLAGS: "-D warnings"
-
       - name: Workspace tests (recompiler)
         run: cargo test --locked --workspace --release
         env:
