@@ -34,6 +34,81 @@ pub fn link_elf(elf_data: &[u8]) -> Result<Vec<u8>, TranspileError> {
     linker::link_elf(elf_data)
 }
 
+/// Compute skip distance from bitmask: number of continuation bytes after position `pc`.
+fn skip_for(bitmask: &[u8], pc: usize) -> usize {
+    for j in 0..25 {
+        let idx = pc + 1 + j;
+        if idx >= bitmask.len() || bitmask[idx] == 1 {
+            return j;
+        }
+    }
+    0
+}
+
+/// Collect all branch targets and jump table entries from PVM code.
+///
+/// Returns a set of byte offsets that are branch/jump destinations.
+/// Used by peephole passes to avoid fusing across branch boundaries.
+fn collect_branch_targets(
+    code: &[u8],
+    bitmask: &[u8],
+    jump_table: &[u32],
+) -> std::collections::HashSet<usize> {
+    let len = code.len();
+    let mut targets = std::collections::HashSet::new();
+    let mut i = 0;
+    while i < len {
+        if i >= bitmask.len() || bitmask[i] != 1 {
+            i += 1;
+            continue;
+        }
+        let op = code[i];
+        let s = skip_for(bitmask, i);
+        // jump (40): 4-byte offset
+        if op == 40 && i + 5 <= len {
+            let off = i32::from_le_bytes([code[i + 1], code[i + 2], code[i + 3], code[i + 4]]);
+            let t = (i as i64 + off as i64) as usize;
+            if t < len {
+                targets.insert(t);
+            }
+        }
+        // branch_eq..branch_ge_u (170-175): 4-byte offset at +2
+        if (170..=175).contains(&op) && i + 6 <= len {
+            let off = i32::from_le_bytes([code[i + 2], code[i + 3], code[i + 4], code[i + 5]]);
+            let t = (i as i64 + off as i64) as usize;
+            if t < len {
+                targets.insert(t);
+            }
+        }
+        // branch_*_imm (80-90): variable-length offset
+        if (80..=90).contains(&op) && i + 2 <= len {
+            let reg_byte = code[i + 1];
+            let lx = ((reg_byte as usize / 16) % 8).min(4);
+            let ly = if s > lx + 1 { (s - lx - 1).min(4) } else { 0 };
+            let off_start = i + 2 + lx;
+            if ly > 0 && off_start + ly <= len {
+                let mut buf = [0u8; 4];
+                buf[..ly].copy_from_slice(&code[off_start..off_start + ly]);
+                if ly < 4 && buf[ly - 1] & 0x80 != 0 {
+                    for b in &mut buf[ly..4] {
+                        *b = 0xFF;
+                    }
+                }
+                let off = i32::from_le_bytes(buf);
+                let t = (i as i64 + off as i64) as usize;
+                if t < len {
+                    targets.insert(t);
+                }
+            }
+        }
+        i += 1 + s;
+    }
+    for &jt in jump_table {
+        targets.insert(jt as usize);
+    }
+    targets
+}
+
 /// Peephole pass: fuse `load_imm(51) + ThreeReg ALU` into `TwoRegOneImm` immediate form.
 ///
 /// Scans the PVM code for consecutive pairs where:
@@ -56,71 +131,7 @@ pub fn peephole_fuse_load_imm_alu(
         return 0;
     }
 
-    // Helper: compute skip from bitmask
-    let skip_for = |bm: &[u8], pc: usize| -> usize {
-        for j in 0..25 {
-            let idx = pc + 1 + j;
-            if idx >= bm.len() || bm[idx] == 1 {
-                return j;
-            }
-        }
-        0
-    };
-
-    // Collect all branch targets and jump table entries (cannot fuse these)
-    let mut targets = std::collections::HashSet::new();
-    {
-        let mut i = 0;
-        while i < len {
-            if i >= bitmask.len() || bitmask[i] != 1 {
-                i += 1;
-                continue;
-            }
-            let op = code[i];
-            let s = skip_for(bitmask, i);
-            // jump (40): 4-byte offset
-            if op == 40 && i + 5 <= len {
-                let off = i32::from_le_bytes([code[i + 1], code[i + 2], code[i + 3], code[i + 4]]);
-                let t = (i as i64 + off as i64) as usize;
-                if t < len {
-                    targets.insert(t);
-                }
-            }
-            // branch_eq..branch_ge_u (170-175): 4-byte offset at +2
-            if (170..=175).contains(&op) && i + 6 <= len {
-                let off = i32::from_le_bytes([code[i + 2], code[i + 3], code[i + 4], code[i + 5]]);
-                let t = (i as i64 + off as i64) as usize;
-                if t < len {
-                    targets.insert(t);
-                }
-            }
-            // branch_*_imm (81-90): variable-length offset
-            if (80..=90).contains(&op) && i + 2 <= len {
-                let reg_byte = code[i + 1];
-                let lx = ((reg_byte as usize / 16) % 8).min(4);
-                let ly = if s > lx + 1 { (s - lx - 1).min(4) } else { 0 };
-                let off_start = i + 2 + lx;
-                if ly > 0 && off_start + ly <= len {
-                    let mut buf = [0u8; 4];
-                    buf[..ly].copy_from_slice(&code[off_start..off_start + ly]);
-                    if ly < 4 && buf[ly - 1] & 0x80 != 0 {
-                        for b in &mut buf[ly..4] {
-                            *b = 0xFF;
-                        }
-                    }
-                    let off = i32::from_le_bytes(buf);
-                    let t = (i as i64 + off as i64) as usize;
-                    if t < len {
-                        targets.insert(t);
-                    }
-                }
-            }
-            i += 1 + s;
-        }
-    }
-    for &jt in jump_table {
-        targets.insert(jt as usize);
-    }
+    let targets = collect_branch_targets(code, bitmask, jump_table);
 
     // ThreeReg ALU → TwoRegOneImm immediate form mapping
     let imm_opcode = |three_reg_op: u8| -> Option<u8> {
@@ -249,67 +260,7 @@ pub fn peephole_eliminate_dead_load_imm(
         return 0;
     }
 
-    let skip_for = |bm: &[u8], pc: usize| -> usize {
-        for j in 0..25 {
-            let idx = pc + 1 + j;
-            if idx >= bm.len() || bm[idx] == 1 {
-                return j;
-            }
-        }
-        0
-    };
-
-    // Reuse the same target collection logic as the fusion pass
-    let mut targets = std::collections::HashSet::new();
-    {
-        let mut i = 0;
-        while i < len {
-            if i >= bitmask.len() || bitmask[i] != 1 {
-                i += 1;
-                continue;
-            }
-            let op = code[i];
-            let s = skip_for(bitmask, i);
-            if op == 40 && i + 5 <= len {
-                let off = i32::from_le_bytes([code[i + 1], code[i + 2], code[i + 3], code[i + 4]]);
-                let t = (i as i64 + off as i64) as usize;
-                if t < len {
-                    targets.insert(t);
-                }
-            }
-            if (170..=175).contains(&op) && i + 6 <= len {
-                let off = i32::from_le_bytes([code[i + 2], code[i + 3], code[i + 4], code[i + 5]]);
-                let t = (i as i64 + off as i64) as usize;
-                if t < len {
-                    targets.insert(t);
-                }
-            }
-            if (80..=90).contains(&op) && i + 2 <= len {
-                let reg_byte = code[i + 1];
-                let lx = ((reg_byte as usize / 16) % 8).min(4);
-                let ly = if s > lx + 1 { (s - lx - 1).min(4) } else { 0 };
-                let off_start = i + 2 + lx;
-                if ly > 0 && off_start + ly <= len {
-                    let mut buf = [0u8; 4];
-                    buf[..ly].copy_from_slice(&code[off_start..off_start + ly]);
-                    if ly < 4 && buf[ly - 1] & 0x80 != 0 {
-                        for b in &mut buf[ly..4] {
-                            *b = 0xFF;
-                        }
-                    }
-                    let off = i32::from_le_bytes(buf);
-                    let t = (i as i64 + off as i64) as usize;
-                    if t < len {
-                        targets.insert(t);
-                    }
-                }
-            }
-            i += 1 + s;
-        }
-    }
-    for &jt in jump_table {
-        targets.insert(jt as usize);
-    }
+    let targets = collect_branch_targets(code, bitmask, jump_table);
 
     /// Extract the destination register from a load_imm (51) or load_imm_64 (20).
     /// Returns None if the instruction doesn't write to a register or is malformed.
