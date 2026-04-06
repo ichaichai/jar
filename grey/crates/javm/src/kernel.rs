@@ -353,9 +353,10 @@ impl InvocationKernel {
             }
             Cap::Code(c) => {
                 let code_id = c.id;
+                let code_cnode_vm = self.active_vm as usize;
                 #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
                 self.flush_live_ctx();
-                self.handle_call_code(code_id)
+                self.handle_call_code(code_id, code_cnode_vm)
             }
             Cap::Handle(h) => {
                 let target_vm = h.vm_id;
@@ -414,38 +415,44 @@ impl InvocationKernel {
 
         let data_cap = DataCap::new(backing_offset, n_pages);
 
-        // Find a free slot for the new DATA cap
-        let vm = &mut self.vms[self.active_vm as usize];
-        let free_slot = match (64..255u8).find(|i| vm.cap_table.is_empty(*i)) {
-            Some(s) => s,
+        // Caller-picks: destination slot from φ[12] with indirection
+        let dst_ref = self.active_reg(12) as u32;
+        let (dst_vm, dst_slot) = match self.resolve_cap_ref(dst_ref) {
+            Some(r) => r,
             None => {
                 self.set_active_reg(7, RESULT_WHAT);
                 return DispatchResult::Continue;
             }
         };
+        if !self.vms[dst_vm].cap_table.is_empty(dst_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
 
-        vm.cap_table.set(free_slot, Cap::Data(data_cap));
-        self.set_active_reg(7, free_slot as u64);
+        self.vms[dst_vm].cap_table.set(dst_slot, Cap::Data(data_cap));
+        self.set_active_reg(7, dst_slot as u64);
         DispatchResult::Continue
     }
 
     /// CALL on CODE → CREATE.
-    fn handle_call_code(&mut self, code_cap_id: u16) -> DispatchResult {
-        let entry_idx = self.active_reg(7) as u32;
-        let bitmask = self.active_reg(8);
+    /// φ[7] = bitmask (u64), φ[12] = dst_slot (u32, indirection) for HANDLE.
+    /// Bitmask copies from the CODE cap's CNode (the CNode where ecalli resolved
+    /// the CODE cap), not necessarily the caller's CNode.
+    fn handle_call_code(&mut self, code_cap_id: u16, code_cnode_vm: usize) -> DispatchResult {
+        let bitmask = self.active_reg(7);
 
         if self.vms.len() >= MAX_VMS {
             self.set_active_reg(7, RESULT_WHAT);
             return DispatchResult::Continue;
         }
 
-        // Create child VM's cap table by copying bitmask-selected caps from parent
+        // Create child VM's cap table by copying bitmask-selected caps from CODE's CNode
         let mut child_table = CapTable::new();
-        let parent_vm = &self.vms[self.active_vm as usize];
+        let source_vm = &self.vms[code_cnode_vm];
 
         for bit in 0..64u8 {
             if bitmask & (1u64 << bit) != 0
-                && let Some(cap) = parent_vm.cap_table.get(bit)
+                && let Some(cap) = source_vm.cap_table.get(bit)
             {
                 match cap.try_copy() {
                     Some(copy) => {
@@ -461,25 +468,31 @@ impl InvocationKernel {
         }
 
         let child_vm_id = self.vms.len() as u16;
-        let child = VmInstance::new(code_cap_id, entry_idx, child_table, 0);
+        let child = VmInstance::new(code_cap_id, 0, child_table, 0);
         self.vms.push(child);
 
-        // Create HANDLE for the parent
+        // Caller-picks: HANDLE destination from φ[12] with indirection
         let handle = HandleCap {
             vm_id: child_vm_id,
             max_gas: None,
         };
 
-        let parent_vm = &mut self.vms[self.active_vm as usize];
-        let free_slot = match (64..255u8).find(|i| parent_vm.cap_table.is_empty(*i)) {
-            Some(s) => s,
+        let dst_ref = self.active_reg(12) as u32;
+        let (dst_vm, dst_slot) = match self.resolve_cap_ref(dst_ref) {
+            Some(r) => r,
             None => {
                 self.set_active_reg(7, RESULT_WHAT);
                 return DispatchResult::Continue;
             }
         };
-        parent_vm.cap_table.set(free_slot, Cap::Handle(handle));
-        self.set_active_reg(7, free_slot as u64);
+        if !self.vms[dst_vm].cap_table.is_empty(dst_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
+        self.vms[dst_vm]
+            .cap_table
+            .set(dst_slot, Cap::Handle(handle));
+        self.set_active_reg(7, dst_slot as u64);
         DispatchResult::Continue
     }
 
@@ -608,6 +621,55 @@ impl InvocationKernel {
         DispatchResult::Continue
     }
 
+    /// Resolve a u32 cap reference with HANDLE-chain indirection.
+    ///
+    /// Encoding: byte 0 = target slot, bytes 1-3 = HANDLE chain (0x00 = end).
+    /// Returns (vm_index, cap_slot) or None if resolution fails.
+    /// Each intermediate VM must hold a HANDLE and be non-RUNNING.
+    fn resolve_cap_ref(&self, cap_ref: u32) -> Option<(usize, u8)> {
+        let target_slot = (cap_ref & 0xFF) as u8;
+        let ind0 = ((cap_ref >> 8) & 0xFF) as u8;
+        let ind1 = ((cap_ref >> 16) & 0xFF) as u8;
+        let ind2 = ((cap_ref >> 24) & 0xFF) as u8;
+
+        let mut vm_idx = self.active_vm as usize;
+
+        // Walk indirection chain (high bytes first: ind2, ind1, ind0)
+        for &handle_slot in &[ind2, ind1, ind0] {
+            if handle_slot == 0 {
+                continue; // end of chain
+            }
+            let vm = &self.vms[vm_idx];
+            match vm.cap_table.get(handle_slot) {
+                Some(Cap::Handle(h)) => {
+                    let target_vm = h.vm_id as usize;
+                    if target_vm >= self.vms.len() {
+                        return None;
+                    }
+                    let target_state = self.vms[target_vm].state;
+                    if target_state == VmState::Running || target_state == VmState::WaitingForReply {
+                        return None; // target must be non-RUNNING
+                    }
+                    vm_idx = target_vm;
+                }
+                _ => return None, // not a HANDLE
+            }
+        }
+
+        Some((vm_idx, target_slot))
+    }
+
+    /// Resolve a cap ref, returning None and setting WHAT if resolution fails.
+    fn resolve_or_what(&mut self, cap_ref: u32) -> Option<(usize, u8)> {
+        match self.resolve_cap_ref(cap_ref) {
+            Some(r) => Some(r),
+            None => {
+                self.set_active_reg(7, RESULT_WHAT);
+                None
+            }
+        }
+    }
+
     /// Dispatch an ecall (management ops + dynamic CALL).
     /// φ[11] = op code, φ[12] = subject (low u32) | object (high u32).
     pub fn dispatch_ecall(&mut self, op: u32) -> DispatchResult {
@@ -622,33 +684,130 @@ impl InvocationKernel {
 
         let phi12 = self.active_reg(12);
         let subject_ref = (phi12 & 0xFFFFFFFF) as u32;
-        let _object_ref = (phi12 >> 32) as u32;
-
-        // For now, delegate to existing management ops using the subject as local cap idx.
-        // Full indirection support will come in a later step.
-        let cap_idx = (subject_ref & 0xFF) as u8;
+        let object_ref = (phi12 >> 32) as u32;
 
         match op {
             0x00 => {
-                // Dynamic CALL — same as ecalli but subject from register
-                self.handle_call(cap_idx)
+                // Dynamic CALL — resolve subject with indirection
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                // For local VM, use existing handle_call
+                if vm_idx == self.active_vm as usize {
+                    self.handle_call(slot)
+                } else {
+                    // Remote cap — look up the cap in the remote VM
+                    let cap_type = self.vms[vm_idx].cap_table.get(slot).map(|c| match c {
+                        Cap::Protocol(p) => Some(p.id),
+                        _ => None,
+                    });
+                    match cap_type {
+                        Some(Some(id)) => DispatchResult::ProtocolCall { slot: id },
+                        _ => {
+                            self.set_active_reg(7, RESULT_WHAT);
+                            DispatchResult::Continue
+                        }
+                    }
+                }
             }
-            0x02 => self.mgmt_map(cap_idx),
-            0x03 => self.mgmt_unmap(cap_idx),
-            0x04 => self.mgmt_split(cap_idx),
-            0x05 => self.mgmt_drop(cap_idx),
-            0x06 => self.mgmt_move(cap_idx),
-            0x07 => self.mgmt_copy(cap_idx),
-            0x0A => self.mgmt_downgrade(cap_idx),
-            0x0B => self.mgmt_set_max_gas(cap_idx),
+            0x02 => {
+                // MAP — resolve subject (DATA cap)
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_map(vm_idx, slot)
+            }
+            0x03 => {
+                // UNMAP — resolve subject (DATA cap)
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_unmap(vm_idx, slot)
+            }
+            0x04 => {
+                // SPLIT — resolve subject + object dst
+                let (s_vm, s_slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                let (o_vm, o_slot) = match self.resolve_or_what(object_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_split(s_vm, s_slot, o_vm, o_slot)
+            }
+            0x05 => {
+                // DROP — resolve subject
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_drop(vm_idx, slot)
+            }
+            0x06 => {
+                // MOVE — resolve subject + object dst
+                let (s_vm, s_slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                let (o_vm, o_slot) = match self.resolve_or_what(object_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_move(s_vm, s_slot, o_vm, o_slot)
+            }
+            0x07 => {
+                // COPY — resolve subject + object dst
+                let (s_vm, s_slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                let (o_vm, o_slot) = match self.resolve_or_what(object_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_copy(s_vm, s_slot, o_vm, o_slot)
+            }
+            0x0A => {
+                // DOWNGRADE — resolve subject HANDLE + object dst
+                let (s_vm, s_slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                let (o_vm, o_slot) = match self.resolve_or_what(object_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_downgrade(s_vm, s_slot, o_vm, o_slot)
+            }
+            0x0B => {
+                // SET_MAX_GAS — resolve subject HANDLE
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                self.ecall_set_max_gas(vm_idx, slot)
+            }
             0x0C => {
                 // DIRTY — TODO
                 self.set_active_reg(7, RESULT_WHAT);
                 DispatchResult::Continue
             }
             0x0D => {
-                // RESUME — restart a FAULTED VM
-                self.handle_resume(cap_idx)
+                // RESUME — resolve subject HANDLE
+                let (vm_idx, slot) = match self.resolve_or_what(subject_ref) {
+                    Some(r) => r,
+                    None => return DispatchResult::Continue,
+                };
+                // RESUME uses the HANDLE in the resolved VM's cap table
+                if vm_idx != self.active_vm as usize {
+                    self.set_active_reg(7, RESULT_WHAT);
+                    return DispatchResult::Continue;
+                }
+                self.handle_resume(slot)
             }
             _ => {
                 self.set_active_reg(7, RESULT_WHAT);
@@ -666,8 +825,11 @@ impl InvocationKernel {
             MGMT_DROP => self.mgmt_drop(cap_idx),
             MGMT_MOVE => self.mgmt_move(cap_idx),
             MGMT_COPY => self.mgmt_copy(cap_idx),
-            MGMT_GRANT => self.mgmt_grant(cap_idx),
-            MGMT_REVOKE => self.mgmt_revoke(cap_idx),
+            MGMT_GRANT | MGMT_REVOKE => {
+                // Removed: use MOVE with indirection via ecall instead
+                self.set_active_reg(7, RESULT_WHAT);
+                DispatchResult::Continue
+            }
             MGMT_DOWNGRADE => self.mgmt_downgrade(cap_idx),
             MGMT_SET_MAX_GAS => self.mgmt_set_max_gas(cap_idx),
             MGMT_DIRTY => {
@@ -1019,6 +1181,232 @@ impl InvocationKernel {
         let _ = callee.transition(VmState::Running);
         self.active_vm = target_vm_id;
 
+        DispatchResult::Continue
+    }
+
+    // --- ecall management ops (indirection-aware) ---
+
+    /// MAP pages of a DATA cap in its CNode (page-granular).
+    /// φ[7]=base_offset, φ[8]=page_offset, φ[9]=page_count.
+    fn ecall_map(&mut self, vm_idx: usize, slot: u8) -> DispatchResult {
+        let base_offset = self.active_reg(7) as u32;
+        let page_offset = self.active_reg(8) as u32;
+        let page_count = self.active_reg(9) as u32;
+        let access_raw = self.active_reg(10);
+        let access = match access_raw {
+            0 => Access::RO,
+            1 => Access::RW,
+            _ => {
+                self.set_active_reg(7, RESULT_WHAT);
+                return DispatchResult::Continue;
+            }
+        };
+
+        let code_cap_id = self.vms[vm_idx].code_cap_id;
+        let vm = &mut self.vms[vm_idx];
+        match vm.cap_table.get_mut(slot) {
+            Some(Cap::Data(d)) => {
+                if !d.map_pages(base_offset, access, page_offset, page_count) {
+                    self.set_active_reg(7, RESULT_WHAT);
+                    return DispatchResult::Continue;
+                }
+                // Map the pages in the CODE window
+                let code_cap = &self.code_caps[code_cap_id as usize];
+                for p in page_offset..page_offset + page_count {
+                    unsafe {
+                        self.backing.map_pages(
+                            code_cap.window.base(),
+                            base_offset + p,
+                            d.backing_offset + p,
+                            1,
+                            access,
+                        );
+                    }
+                }
+            }
+            _ => {
+                self.set_active_reg(7, RESULT_WHAT);
+            }
+        }
+        DispatchResult::Continue
+    }
+
+    /// UNMAP pages of a DATA cap in its CNode.
+    /// φ[7]=page_offset, φ[8]=page_count.
+    fn ecall_unmap(&mut self, vm_idx: usize, slot: u8) -> DispatchResult {
+        let page_offset = self.active_reg(7) as u32;
+        let page_count = self.active_reg(8) as u32;
+
+        let code_cap_id = self.vms[vm_idx].code_cap_id;
+        let vm = &mut self.vms[vm_idx];
+        match vm.cap_table.get_mut(slot) {
+            Some(Cap::Data(d)) => {
+                if let Some(base_offset) = d.base_offset {
+                    for p in page_offset..page_offset.saturating_add(page_count).min(d.page_count) {
+                        if d.is_page_mapped(p) {
+                            let code_cap = &self.code_caps[code_cap_id as usize];
+                            unsafe {
+                                BackingStore::unmap_pages(
+                                    code_cap.window.base(),
+                                    base_offset + p,
+                                    1,
+                                );
+                            }
+                        }
+                    }
+                    d.unmap_pages(page_offset, page_count);
+                }
+            }
+            _ => {
+                self.set_active_reg(7, RESULT_WHAT);
+            }
+        }
+        DispatchResult::Continue
+    }
+
+    /// SPLIT a DATA cap. Must be fully unmapped.
+    /// φ[7]=page_offset. Subject = DATA cap, object = dst slot for high half.
+    fn ecall_split(&mut self, s_vm: usize, s_slot: u8, o_vm: usize, o_slot: u8) -> DispatchResult {
+        let page_off = self.active_reg(7) as u32;
+
+        // Validate
+        let can_split = match self.vms[s_vm].cap_table.get(s_slot) {
+            Some(Cap::Data(d)) => !d.has_any_mapped() && page_off > 0 && page_off < d.page_count,
+            _ => false,
+        };
+        if !can_split || !self.vms[o_vm].cap_table.is_empty(o_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
+
+        let cap = match self.vms[s_vm].cap_table.take(s_slot) {
+            Some(Cap::Data(d)) => d,
+            _ => unreachable!(),
+        };
+        let (lo, hi) = cap.split(page_off).unwrap();
+        self.vms[s_vm].cap_table.set(s_slot, Cap::Data(lo));
+        self.vms[o_vm].cap_table.set(o_slot, Cap::Data(hi));
+        DispatchResult::Continue
+    }
+
+    /// DROP a cap. Auto-unmaps DATA.
+    fn ecall_drop(&mut self, vm_idx: usize, slot: u8) -> DispatchResult {
+        let code_cap_id = self.vms[vm_idx].code_cap_id;
+        if let Some(Cap::Data(d)) = self.vms[vm_idx].cap_table.get(slot)
+            && d.has_any_mapped()
+            && let Some(base_offset) = d.base_offset
+        {
+            let page_count = d.page_count;
+            let code_cap = &self.code_caps[code_cap_id as usize];
+            unsafe {
+                BackingStore::unmap_pages(code_cap.window.base(), base_offset, page_count);
+            }
+        }
+        self.vms[vm_idx].cap_table.drop_cap(slot);
+        DispatchResult::Continue
+    }
+
+    /// MOVE a cap between CNodes. Auto-unmaps DATA on CNode change.
+    fn ecall_move(&mut self, s_vm: usize, s_slot: u8, o_vm: usize, o_slot: u8) -> DispatchResult {
+        if s_vm == o_vm && s_slot == o_slot {
+            return DispatchResult::Continue;
+        }
+        if !self.vms[o_vm].cap_table.is_empty(o_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
+
+        let mut cap = match self.vms[s_vm].cap_table.take(s_slot) {
+            Some(c) => c,
+            None => {
+                self.set_active_reg(7, RESULT_WHAT);
+                return DispatchResult::Continue;
+            }
+        };
+
+        // Auto-unmap DATA caps crossing CNode boundaries
+        if s_vm != o_vm {
+            if let Cap::Data(ref mut d) = cap {
+                if d.has_any_mapped() {
+                    if let Some(base_offset) = d.base_offset {
+                        let code_cap_id = self.vms[s_vm].code_cap_id;
+                        let code_cap = &self.code_caps[code_cap_id as usize];
+                        unsafe {
+                            BackingStore::unmap_pages(
+                                code_cap.window.base(),
+                                base_offset,
+                                d.page_count,
+                            );
+                        }
+                    }
+                    d.unmap_all();
+                }
+            }
+        }
+
+        self.vms[o_vm].cap_table.set(o_slot, cap);
+        DispatchResult::Continue
+    }
+
+    /// COPY a cap between CNodes (copyable types only).
+    fn ecall_copy(&mut self, s_vm: usize, s_slot: u8, o_vm: usize, o_slot: u8) -> DispatchResult {
+        if !self.vms[o_vm].cap_table.is_empty(o_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
+        let copy = match self.vms[s_vm].cap_table.get(s_slot) {
+            Some(c) => match c.try_copy() {
+                Some(copy) => copy,
+                None => {
+                    self.set_active_reg(7, RESULT_WHAT);
+                    return DispatchResult::Continue;
+                }
+            },
+            None => {
+                self.set_active_reg(7, RESULT_WHAT);
+                return DispatchResult::Continue;
+            }
+        };
+        self.vms[o_vm].cap_table.set(o_slot, copy);
+        DispatchResult::Continue
+    }
+
+    /// DOWNGRADE a HANDLE to CALLABLE. Places CALLABLE at dst.
+    fn ecall_downgrade(
+        &mut self,
+        s_vm: usize,
+        s_slot: u8,
+        o_vm: usize,
+        o_slot: u8,
+    ) -> DispatchResult {
+        let (vm_id, max_gas) = match self.vms[s_vm].cap_table.get(s_slot) {
+            Some(Cap::Handle(h)) => (h.vm_id, h.max_gas),
+            _ => {
+                self.set_active_reg(7, RESULT_WHAT);
+                return DispatchResult::Continue;
+            }
+        };
+        if !self.vms[o_vm].cap_table.is_empty(o_slot) {
+            self.set_active_reg(7, RESULT_WHAT);
+            return DispatchResult::Continue;
+        }
+        self.vms[o_vm]
+            .cap_table
+            .set(o_slot, Cap::Callable(CallableCap { vm_id, max_gas }));
+        DispatchResult::Continue
+    }
+
+    /// SET_MAX_GAS on a HANDLE.
+    fn ecall_set_max_gas(&mut self, vm_idx: usize, slot: u8) -> DispatchResult {
+        let gas_limit = self.active_reg(7);
+        match self.vms[vm_idx].cap_table.get_mut(slot) {
+            Some(Cap::Handle(h)) => {
+                h.max_gas = Some(gas_limit);
+            }
+            _ => {
+                self.set_active_reg(7, RESULT_WHAT);
+            }
+        }
         DispatchResult::Continue
     }
 
@@ -1752,20 +2140,24 @@ mod tests {
         // Set VM 0 to running
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // CALL on UNTYPED (find the untyped slot first)
-        let untyped_slot = (64..255u8)
-            .find(|i| matches!(kernel.vms[0].cap_table.get(*i), Some(Cap::Untyped(_))))
-            .unwrap();
+        // UNTYPED is at fixed slot 254
+        let untyped_slot = 254u8;
+        assert!(matches!(
+            kernel.vms[0].cap_table.get(untyped_slot),
+            Some(Cap::Untyped(_))
+        ));
 
-        // Set φ[7] = 4 pages
+        // Set φ[7]=4 pages, φ[12]=dst_slot (66, because 65=stack DATA from blob)
         kernel.set_active_reg(7, 4);
+        kernel.set_active_reg(12, 66);
 
         // Dispatch CALL on UNTYPED slot
         let result = kernel.dispatch_ecalli(untyped_slot as u32);
         assert!(matches!(result, DispatchResult::Continue));
 
-        // φ[7] should be the new cap index
+        // φ[7] should be the dst_slot
         let new_cap_idx = kernel.active_reg(7) as u8;
+        assert_eq!(new_cap_idx, 66);
         assert!(matches!(
             kernel.vms[0].cap_table.get(new_cap_idx),
             Some(Cap::Data(_))
@@ -1781,9 +2173,9 @@ mod tests {
         // Find the CODE cap slot
         let code_slot = 64u8; // From manifest
 
-        // CALL on CODE: φ[7]=entry_idx, φ[8]=bitmask
-        kernel.set_active_reg(7, 0); // entry_index = 0
-        kernel.set_active_reg(8, 0); // no caps to copy
+        // CALL on CODE: φ[7]=bitmask, φ[12]=dst_slot for HANDLE
+        kernel.set_active_reg(7, 0); // no caps to copy
+        kernel.set_active_reg(12, 66); // HANDLE at slot 66 (64=CODE, 65=DATA)
 
         let result = kernel.dispatch_ecalli(code_slot as u32);
         assert!(matches!(result, DispatchResult::Continue));
@@ -1792,8 +2184,9 @@ mod tests {
         assert_eq!(kernel.vms.len(), 2);
         assert_eq!(kernel.vms[1].state, VmState::Idle);
 
-        // φ[7] = handle cap index
+        // φ[7] = dst_slot
         let handle_idx = kernel.active_reg(7) as u8;
+        assert_eq!(handle_idx, 66);
         assert!(matches!(
             kernel.vms[0].cap_table.get(handle_idx),
             Some(Cap::Handle(_))
@@ -1806,10 +2199,10 @@ mod tests {
         let mut kernel = InvocationKernel::new(&blob, &[], 100_000).unwrap();
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // Create child VM
-        kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(8, 0);
-        kernel.dispatch_ecalli(64); // CALL CODE → CREATE
+        // Create child VM: φ[7]=bitmask, φ[12]=dst_slot for HANDLE
+        kernel.set_active_reg(7, 0); // no caps copied
+        kernel.set_active_reg(12, 66); // place HANDLE at slot 66 (64=CODE, 65=DATA)
+        kernel.dispatch_ecalli(64); // CALL CODE at slot 64 → CREATE
         let handle_idx = kernel.active_reg(7) as u8;
 
         // CALL the child: φ[7]=arg0, φ[8]=arg1, φ[12]=0xFFFFFFFF (no IPC cap)
@@ -1851,20 +2244,20 @@ mod tests {
         let mut kernel = InvocationKernel::new(&blob, &[], 100_000).unwrap();
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // Create two child VMs
+        // Create two child VMs: φ[7]=bitmask, φ[12]=dst_slot
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(8, 0);
-        kernel.dispatch_ecalli(64); // CREATE VM 1
+        kernel.set_active_reg(12, 66);
+        kernel.dispatch_ecalli(64); // CREATE VM 1, HANDLE at 66
         let handle1 = kernel.active_reg(7) as u8;
 
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(8, 0);
-        kernel.dispatch_ecalli(64); // CREATE VM 2
+        kernel.set_active_reg(12, 67);
+        kernel.dispatch_ecalli(64); // CREATE VM 2, HANDLE at 67
         let _handle2 = kernel.active_reg(7) as u8;
 
         // VM 0 calls VM 1
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(12, 0xFF);
+        kernel.set_active_reg(12, 0xFFFFFFFF); // no IPC cap
         kernel.dispatch_ecalli(handle1 as u32);
         assert_eq!(kernel.active_vm, 1);
 
@@ -1883,9 +2276,9 @@ mod tests {
         let mut kernel = InvocationKernel::new(&blob, &[], 100_000).unwrap();
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // Create child VM
+        // Create child VM: φ[7]=bitmask, φ[12]=dst_slot
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(8, 0);
+        kernel.set_active_reg(12, 66);
         kernel.dispatch_ecalli(64);
         let handle_idx = kernel.active_reg(7) as u8;
 
@@ -1896,7 +2289,7 @@ mod tests {
         // CALL child — gas should be capped at 5000
         let parent_gas_before = kernel.vms[0].gas();
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(12, 0xFF);
+        kernel.set_active_reg(12, 0xFFFFFFFF); // no IPC cap
         kernel.dispatch_ecalli(handle_idx as u32);
 
         assert_eq!(kernel.active_vm, 1);
@@ -1948,9 +2341,9 @@ mod tests {
         let mut kernel = InvocationKernel::new(&blob, &[], 100_000).unwrap();
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // Create child
+        // Create child: φ[7]=bitmask, φ[12]=dst_slot
         kernel.set_active_reg(7, 0);
-        kernel.set_active_reg(8, 0);
+        kernel.set_active_reg(12, 66);
         kernel.dispatch_ecalli(64);
         let handle_idx = kernel.active_reg(7) as u8;
 
