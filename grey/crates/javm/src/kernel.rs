@@ -128,11 +128,11 @@ impl InvocationKernel {
         // Build VM 0's cap table: protocol caps + manifest caps
         let mut cap_table = CapTable::new();
 
-        // Populate protocol caps (slots 0-27). These are kernel-handled and
-        // exit to the host via ProtocolCall when CALLed.
+        // Populate protocol caps (slots 1-28). Slot 0 is IPC (REPLY).
+        // These are kernel-handled and exit to the host via ProtocolCall when CALLed.
         use crate::cap::ProtocolCap;
-        for id in 0..=27u8 {
-            cap_table.set(id, Cap::Protocol(ProtocolCap { id }));
+        for id in 1..=28u8 {
+            cap_table.set_original(id, Cap::Protocol(ProtocolCap { id }));
         }
         let mut init_pages: u32 = 0;
         let mut data_caps_to_map: Vec<(u32, u32, u32, Access)> = Vec::new(); // (base_page, backing_offset, page_count, access)
@@ -142,8 +142,10 @@ impl InvocationKernel {
             if let Cap::Data(ref d) = cap {
                 init_pages += d.page_count;
                 // Record DATA caps that need mapping into the CODE window
-                if let Some((base_page, access)) = d.mapped {
-                    data_caps_to_map.push((base_page, d.backing_offset, d.page_count, access));
+                if d.has_any_mapped() {
+                    if let (Some(base_page), Some(access)) = (d.base_offset, d.access) {
+                        data_caps_to_map.push((base_page, d.backing_offset, d.page_count, access));
+                    }
                 }
             }
             cap_table.set(entry.cap_index, cap);
@@ -188,11 +190,11 @@ impl InvocationKernel {
         let mut args_base: u64 = 0;
         let args_len: u64 = _args.len() as u64;
         if !_args.is_empty() {
-            // Find args cap by scanning for cap_index=0xFF
-            let args_cap_entry = parsed.caps.iter().find(|e| e.cap_index == 0xFF);
+            // Find args cap by scanning for cap_index=IPC_SLOT (0)
+            let args_cap_entry = parsed.caps.iter().find(|e| e.cap_index == IPC_SLOT);
             if let Some(entry) = args_cap_entry {
                 args_base = entry.base_page as u64 * crate::PVM_PAGE_SIZE as u64;
-                if let Some(Cap::Data(d)) = cap_table.get(0xFF) {
+                if let Some(Cap::Data(d)) = cap_table.get(IPC_SLOT) {
                     kernel.backing.write_init_data(d.backing_offset, _args);
                 }
             }
@@ -528,7 +530,7 @@ impl InvocationKernel {
                     ipc_was_mapped = d.unmap();
                 }
                 ipc_cap_idx = Some(ipc_cap_slot);
-                // Place in callee's IPC slot [255]
+                // Place in callee's IPC slot [0]
                 self.vms[target_vm_id as usize].cap_table.set(IPC_SLOT, cap);
             }
         }
@@ -702,7 +704,7 @@ impl InvocationKernel {
 
         // Pre-validate: must be DATA, unmapped, valid offset
         let can_split = match vm.cap_table.get(cap_idx) {
-            Some(Cap::Data(d)) => d.mapped.is_none() && page_off > 0 && page_off < d.page_count,
+            Some(Cap::Data(d)) => !d.has_any_mapped() && page_off > 0 && page_off < d.page_count,
             _ => false,
         };
         if !can_split {
@@ -737,7 +739,8 @@ impl InvocationKernel {
         let vm = &mut self.vms[self.active_vm as usize];
         // Unmap DATA caps before dropping
         if let Some(Cap::Data(d)) = vm.cap_table.get(cap_idx)
-            && let Some((base_page, _)) = d.mapped
+            && d.has_any_mapped()
+            && let Some(base_page) = d.base_offset
         {
             let page_count = d.page_count;
             let code_cap = &self.code_caps[code_cap_id as usize];
@@ -1140,7 +1143,8 @@ impl InvocationKernel {
         let mut max_addr: usize = 0;
         for slot in 0..=255u8 {
             if let Some(Cap::Data(d)) = vm.cap_table.get(slot)
-                && let Some((base_page, _)) = d.mapped
+                && d.has_any_mapped()
+                && let Some(base_page) = d.base_offset
             {
                 let end =
                     (base_page as usize + d.page_count as usize) * crate::PVM_PAGE_SIZE as usize;
@@ -1152,7 +1156,8 @@ impl InvocationKernel {
         let window_base = code_cap.window.base();
         for slot in 0..=255u8 {
             if let Some(Cap::Data(d)) = vm.cap_table.get(slot)
-                && let Some((base_page, _)) = d.mapped
+                && d.has_any_mapped()
+                && let Some(base_page) = d.base_offset
             {
                 let addr = base_page as usize * crate::PVM_PAGE_SIZE as usize;
                 let len = d.page_count as usize * crate::PVM_PAGE_SIZE as usize;
@@ -1187,7 +1192,9 @@ impl InvocationKernel {
         let vm_ref = &self.vms[self.active_vm as usize];
         for slot in 0..=255u8 {
             if let Some(Cap::Data(d)) = vm_ref.cap_table.get(slot)
-                && let Some((base_page, Access::RW)) = d.mapped
+                && d.has_any_mapped()
+                && d.access == Some(Access::RW)
+                && let Some(base_page) = d.base_offset
             {
                 let addr = base_page as usize * crate::PVM_PAGE_SIZE as usize;
                 let len = d.page_count as usize * crate::PVM_PAGE_SIZE as usize;
@@ -1365,7 +1372,10 @@ impl InvocationKernel {
             Cap::Data(d) => d,
             _ => return None,
         };
-        let (base_page, _) = d.mapped?;
+        let base_page = d.base_offset?;
+        if !d.has_any_mapped() {
+            return None;
+        }
         let code_cap = &self.code_caps[vm.code_cap_id as usize];
         let addr = base_page as usize * crate::PVM_PAGE_SIZE as usize + offset as usize;
         let mut buf = vec![0u8; len as usize];
@@ -1404,9 +1414,9 @@ impl InvocationKernel {
             Some(Cap::Data(d)) => d,
             _ => return false,
         };
-        let (base_page, _) = match d.mapped {
-            Some(m) => m,
-            None => return false,
+        let base_page = match d.base_offset {
+            Some(b) if d.has_any_mapped() => b,
+            _ => return false,
         };
         let code_cap = &self.code_caps[vm.code_cap_id as usize];
         let addr = base_page as usize * crate::PVM_PAGE_SIZE as usize + offset as usize;
@@ -1677,10 +1687,10 @@ mod tests {
         kernel.dispatch_ecalli(64); // CALL CODE → CREATE
         let handle_idx = kernel.active_reg(7) as u8;
 
-        // CALL the child: φ[7]=arg0, φ[8]=arg1, φ[12]=0xFF (no IPC cap)
+        // CALL the child: φ[7]=arg0, φ[8]=arg1, φ[12]=0xFFFFFFFF (no IPC cap)
         kernel.set_active_reg(7, 42);
         kernel.set_active_reg(8, 99);
-        kernel.set_active_reg(12, 0xFF);
+        kernel.set_active_reg(12, 0xFFFFFFFF);
 
         let result = kernel.dispatch_ecalli(handle_idx as u32);
         assert!(matches!(result, DispatchResult::Continue));
@@ -1697,7 +1707,7 @@ mod tests {
         // Child REPLYs with results
         kernel.set_active_reg(7, 100);
         kernel.set_active_reg(8, 200);
-        let result = kernel.dispatch_ecalli(0xFF); // REPLY
+        let result = kernel.dispatch_ecalli(IPC_SLOT as u32); // REPLY
         assert!(matches!(result, DispatchResult::Continue));
 
         // Back to VM 0
@@ -1777,17 +1787,17 @@ mod tests {
         let mut kernel = InvocationKernel::new(&blob, &[], 100_000).unwrap();
         let _ = kernel.vms[0].transition(VmState::Running);
 
-        // Set a protocol cap at slot 0
+        // Set a protocol cap at slot 1 (GAS)
         kernel.vms[0]
             .cap_table
-            .set(0, Cap::Protocol(ProtocolCap { id: 0 }));
+            .set(1, Cap::Protocol(ProtocolCap { id: 1 }));
 
-        // CALL slot 0 → should return ProtocolCall
+        // CALL slot 1 → should return ProtocolCall
         kernel.set_active_reg(7, 123);
-        let result = kernel.dispatch_ecalli(0);
+        let result = kernel.dispatch_ecalli(1);
         match result {
             DispatchResult::ProtocolCall { slot } => {
-                assert_eq!(slot, 0);
+                assert_eq!(slot, 1);
                 // Registers accessible via kernel.active_reg(7)
                 assert_eq!(kernel.active_reg(7), 123);
             }
