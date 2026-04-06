@@ -1650,6 +1650,7 @@ version = "0.1.0"
 dependencies = [
  "grey-consensus",
  "grey-crypto",
+ "grey-merkle",
  "grey-store",
  "grey-types",
  "hex",

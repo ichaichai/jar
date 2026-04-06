@@ -555,7 +555,10 @@ impl JamRpcServer for RpcImpl {
         let raw = self
             .state
             .store
-            .get_state_kv(&head_hash, &grey_merkle::state_key_from_index(component_index))
+            .get_state_kv(
+                &head_hash,
+                &grey_merkle::state_key_from_index(component_index),
+            )
             .map_err(|e| internal_error(e.to_string()))?
             .unwrap_or_default();
 
@@ -644,8 +647,7 @@ async fn forward_subscription(
     let mut rx = channel.subscribe();
     tokio::spawn(async move {
         while let Ok(notification) = rx.recv().await {
-            let msg =
-                jsonrpsee::SubscriptionMessage::from_json(&notification).expect("valid JSON");
+            let msg = jsonrpsee::SubscriptionMessage::from_json(&notification).expect("valid JSON");
             if sink.send(msg).await.is_err() {
                 break; // client disconnected
             }

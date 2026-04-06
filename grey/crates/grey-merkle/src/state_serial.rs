@@ -69,7 +69,6 @@ pub fn extract_accumulation_root(
     Ok(None)
 }
 
-
 /// Construct state key C(s, h) where h is an arbitrary byte sequence.
 /// The key interleaves E_4(s) and H(h).
 fn key_for_service_data(service_id: ServiceId, h: &[u8]) -> [u8; 31] {
@@ -153,11 +152,17 @@ pub fn serialize_state(state: &State, config: &Config) -> Vec<([u8; 31], Vec<u8>
         (state_key_from_index(8), state.current_validators.encode()), // C(8) κ
         (state_key_from_index(9), state.previous_validators.encode()), // C(9) λ
         (state_key_from_index(10), state.pending_reports.encode()), // C(10) ρ
-        (state_key_from_index(11), state.timeslot.to_le_bytes().to_vec()), // C(11) τ
+        (
+            state_key_from_index(11),
+            state.timeslot.to_le_bytes().to_vec(),
+        ), // C(11) τ
         (state_key_from_index(12), state.privileged_services.encode()), // C(12) χ
         (state_key_from_index(13), state.statistics.encode()), // C(13) π
         (state_key_from_index(14), state.accumulation_queue.encode()), // C(14) ω
-        (state_key_from_index(15), state.accumulation_history.encode()), // C(15) ξ
+        (
+            state_key_from_index(15),
+            state.accumulation_history.encode(),
+        ), // C(15) ξ
     ];
 
     // C(16) → θ accumulation_outputs
