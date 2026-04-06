@@ -225,6 +225,146 @@ pub fn peephole_fuse_load_imm_alu(
     fused
 }
 
+/// Peephole pass: eliminate dead `load_imm` instructions.
+///
+/// When a `load_imm` (opcode 51) or `load_imm_64` (opcode 20) writes to register R,
+/// and the immediately following instruction also writes to R without reading it
+/// (another load_imm/load_imm_64, or move_reg with R as destination), the first
+/// instruction is dead and can be replaced with a no-op (bitmask cleared).
+///
+/// The second instruction must not be a branch target (otherwise the first
+/// load_imm could be reached independently via a different path).
+pub fn peephole_eliminate_dead_load_imm(
+    code: &mut [u8],
+    bitmask: &mut [u8],
+    jump_table: &[u32],
+) -> usize {
+    let len = code.len();
+    if len < 4 {
+        return 0;
+    }
+
+    let skip_for = |bm: &[u8], pc: usize| -> usize {
+        for j in 0..25 {
+            let idx = pc + 1 + j;
+            if idx >= bm.len() || bm[idx] == 1 {
+                return j;
+            }
+        }
+        0
+    };
+
+    // Reuse the same target collection logic as the fusion pass
+    let mut targets = std::collections::HashSet::new();
+    {
+        let mut i = 0;
+        while i < len {
+            if i >= bitmask.len() || bitmask[i] != 1 {
+                i += 1;
+                continue;
+            }
+            let op = code[i];
+            let s = skip_for(bitmask, i);
+            if op == 40 && i + 5 <= len {
+                let off = i32::from_le_bytes([code[i + 1], code[i + 2], code[i + 3], code[i + 4]]);
+                let t = (i as i64 + off as i64) as usize;
+                if t < len {
+                    targets.insert(t);
+                }
+            }
+            if (170..=175).contains(&op) && i + 6 <= len {
+                let off = i32::from_le_bytes([code[i + 2], code[i + 3], code[i + 4], code[i + 5]]);
+                let t = (i as i64 + off as i64) as usize;
+                if t < len {
+                    targets.insert(t);
+                }
+            }
+            if (80..=90).contains(&op) && i + 2 <= len {
+                let reg_byte = code[i + 1];
+                let lx = ((reg_byte as usize / 16) % 8).min(4);
+                let ly = if s > lx + 1 { (s - lx - 1).min(4) } else { 0 };
+                let off_start = i + 2 + lx;
+                if ly > 0 && off_start + ly <= len {
+                    let mut buf = [0u8; 4];
+                    buf[..ly].copy_from_slice(&code[off_start..off_start + ly]);
+                    if ly < 4 && buf[ly - 1] & 0x80 != 0 {
+                        for b in &mut buf[ly..4] {
+                            *b = 0xFF;
+                        }
+                    }
+                    let off = i32::from_le_bytes(buf);
+                    let t = (i as i64 + off as i64) as usize;
+                    if t < len {
+                        targets.insert(t);
+                    }
+                }
+            }
+            i += 1 + s;
+        }
+    }
+    for &jt in jump_table {
+        targets.insert(jt as usize);
+    }
+
+    /// Extract the destination register from a load_imm (51) or load_imm_64 (20).
+    /// Returns None if the instruction doesn't write to a register or is malformed.
+    fn load_dest_reg(code: &[u8], pc: usize) -> Option<u8> {
+        let op = code[pc];
+        if (op == 51 || op == 20) && pc + 1 < code.len() {
+            Some(code[pc + 1] & 0x0F)
+        } else {
+            None
+        }
+    }
+
+    /// Check if an instruction at `pc` unconditionally writes to register `rd`
+    /// without reading it first. Covers: load_imm(51), load_imm_64(20), move_reg(100).
+    fn writes_without_reading(code: &[u8], pc: usize, rd: u8) -> bool {
+        if pc >= code.len() {
+            return false;
+        }
+        let op = code[pc];
+        match op {
+            // load_imm / load_imm_64: dest is bits 0-3 of reg_byte
+            51 | 20 => pc + 1 < code.len() && (code[pc + 1] & 0x0F) == rd,
+            // move_reg: [100, rd|(rs<<4)] — writes rd, reads rs
+            // Safe only if rd != rs (otherwise it reads rd too, but move to self is still dead)
+            100 => pc + 1 < code.len() && (code[pc + 1] & 0x0F) == rd,
+            _ => false,
+        }
+    }
+
+    let mut eliminated = 0;
+    let mut i = 0;
+    while i < len {
+        if i >= bitmask.len() || bitmask[i] != 1 {
+            i += 1;
+            continue;
+        }
+        let s = skip_for(bitmask, i);
+        let next_i = i + 1 + s;
+
+        if let Some(rd) = load_dest_reg(code, i)
+            && next_i < len
+            && bitmask[next_i] == 1
+            && !targets.contains(&next_i)
+            && writes_without_reading(code, next_i, rd)
+        {
+            // First load_imm is dead — NOP it by clearing its bitmask
+            bitmask[i] = 0;
+            // Zero out the instruction bytes
+            for b in code[i..next_i].iter_mut() {
+                *b = 0;
+            }
+            eliminated += 1;
+            i = next_i;
+            continue;
+        }
+        i += 1 + s;
+    }
+    eliminated
+}
+
 /// Post-pass: ensure all PVM branch targets are basic block starts (ϖ).
 ///
 /// Scans the PVM code for branch/jump instructions, extracts their targets,
