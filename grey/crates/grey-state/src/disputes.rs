@@ -6,7 +6,7 @@ use grey_types::config::Config;
 use grey_types::header::DisputesExtrinsic;
 use grey_types::state::{Judgments, PendingReport};
 use grey_types::validator::ValidatorKey;
-use grey_types::{Ed25519PublicKey, Hash};
+use grey_types::{Ed25519PublicKey, Hash, signing_contexts};
 use std::collections::BTreeSet;
 
 /// Error type for disputes validation.
@@ -134,9 +134,9 @@ pub fn process_disputes(
 
             let ed25519_key = &validators[idx].ed25519;
             let domain: &[u8] = if judgment.is_valid {
-                b"jam_valid"
+                signing_contexts::VALID
             } else {
-                b"jam_invalid"
+                signing_contexts::INVALID
             };
 
             let mut message = Vec::with_capacity(domain.len() + 32);
@@ -248,7 +248,7 @@ pub fn process_disputes(
 
         // Verify guarantee signature: X_G = "jam_guarantee"
         let mut message = Vec::with_capacity(13 + 32);
-        message.extend_from_slice(b"jam_guarantee");
+        message.extend_from_slice(signing_contexts::GUARANTEE);
         message.extend_from_slice(&culprit.report_hash.0);
 
         if !grey_crypto::ed25519_verify(&culprit.validator_key, &message, &culprit.signature) {
@@ -285,10 +285,10 @@ pub fn process_disputes(
         }
 
         // Verify judgment signature
-        let domain = if fault.is_valid {
-            b"jam_valid".as_slice()
+        let domain: &[u8] = if fault.is_valid {
+            signing_contexts::VALID
         } else {
-            b"jam_invalid".as_slice()
+            signing_contexts::INVALID
         };
         let mut message = Vec::with_capacity(domain.len() + 32);
         message.extend_from_slice(domain);

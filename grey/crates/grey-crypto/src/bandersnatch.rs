@@ -281,8 +281,7 @@ pub fn vrf_output_hash(signature: &[u8]) -> Option<[u8; 32]> {
     Some(result)
 }
 
-/// Ticket VRF context string (Appendix I.4.5: X_T = $jam_ticket_seal).
-pub const TICKET_SEAL_CONTEXT: &[u8] = b"jam_ticket_seal";
+use grey_types::signing_contexts;
 
 /// Verify a ticket Ring VRF proof and return the ticket ID.
 ///
@@ -295,7 +294,7 @@ pub fn verify_ticket(
     proof: &[u8],
 ) -> Option<[u8; 32]> {
     let mut vrf_input = Vec::with_capacity(48);
-    vrf_input.extend_from_slice(TICKET_SEAL_CONTEXT);
+    vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
     vrf_input.extend_from_slice(eta2);
     vrf_input.push(attempt);
     ring_vrf_verify(ring_size, ring_commitment, &vrf_input, &[], proof)
@@ -397,7 +396,7 @@ mod tests {
         let attempt = 0u8;
 
         let mut vrf_input = Vec::new();
-        vrf_input.extend_from_slice(TICKET_SEAL_CONTEXT);
+        vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
         vrf_input.extend_from_slice(&eta2);
         vrf_input.push(attempt);
 
@@ -433,7 +432,7 @@ mod tests {
 
         // Compute ticket IDs for validator 3, attempt 0
         let mut vrf_input = Vec::new();
-        vrf_input.extend_from_slice(TICKET_SEAL_CONTEXT);
+        vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
         vrf_input.extend_from_slice(&eta2);
         vrf_input.push(0);
 

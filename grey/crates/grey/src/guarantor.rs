@@ -16,7 +16,7 @@ use grey_types::config::Config;
 use grey_types::header::{Assurance, Guarantee};
 use grey_types::state::State;
 use grey_types::work::{WorkPackage, WorkReport};
-use grey_types::{Ed25519Signature, Hash};
+use grey_types::{Ed25519Signature, Hash, signing_contexts};
 use scale::Encode;
 use std::collections::{BTreeMap, HashSet};
 
@@ -93,7 +93,7 @@ impl GuarantorState {
         let payload_hash = grey_crypto::blake2b_256(&payload);
 
         let mut message = Vec::with_capacity(13 + 32);
-        message.extend_from_slice(b"jam_available");
+        message.extend_from_slice(signing_contexts::AVAILABLE);
         message.extend_from_slice(&payload_hash.0);
 
         let signature = secrets.ed25519.sign(&message);
@@ -174,7 +174,7 @@ pub fn process_work_package(
 
     // 5. Sign the guarantee
     let mut message = Vec::with_capacity(13 + 32);
-    message.extend_from_slice(b"jam_guarantee");
+    message.extend_from_slice(signing_contexts::GUARANTEE);
     message.extend_from_slice(&report_hash.0);
     let signature = secrets.ed25519.sign(&message);
 

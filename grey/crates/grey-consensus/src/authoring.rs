@@ -16,15 +16,7 @@ fn encode_header_unsigned(header: &Header) -> Vec<u8> {
     header.data.encode()
 }
 
-/// Entropy VRF context string (Appendix I.4.5: X_E = $jam_entropy).
-const ENTROPY_CONTEXT: &[u8] = b"jam_entropy";
-
-/// Fallback seal context string (Appendix I.4.5: X_F = $jam_fallback_seal).
-const FALLBACK_SEAL_CONTEXT: &[u8] = b"jam_fallback_seal";
-
-/// Ticket seal context string (Appendix I.4.5: X_T = $jam_ticket_seal).
-/// Used for both ticket generation (Ring VRF) and ticket-mode block sealing.
-const TICKET_SEAL_CONTEXT: &[u8] = b"jam_ticket_seal";
+use grey_types::signing_contexts;
 
 /// Check if a validator is the block author for a given timeslot.
 ///
@@ -85,7 +77,7 @@ pub fn is_slot_author_with_keypair(
             // For each attempt (0..N), compute VRF output and check against ticket ID
             for attempt in 0..config.tickets_per_validator as u8 {
                 let mut vrf_input = Vec::with_capacity(48);
-                vrf_input.extend_from_slice(TICKET_SEAL_CONTEXT);
+                vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
                 vrf_input.extend_from_slice(&eta2.0);
                 vrf_input.push(attempt);
 
@@ -157,7 +149,7 @@ pub fn author_block_with_extrinsics(
         .unwrap_or(Hash::ZERO);
 
     // VRF signature for entropy (HV)
-    let vrf_input = build_vrf_input(ENTROPY_CONTEXT, timeslot, &[]);
+    let vrf_input = build_vrf_input(signing_contexts::ENTROPY, timeslot, &[]);
     let vrf_sig_bytes = secrets.bandersnatch.vrf_sign(&vrf_input, b"");
     let vrf_signature = BandersnatchSignature(vrf_sig_bytes);
 
@@ -226,9 +218,9 @@ pub fn author_block_with_extrinsics(
     let unsigned_hash = compute_unsigned_header_hash_bytes(&header);
     let is_ticket_mode = matches!(&state.safrole.seal_key_series, SealKeySeries::Tickets(_));
     let seal_context = if is_ticket_mode {
-        TICKET_SEAL_CONTEXT
+        signing_contexts::TICKET_SEAL
     } else {
-        FALLBACK_SEAL_CONTEXT
+        signing_contexts::FALLBACK_SEAL
     };
     let seal_input = build_vrf_input(seal_context, timeslot, &unsigned_hash);
     let seal_bytes = secrets.bandersnatch.seal_sign(&seal_input, b"");
@@ -342,7 +334,7 @@ mod tests {
         for (vi, s) in secrets.iter().enumerate() {
             for attempt in 0..config.tickets_per_validator as u8 {
                 let mut vrf_input = Vec::with_capacity(48);
-                vrf_input.extend_from_slice(TICKET_SEAL_CONTEXT);
+                vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
                 vrf_input.extend_from_slice(&eta2.0);
                 vrf_input.push(attempt);
 

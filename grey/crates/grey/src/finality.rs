@@ -14,10 +14,7 @@ use grey_types::config::Config;
 use grey_types::{Ed25519Signature, Hash, Timeslot, ValidatorIndex};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-/// Signing context for GRANDPA prevotes.
-const PREVOTE_CONTEXT: &[u8] = b"jam_prevote";
-/// Signing context for GRANDPA precommits.
-const PRECOMMIT_CONTEXT: &[u8] = b"jam_precommit";
+use grey_types::signing_contexts;
 
 /// A GRANDPA vote (prevote or precommit).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,8 +591,8 @@ fn sign_vote(
     vote_type: VoteType,
 ) -> Vote {
     let context = match vote_type {
-        VoteType::Prevote => PREVOTE_CONTEXT,
-        VoteType::Precommit => PRECOMMIT_CONTEXT,
+        VoteType::Prevote => signing_contexts::PREVOTE,
+        VoteType::Precommit => signing_contexts::PRECOMMIT,
     };
 
     let mut message = Vec::with_capacity(context.len() + 32 + 4 + 8);
@@ -624,8 +621,8 @@ pub fn verify_vote(vote: &Vote, vote_type: VoteType, state: &grey_types::state::
     let ed25519_key = &state.current_validators[idx].ed25519;
 
     let context = match vote_type {
-        VoteType::Prevote => PREVOTE_CONTEXT,
-        VoteType::Precommit => PRECOMMIT_CONTEXT,
+        VoteType::Prevote => signing_contexts::PREVOTE,
+        VoteType::Precommit => signing_contexts::PRECOMMIT,
     };
 
     let mut message = Vec::with_capacity(context.len() + 32 + 4 + 8);

@@ -5,7 +5,7 @@
 use grey_types::config::Config;
 use grey_types::validator::ValidatorKey;
 use grey_types::work::{WorkReport, WorkResult};
-use grey_types::{Ed25519PublicKey, Ed25519Signature, Hash, ServiceId, Timeslot};
+use grey_types::{Ed25519PublicKey, Ed25519Signature, Hash, ServiceId, Timeslot, signing_contexts};
 use javm::Gas;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -321,7 +321,7 @@ pub fn process_reports(
         let encoded_report = scale::Encode::encode(report);
         let report_hash = grey_crypto::blake2b_256(&encoded_report);
         let mut message = Vec::with_capacity(13 + 32);
-        message.extend_from_slice(b"jam_guarantee");
+        message.extend_from_slice(signing_contexts::GUARANTEE);
         message.extend_from_slice(&report_hash.0);
 
         for (idx, sig) in &guarantee.signatures {

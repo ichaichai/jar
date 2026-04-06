@@ -11,7 +11,7 @@ use grey_consensus::genesis::ValidatorSecrets;
 use grey_types::config::Config;
 use grey_types::header::TicketProof;
 use grey_types::state::State;
-use grey_types::{Hash, Timeslot};
+use grey_types::{Hash, Timeslot, signing_contexts};
 use std::collections::BTreeSet;
 
 /// Maximum ticket attempts per validator per epoch (N=2 in tiny, N=2 in full).
@@ -144,7 +144,7 @@ fn generate_ticket_proof(
     key_index: usize,
 ) -> Option<TicketProof> {
     let mut vrf_input = Vec::with_capacity(15 + 32 + 1);
-    vrf_input.extend_from_slice(grey_crypto::bandersnatch::TICKET_SEAL_CONTEXT);
+    vrf_input.extend_from_slice(signing_contexts::TICKET_SEAL);
     vrf_input.extend_from_slice(&eta2.0);
     vrf_input.push(attempt);
 

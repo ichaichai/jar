@@ -11,7 +11,7 @@ use grey_state::refine::RefineContext;
 use grey_types::config::Config;
 use grey_types::state::State;
 use grey_types::work::{WorkReport, WorkResult};
-use grey_types::{Ed25519Signature, Hash, Timeslot, ValidatorIndex};
+use grey_types::{Ed25519Signature, Hash, Timeslot, ValidatorIndex, signing_contexts};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Tranche timing: 8 seconds per tranche (T_A).
@@ -170,7 +170,7 @@ pub fn compute_audit_tranche(
     max_tranches: u32,
 ) -> u32 {
     let mut input = Vec::with_capacity(8 + 32 + 32 + 2);
-    input.extend_from_slice(b"jam_audit");
+    input.extend_from_slice(signing_contexts::AUDIT);
     input.extend_from_slice(&entropy.0);
     input.extend_from_slice(&report_hash.0);
     input.extend_from_slice(&validator_index.to_le_bytes());
@@ -253,9 +253,9 @@ pub fn create_announcement(
 ) -> AuditAnnouncement {
     // Sign: X_⊺ or X_⊥ ++ report_hash
     let context = if is_valid {
-        b"jam_valid" as &[u8]
+        signing_contexts::VALID
     } else {
-        b"jam_invalid" as &[u8]
+        signing_contexts::INVALID
     };
     let mut message = Vec::with_capacity(context.len() + 32);
     message.extend_from_slice(context);
@@ -310,9 +310,9 @@ pub fn verify_announcement(announcement: &AuditAnnouncement, state: &State) -> b
     let ed25519_key = &state.current_validators[idx].ed25519;
 
     let context = if announcement.is_valid {
-        b"jam_valid" as &[u8]
+        signing_contexts::VALID
     } else {
-        b"jam_invalid" as &[u8]
+        signing_contexts::INVALID
     };
     let mut message = Vec::with_capacity(context.len() + 32);
     message.extend_from_slice(context);
