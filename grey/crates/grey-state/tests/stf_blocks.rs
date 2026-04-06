@@ -235,19 +235,8 @@ fn parse_keyvals(v: &serde_json::Value) -> Vec<([u8; 31], Vec<u8>)> {
 fn run_independent_trace(trace_name: &str) {
     let dir = format!("{BLOCKS_DIR}/{trace_name}");
     let config = Config::full();
-
-    // Discover block files
     let variant = "jar1";
-    let suffix = format!(".input.{variant}.json");
-    let mut stems: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("failed to read dir {dir}: {e}"))
-    {
-        let name = entry.unwrap().file_name().into_string().unwrap();
-        if let Some(stem) = name.strip_suffix(&suffix) {
-            stems.push(stem.to_string());
-        }
-    }
-    stems.sort();
+    let stems = common::discover_test_stems_variant(&dir, variant);
 
     let mut passed = 0;
     let mut failed = 0;
@@ -257,17 +246,8 @@ fn run_independent_trace(trace_name: &str) {
         let input_path = format!("{dir}/{stem}.input.{variant}.json");
         let output_path = format!("{dir}/{stem}.output.{variant}.json");
 
-        let input_json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&input_path)
-                .unwrap_or_else(|e| panic!("failed to read {input_path}: {e}")),
-        )
-        .unwrap_or_else(|e| panic!("failed to parse {input_path}: {e}"));
-
-        let output_json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&output_path)
-                .unwrap_or_else(|e| panic!("failed to read {output_path}: {e}")),
-        )
-        .unwrap_or_else(|e| panic!("failed to parse {output_path}: {e}"));
+        let input_json = common::load_json(&input_path);
+        let output_json = common::load_json(&output_path);
 
         // Check if this is an expected error
         if output_json.get("error").is_some() {
@@ -400,25 +380,10 @@ fn run_sequential_trace(trace_name: &str) {
     let dir = format!("{BLOCKS_DIR}/{trace_name}");
     let config = Config::full();
     let variant = "jar1";
-
-    // Discover block files
-    let suffix = format!(".input.{variant}.json");
-    let mut stems: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("failed to read dir {dir}: {e}"))
-    {
-        let name = entry.unwrap().file_name().into_string().unwrap();
-        if let Some(stem) = name.strip_suffix(&suffix) {
-            stems.push(stem.to_string());
-        }
-    }
-    stems.sort();
+    let stems = common::discover_test_stems_variant(&dir, variant);
 
     // Load first block's keyvals
-    let first_input: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(format!("{dir}/{}.input.{variant}.json", stems[0]))
-            .expect("failed to read first block"),
-    )
-    .expect("failed to parse first block");
+    let first_input = common::load_json(&format!("{dir}/{}.input.{variant}.json", stems[0]));
 
     let kvs = parse_keyvals(&first_input["pre_state"]["keyvals"]);
     let (mut state, mut opaque) =
@@ -431,15 +396,8 @@ fn run_sequential_trace(trace_name: &str) {
         let input_path = format!("{dir}/{stem}.input.{variant}.json");
         let output_path = format!("{dir}/{stem}.output.{variant}.json");
 
-        let input_json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&input_path).expect("failed to read block input"),
-        )
-        .expect("failed to parse block input");
-
-        let output_json: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&output_path).expect("failed to read block output"),
-        )
-        .expect("failed to parse block output");
+        let input_json = common::load_json(&input_path);
+        let output_json = common::load_json(&output_path);
 
         let block = parse_block_from_json(&input_json["block"]);
 

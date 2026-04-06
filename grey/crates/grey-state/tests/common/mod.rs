@@ -10,6 +10,37 @@ use grey_types::{
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Discover test vector file stems in a directory matching `*.input.jar1.json`.
+///
+/// Returns a sorted list of stems (the filename prefix before `.input.jar1.json`).
+/// Convenience wrapper for `discover_test_stems_variant` with the default "jar1" variant.
+pub fn discover_test_stems(dir: &str) -> Vec<String> {
+    discover_test_stems_variant(dir, "jar1")
+}
+
+/// Discover test vector file stems in a directory matching `*.input.{variant}.json`.
+///
+/// Returns a sorted list of stems (the filename prefix before `.input.{variant}.json`).
+pub fn discover_test_stems_variant(dir: &str, variant: &str) -> Vec<String> {
+    let suffix = format!(".input.{variant}.json");
+    let mut stems: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("failed to read dir {dir}: {e}"))
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            name.strip_suffix(&suffix).map(String::from)
+        })
+        .collect();
+    stems.sort();
+    stems
+}
+
+/// Load and parse a JSON file, panicking with a descriptive message on failure.
+pub fn load_json(path: &str) -> serde_json::Value {
+    let contents =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+    serde_json::from_str(&contents).unwrap_or_else(|e| panic!("failed to parse {path}: {e}"))
+}
+
 /// Decode a 0x-prefixed hex string to bytes. Panics on invalid input.
 pub fn decode_hex(s: &str) -> Vec<u8> {
     hex::decode(s.strip_prefix("0x").unwrap_or(s)).expect("bad hex")
@@ -235,23 +266,6 @@ pub fn load_jar_test(dir: &str, stem: &str) -> serde_json::Value {
     }
 
     input_json
-}
-
-/// Discover all test stems for a given category directory (gp072_tiny variant).
-/// Returns stems sorted alphabetically.
-pub fn discover_test_stems(dir: &str) -> Vec<String> {
-    let variant = "jar1";
-    let suffix = format!(".input.{variant}.json");
-    let mut stems = Vec::new();
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("failed to read dir {dir}: {e}"))
-    {
-        let name = entry.unwrap().file_name().into_string().unwrap();
-        if let Some(stem) = name.strip_suffix(&suffix) {
-            stems.push(stem.to_string());
-        }
-    }
-    stems.sort();
-    stems
 }
 
 /// Parse a ValidatorKey from a JSON value.
