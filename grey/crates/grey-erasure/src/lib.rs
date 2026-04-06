@@ -202,7 +202,7 @@ fn recover_data_shards(
 
     for sym_pos in 0..k {
         // Extract 2-byte symbols at this position from available chunks
-        let originals: Vec<(usize, [u8; 2])> = chunks
+        let originals: std::collections::HashMap<usize, [u8; 2]> = chunks
             .iter()
             .filter(|(_, idx)| *idx < params.data_shards)
             .map(|(data, idx)| (*idx, [data[sym_pos * 2], data[sym_pos * 2 + 1]]))
@@ -229,8 +229,8 @@ fn recover_data_shards(
 
         // Fill in all data shard symbols at this position
         for j in 0..params.data_shards {
-            if let Some(sym) = originals.iter().find(|(idx, _)| *idx == j) {
-                data_shards[j].extend_from_slice(&sym.1);
+            if let Some(sym) = originals.get(&j) {
+                data_shards[j].extend_from_slice(sym);
             } else if let Some(sym) = restored.get(&j) {
                 data_shards[j].extend_from_slice(sym);
             }
