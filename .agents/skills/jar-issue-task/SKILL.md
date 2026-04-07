@@ -215,7 +215,36 @@ After creating the PR, wait for CI to complete and fix any failures before movin
    gh pr comment <PR_NUMBER> --repo jarchain/jar --body "CI is failing after multiple fix attempts. Remaining failure: <summary>. Leaving for human review."
    ```
 
-### 6. Clean up claim
+### 6. File issues for discovered problems (auto mode only)
+
+During implementation, you may discover pre-existing bugs, code smells, missing tests, or other issues unrelated to the task you're working on. In **auto mode**, file a new GitHub issue for each such discovery:
+
+```bash
+gh issue create --repo jarchain/jar --title "<concise title>" --body "$(cat <<'ISSEOF'
+## Context
+
+Discovered while working on #<CURRENT_ISSUE_NUMBER>.
+
+## Description
+
+<What the problem is, where it lives, and why it matters>
+
+## Suggested approach
+
+<How to fix it, if known>
+ISSEOF
+)"
+```
+
+**Rules:**
+- Only file issues for genuine, non-trivial problems (not style preferences or minor nits)
+- Do NOT fix the discovered issue in your current PR — keep PRs focused on one task
+- Do NOT file an issue if one already exists for the same problem (search first)
+- Include enough context (file paths, line numbers, reproduction steps) that someone can act on the issue without re-discovering it
+
+In **interactive mode**, mention the discovery to the user instead of filing automatically.
+
+### 7. Clean up claim
 
 After the work is done (PR submitted or abandoned), ensure the issue comments clearly reflect the current state:
 
