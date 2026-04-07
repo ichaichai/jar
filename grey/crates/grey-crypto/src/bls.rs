@@ -111,4 +111,66 @@ mod tests {
         let kp2 = BlsKeypair::from_seed(&seed);
         assert_eq!(kp1.public_key_bytes(), kp2.public_key_bytes());
     }
+
+    #[test]
+    fn test_bls_verify_wrong_key() {
+        let kp1 = BlsKeypair::from_seed(&[1u8; 32]);
+        let kp2 = BlsKeypair::from_seed(&[2u8; 32]);
+        let message = b"test message";
+        let sig = kp1.sign(message);
+
+        // Signature from kp1 should not verify with kp2's public key
+        assert!(
+            !bls_verify(&kp2.public_key_bytes(), message, &sig),
+            "wrong key should fail verification"
+        );
+    }
+
+    #[test]
+    fn test_bls_different_seeds_different_keys() {
+        let kp1 = BlsKeypair::from_seed(&[1u8; 32]);
+        let kp2 = BlsKeypair::from_seed(&[2u8; 32]);
+        assert_ne!(
+            kp1.public_key_bytes(),
+            kp2.public_key_bytes(),
+            "different seeds should produce different keys"
+        );
+    }
+
+    #[test]
+    fn test_bls_invalid_public_key() {
+        // All zeros is not a valid G1 point
+        let invalid_pk = [0u8; 144];
+        let sig = [0u8; 96];
+        assert!(
+            !bls_verify(&invalid_pk, b"msg", &sig),
+            "invalid public key should fail"
+        );
+        assert!(
+            !bls_verify_pop(&invalid_pk),
+            "invalid public key should fail PoP"
+        );
+    }
+
+    #[test]
+    fn test_bls_invalid_signature() {
+        let kp = BlsKeypair::from_seed(&[42u8; 32]);
+        let pk = kp.public_key_bytes();
+        // All zeros is not a valid G2 point
+        let invalid_sig = [0u8; 96];
+        assert!(
+            !bls_verify(&pk, b"msg", &invalid_sig),
+            "invalid signature should fail"
+        );
+    }
+
+    #[test]
+    fn test_bls_pop_valid_after_keygen() {
+        // Verify PoP for multiple different seeds
+        for i in 0u8..5 {
+            let kp = BlsKeypair::from_seed(&[i; 32]);
+            let pk = kp.public_key_bytes();
+            assert!(bls_verify_pop(&pk), "PoP should be valid for seed {}", i);
+        }
+    }
 }
