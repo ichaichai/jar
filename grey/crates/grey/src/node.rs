@@ -78,6 +78,37 @@ pub struct NodeConfig {
 
 // FinalityTracker replaced by GrandpaState (see finality.rs)
 
+/// Persist a block to the store and send a WebSocket notification.
+fn persist_and_notify_block(
+    store: &Store,
+    block: &Block,
+    hash: &Hash,
+    slot: Timeslot,
+    state: &State,
+    protocol: &grey_types::config::Config,
+    rpc_state: &Option<std::sync::Arc<grey_rpc::RpcState>>,
+) {
+    if let Err(e) = store.put_block(block) {
+        tracing::error!("Failed to persist block: {}", e);
+    }
+    if let Err(e) = store.put_state(hash, state, protocol) {
+        tracing::error!("Failed to persist state: {}", e);
+    }
+    if let Err(e) = store.set_head(hash, slot) {
+        tracing::error!("Failed to update head: {}", e);
+    }
+    if let Some(rpc_st) = rpc_state {
+        let _ = rpc_st.block_notifications.send(serde_json::json!({
+            "hash": hex::encode(hash.0),
+            "slot": slot,
+            "author_index": block.header.author_index,
+            "parent_hash": hex::encode(block.header.parent_hash.0),
+            "guarantees": block.extrinsic.guarantees.len(),
+            "assurances": block.extrinsic.assurances.len(),
+        }));
+    }
+}
+
 /// Run the validator node.
 pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let protocol = &config.protocol_config;
@@ -696,16 +727,10 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 last_authored_slot = current_slot;
                                 seen_block_hashes.insert(header_hash);
 
-                                // Persist block, state, and metadata
-                                if let Err(e) = store.put_block(&block) {
-                                    tracing::error!("Failed to persist block: {}", e);
-                                }
-                                if let Err(e) = store.put_state(&header_hash, &state, protocol) {
-                                    tracing::error!("Failed to persist state: {}", e);
-                                }
-                                if let Err(e) = store.set_head(&header_hash, current_slot) {
-                                    tracing::error!("Failed to update head: {}", e);
-                                }
+                                persist_and_notify_block(
+                                    &store, &block, &header_hash, current_slot,
+                                    &state, protocol, &rpc_state,
+                                );
 
                                 tracing::info!(
                                     "Validator {} authored block #{} at slot {}, hash=0x{}",
@@ -714,18 +739,6 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     current_slot,
                                     hex::encode(&header_hash.0[..8])
                                 );
-
-                                // Push new block notification to WebSocket subscribers
-                                if let Some(ref rpc_st) = rpc_state {
-                                    let _ = rpc_st.block_notifications.send(serde_json::json!({
-                                        "hash": hex::encode(header_hash.0),
-                                        "slot": current_slot,
-                                        "author_index": block.header.author_index,
-                                        "parent_hash": hex::encode(block.header.parent_hash.0),
-                                        "guarantees": block.extrinsic.guarantees.len(),
-                                        "assurances": block.extrinsic.assurances.len(),
-                                    }));
-                                }
 
                                 // Register guarantees from this block for auditing
                                 // and mark cores as available for assurance generation
@@ -940,28 +953,10 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     }
                                     seen_block_hashes.insert(import_hash);
 
-                                    // Persist imported block, state, and metadata
-                                    if let Err(e) = store.put_block(&block) {
-                                        tracing::error!("Failed to persist imported block: {}", e);
-                                    }
-                                    if let Err(e) = store.put_state(&import_hash, &state, protocol) {
-                                        tracing::error!("Failed to persist state: {}", e);
-                                    }
-                                    if let Err(e) = store.set_head(&import_hash, slot) {
-                                        tracing::error!("Failed to update head: {}", e);
-                                    }
-
-                                    // Push new block notification to WebSocket subscribers
-                                    if let Some(ref rpc_st) = rpc_state {
-                                        let _ = rpc_st.block_notifications.send(serde_json::json!({
-                                            "hash": hex::encode(import_hash.0),
-                                            "slot": slot,
-                                            "author_index": block.header.author_index,
-                                            "parent_hash": hex::encode(block.header.parent_hash.0),
-                                            "guarantees": block.extrinsic.guarantees.len(),
-                                            "assurances": block.extrinsic.assurances.len(),
-                                        }));
-                                    }
+                                    persist_and_notify_block(
+                                        &store, &block, &import_hash, slot,
+                                        &state, protocol, &rpc_state,
+                                    );
 
                                     // Register guarantees from imported block for auditing,
                                     // mark cores as available for assurance generation,
