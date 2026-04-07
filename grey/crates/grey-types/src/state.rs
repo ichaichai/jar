@@ -276,3 +276,101 @@ pub struct ServiceStatistics {
     /// a.1: Items accumulated — gas used.
     pub accumulate_gas_used: Gas,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Hash;
+    use scale::{Decode, Encode};
+
+    fn roundtrip<T: Default + Encode + Decode>() {
+        let val = T::default();
+        let encoded = val.encode();
+        let (decoded, consumed) = T::decode(&encoded).expect("decode should succeed");
+        assert_eq!(consumed, encoded.len(), "should consume all bytes");
+        assert_eq!(decoded.encode(), encoded, "re-encode should match");
+    }
+
+    #[test]
+    fn test_privileged_services_roundtrip() {
+        roundtrip::<PrivilegedServices>();
+    }
+
+    #[test]
+    fn test_judgments_roundtrip() {
+        roundtrip::<Judgments>();
+    }
+
+    #[test]
+    fn test_validator_statistics_roundtrip() {
+        roundtrip::<ValidatorStatistics>();
+    }
+
+    #[test]
+    fn test_validator_record_roundtrip() {
+        roundtrip::<ValidatorRecord>();
+    }
+
+    #[test]
+    fn test_core_statistics_roundtrip() {
+        roundtrip::<CoreStatistics>();
+    }
+
+    #[test]
+    fn test_service_statistics_roundtrip() {
+        roundtrip::<ServiceStatistics>();
+    }
+
+    #[test]
+    fn test_judgments_with_data() {
+        let j = Judgments {
+            good: vec![Hash([1u8; 32])].into_iter().collect(),
+            bad: vec![Hash([2u8; 32])].into_iter().collect(),
+            wonky: vec![Hash([3u8; 32])].into_iter().collect(),
+            offenders: vec![crate::Ed25519PublicKey([4u8; 32])]
+                .into_iter()
+                .collect(),
+        };
+        let encoded = j.encode();
+        let (decoded, consumed) = Judgments::decode(&encoded).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded.encode(), encoded);
+    }
+
+    #[test]
+    fn test_pending_report_roundtrip() {
+        use crate::work::*;
+        use std::collections::BTreeMap;
+        let pr = PendingReport {
+            report: WorkReport {
+                package_spec: AvailabilitySpec {
+                    package_hash: Hash::ZERO,
+                    bundle_length: 0,
+                    erasure_root: Hash::ZERO,
+                    exports_root: Hash::ZERO,
+                    exports_count: 0,
+                    erasure_shards: 0,
+                },
+                context: RefinementContext {
+                    anchor: Hash::ZERO,
+                    state_root: Hash::ZERO,
+                    beefy_root: Hash::ZERO,
+                    lookup_anchor: Hash::ZERO,
+                    lookup_anchor_timeslot: 0,
+                    prerequisites: vec![],
+                },
+                core_index: 0,
+                authorizer_hash: Hash::ZERO,
+                auth_gas_used: 0,
+                auth_output: vec![],
+                segment_root_lookup: BTreeMap::new(),
+                results: vec![],
+            },
+            timeslot: 42,
+        };
+        let encoded = pr.encode();
+        let (decoded, consumed) = PendingReport::decode(&encoded).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded.encode(), encoded);
+    }
+}
