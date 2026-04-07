@@ -149,8 +149,136 @@ impl core::fmt::Display for VmStateError {
 /// Maximum number of CODE caps per invocation.
 pub const MAX_CODE_CAPS: usize = 5;
 
-/// Maximum number of VMs (HANDLEs) per invocation.
+/// Maximum number of concurrent VMs per invocation.
 pub const MAX_VMS: usize = u16::MAX as usize;
+
+// ============================================================================
+// Generational Arena
+// ============================================================================
+
+/// Packed VM ID: low 16 bits = arena index, high 16 bits = generation.
+/// Generation prevents use-after-free: a stale HANDLE with the wrong
+/// generation is detected on lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmId(u32);
+
+impl VmId {
+    pub fn new(index: u16, generation: u16) -> Self {
+        Self((generation as u32) << 16 | index as u32)
+    }
+
+    pub fn index(self) -> u16 {
+        self.0 as u16
+    }
+
+    pub fn generation(self) -> u16 {
+        (self.0 >> 16) as u16
+    }
+}
+
+/// Arena entry: optional VM + generation counter.
+#[derive(Debug)]
+struct ArenaEntry {
+    vm: Option<VmInstance>,
+    generation: u16,
+}
+
+/// Generational arena for VM instances. Supports O(1) create, lookup,
+/// and drop with slot reuse. Stale handles detected via generation mismatch.
+#[derive(Debug)]
+pub struct VmArena {
+    entries: Vec<ArenaEntry>,
+    free_list: Vec<u16>,
+    live_count: u16,
+}
+
+impl VmArena {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::with_capacity(16),
+            free_list: Vec::new(),
+            live_count: 0,
+        }
+    }
+
+    /// Insert a new VM into the arena. Returns its VmId.
+    pub fn insert(&mut self, vm: VmInstance) -> Option<VmId> {
+        if self.live_count as usize >= MAX_VMS {
+            return None;
+        }
+        self.live_count += 1;
+
+        if let Some(index) = self.free_list.pop() {
+            let entry = &mut self.entries[index as usize];
+            let id = VmId::new(index, entry.generation);
+            entry.vm = Some(vm);
+            Some(id)
+        } else {
+            let index = self.entries.len() as u16;
+            let generation = 0u16;
+            self.entries.push(ArenaEntry {
+                vm: Some(vm),
+                generation,
+            });
+            Some(VmId::new(index, generation))
+        }
+    }
+
+    /// Look up a VM by ID. Returns None if the slot is empty or generation mismatches.
+    pub fn get(&self, id: VmId) -> Option<&VmInstance> {
+        let idx = id.index() as usize;
+        if idx >= self.entries.len() {
+            return None;
+        }
+        let entry = &self.entries[idx];
+        if entry.generation != id.generation() {
+            return None; // stale handle
+        }
+        entry.vm.as_ref()
+    }
+
+    /// Mutable lookup by ID.
+    pub fn get_mut(&mut self, id: VmId) -> Option<&mut VmInstance> {
+        let idx = id.index() as usize;
+        if idx >= self.entries.len() {
+            return None;
+        }
+        let entry = &mut self.entries[idx];
+        if entry.generation != id.generation() {
+            return None;
+        }
+        entry.vm.as_mut()
+    }
+
+    /// Remove a VM from the arena, reclaiming the slot.
+    /// Increments generation so stale handles are detected.
+    /// Returns the removed VmInstance (for cleanup).
+    pub fn remove(&mut self, id: VmId) -> Option<VmInstance> {
+        let idx = id.index() as usize;
+        if idx >= self.entries.len() {
+            return None;
+        }
+        let entry = &mut self.entries[idx];
+        if entry.generation != id.generation() {
+            return None;
+        }
+        let vm = entry.vm.take()?;
+        entry.generation = entry.generation.wrapping_add(1);
+        self.free_list.push(id.index());
+        self.live_count -= 1;
+        Some(vm)
+    }
+
+    /// Number of live VMs.
+    pub fn len(&self) -> usize {
+        self.live_count as usize
+    }
+
+    /// Check if empty.
+    pub fn is_empty(&self) -> bool {
+        self.live_count == 0
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -213,5 +341,98 @@ mod tests {
         vm.transition(VmState::Faulted).unwrap();
         assert!(!vm.can_call());
         assert!(vm.transition(VmState::Idle).is_err());
+    }
+
+    #[test]
+    fn test_vm_id_pack_unpack() {
+        let id = VmId::new(42, 7);
+        assert_eq!(id.index(), 42);
+        assert_eq!(id.generation(), 7);
+
+        let id2 = VmId::new(0, 0);
+        assert_eq!(id2.index(), 0);
+        assert_eq!(id2.generation(), 0);
+
+        let id3 = VmId::new(u16::MAX, u16::MAX);
+        assert_eq!(id3.index(), u16::MAX);
+        assert_eq!(id3.generation(), u16::MAX);
+    }
+
+    #[test]
+    fn test_arena_insert_get() {
+        let mut arena = VmArena::new();
+        let vm = VmInstance::new(0, 0, CapTable::new(), 1000);
+        let id = arena.insert(vm).unwrap();
+        assert_eq!(arena.len(), 1);
+
+        let vm_ref = arena.get(id).unwrap();
+        assert_eq!(vm_ref.gas(), 1000);
+    }
+
+    #[test]
+    fn test_arena_remove_reuse() {
+        let mut arena = VmArena::new();
+
+        let id1 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 100)).unwrap();
+        assert_eq!(id1.index(), 0);
+        assert_eq!(id1.generation(), 0);
+
+        // Remove
+        let removed = arena.remove(id1).unwrap();
+        assert_eq!(removed.gas(), 100);
+        assert_eq!(arena.len(), 0);
+
+        // Stale lookup fails
+        assert!(arena.get(id1).is_none());
+
+        // Reuse slot — same index, new generation
+        let id2 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 200)).unwrap();
+        assert_eq!(id2.index(), 0); // same slot
+        assert_eq!(id2.generation(), 1); // incremented
+
+        // Old id still fails
+        assert!(arena.get(id1).is_none());
+        // New id works
+        assert_eq!(arena.get(id2).unwrap().gas(), 200);
+    }
+
+    #[test]
+    fn test_arena_stale_handle() {
+        let mut arena = VmArena::new();
+
+        let id = arena.insert(VmInstance::new(0, 0, CapTable::new(), 100)).unwrap();
+        arena.remove(id).unwrap();
+
+        // Insert new VM in same slot
+        let _id2 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 200)).unwrap();
+
+        // Old id has wrong generation → None
+        assert!(arena.get(id).is_none());
+        assert!(arena.get_mut(id).is_none());
+        assert!(arena.remove(id).is_none());
+    }
+
+    #[test]
+    fn test_arena_multiple_slots() {
+        let mut arena = VmArena::new();
+        let mut ids = Vec::new();
+
+        for i in 0..10 {
+            let id = arena.insert(VmInstance::new(0, 0, CapTable::new(), i as u64)).unwrap();
+            ids.push(id);
+        }
+        assert_eq!(arena.len(), 10);
+
+        // Remove odd slots
+        for i in (1..10).step_by(2) {
+            arena.remove(ids[i]).unwrap();
+        }
+        assert_eq!(arena.len(), 5);
+
+        // Reuse should fill freed slots
+        for _ in 0..5 {
+            arena.insert(VmInstance::new(0, 0, CapTable::new(), 999)).unwrap();
+        }
+        assert_eq!(arena.len(), 10);
     }
 }
