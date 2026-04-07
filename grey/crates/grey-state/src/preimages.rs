@@ -101,3 +101,113 @@ pub fn process_preimages(
 
     Ok(stats)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_account(hash: Hash, len: u32) -> PreimageAccountData {
+        let mut requests = BTreeMap::new();
+        requests.insert((hash, len), vec![0]);
+        PreimageAccountData {
+            blobs: BTreeMap::new(),
+            requests,
+        }
+    }
+
+    #[test]
+    fn test_process_preimages_basic() {
+        let blob = b"hello";
+        let hash = grey_crypto::blake2b_256(blob);
+        let mut accounts = BTreeMap::new();
+        accounts.insert(1u32, make_account(hash, blob.len() as u32));
+
+        let result = process_preimages(&mut accounts, &[(1, blob.to_vec())], 10);
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats[&1].provided_count, 1);
+        assert_eq!(stats[&1].provided_size, 5);
+        // Blob should be stored
+        assert!(accounts[&1].blobs.contains_key(&hash));
+    }
+
+    #[test]
+    fn test_process_preimages_unneeded_no_request() {
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            1,
+            PreimageAccountData {
+                blobs: BTreeMap::new(),
+                requests: BTreeMap::new(), // no requests
+            },
+        );
+        let result = process_preimages(&mut accounts, &[(1, vec![0xAA])], 10);
+        assert_eq!(result, Err(PreimageError::PreimageUnneeded));
+    }
+
+    #[test]
+    fn test_process_preimages_unneeded_already_stored() {
+        let blob = b"data";
+        let hash = grey_crypto::blake2b_256(blob);
+        let mut account = make_account(hash, blob.len() as u32);
+        account.blobs.insert(hash, blob.to_vec()); // already stored
+
+        let mut accounts = BTreeMap::new();
+        accounts.insert(1, account);
+
+        let result = process_preimages(&mut accounts, &[(1, blob.to_vec())], 10);
+        assert_eq!(result, Err(PreimageError::PreimageUnneeded));
+    }
+
+    #[test]
+    fn test_process_preimages_not_sorted() {
+        let blob_a = b"aaa";
+        let blob_b = b"bbb";
+        let hash_a = grey_crypto::blake2b_256(blob_a);
+        let hash_b = grey_crypto::blake2b_256(blob_b);
+
+        let mut accounts = BTreeMap::new();
+        let mut account = make_account(hash_a, blob_a.len() as u32);
+        account
+            .requests
+            .insert((hash_b, blob_b.len() as u32), vec![0]);
+        accounts.insert(1, account);
+
+        // Submit in wrong order (both for service 1, but hash order wrong)
+        let preimages = if hash_a < hash_b {
+            vec![(1, blob_b.to_vec()), (1, blob_a.to_vec())]
+        } else {
+            vec![(1, blob_a.to_vec()), (1, blob_b.to_vec())]
+        };
+        let result = process_preimages(&mut accounts, &preimages, 10);
+        assert_eq!(result, Err(PreimageError::PreimagesNotSortedUnique));
+    }
+
+    #[test]
+    fn test_process_preimages_unknown_service() {
+        let mut accounts = BTreeMap::new();
+        // No service 99 in accounts
+        let result = process_preimages(&mut accounts, &[(99, vec![0xAA])], 10);
+        assert_eq!(result, Err(PreimageError::PreimageUnneeded));
+    }
+
+    #[test]
+    fn test_process_preimages_empty() {
+        let mut accounts = BTreeMap::new();
+        let result = process_preimages(&mut accounts, &[], 10);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_preimage_error_as_str() {
+        assert_eq!(
+            PreimageError::PreimagesNotSortedUnique.as_str(),
+            "preimages_not_sorted_unique"
+        );
+        assert_eq!(
+            PreimageError::PreimageUnneeded.as_str(),
+            "preimage_unneeded"
+        );
+    }
+}
