@@ -313,8 +313,8 @@ def initCap (blob : ByteArray) (args : ByteArray)
         if dataOff + cap.dataLen <= blob.size then
           let capData := blob.extract dataOff (dataOff + cap.dataLen)
           mem := copyToMem { mem with access } startAddr capData
-      -- Track args cap base address (cap_index=255 = IPC slot = args)
-      if cap.capIndex == 255 then
+      -- Track args cap base address (cap_index=0 = IPC slot = args)
+      if cap.capIndex == 0 then
         argsBase := startAddr
 
   -- Update memory access after all caps processed

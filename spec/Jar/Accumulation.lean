@@ -1551,34 +1551,36 @@ def accone (ps : PartialState) (serviceId : ServiceId)
                 : PVM.InvocationResult × AccContext :=
               match fuel with
               | 0 => ({ exitReason := .outOfGas, exitValue := 0, gas := 0,
-                        registers := ks.activeInst.registers, memory := mem }, ctx)
+                        registers := ks.activeInst.registers, memory := ks.memory }, ctx)
               | fuel' + 1 =>
                 let (ks', kr) := PVM.Kernel.runKernel ks fuel'
                 match kr with
                 | .halt v =>
                   ({ exitReason := .halt, exitValue := UInt64.ofNat v,
                      gas := Int64.ofUInt64 (UInt64.ofNat ks'.activeGas),
-                     registers := ks'.activeInst.registers, memory := mem }, ctx)
+                     registers := ks'.activeInst.registers, memory := ks'.memory }, ctx)
                 | .panic =>
                   ({ exitReason := .panic, exitValue := 0,
                      gas := Int64.ofUInt64 (UInt64.ofNat ks'.activeGas),
-                     registers := ks'.activeInst.registers, memory := mem }, ctx)
+                     registers := ks'.activeInst.registers, memory := ks'.memory }, ctx)
                 | .outOfGas =>
                   ({ exitReason := .outOfGas, exitValue := 0, gas := 0,
-                     registers := ks'.activeInst.registers, memory := mem }, ctx)
+                     registers := ks'.activeInst.registers, memory := ks'.memory }, ctx)
                 | .pageFault addr =>
                   ({ exitReason := .pageFault (UInt64.ofNat addr), exitValue := 0,
                      gas := Int64.ofUInt64 (UInt64.ofNat ks'.activeGas),
-                     registers := ks'.activeInst.registers, memory := mem }, ctx)
+                     registers := ks'.activeInst.registers, memory := ks'.memory }, ctx)
                 | .protocolCall slot =>
                   let callId := UInt64.ofNat slot
                   let gas' := UInt64.ofNat ks'.activeGas
-                  let (hostResult, ctx') := handleHostCall callId gas' ks'.activeInst.registers mem ctx
+                  let (hostResult, ctx') := handleHostCall callId gas' ks'.activeInst.registers ks'.memory ctx
                   match hostResult.exitReason with
                   | .hostCall _ =>
+                    -- Resume kernel with host result, sync memory back
                     let ks'' := PVM.Kernel.resumeProtocolCall ks'
                       (PVM.Kernel.getReg hostResult.registers 7)
                       (PVM.Kernel.getReg hostResult.registers 8)
+                    let ks'' := { ks'' with memory := hostResult.memory }
                     kernelLoop ks'' ctx' fuel'
                   | _ => (hostResult, ctx')
             kernelLoop kernelState ctx (totalGas.toNat + 1)

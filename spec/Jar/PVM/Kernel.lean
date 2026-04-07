@@ -35,7 +35,7 @@ structure BackingStore where
   data : ByteArray
   totalPages : Nat
 
-/-- Kernel state: VM pool + call stack + backing store. -/
+/-- Kernel state: VM pool + call stack + backing store + memory. -/
 structure KernelState where
   vms : Array VmInstance
   callStack : Array CallFrame
@@ -43,6 +43,8 @@ structure KernelState where
   activeVm : Nat
   untyped : UntypedCap
   backing : BackingStore
+  /-- Flat PVM memory shared by all VMs (simplified model). -/
+  memory : PVM.Memory
   memCycles : Nat
 
 /-- Result of running the kernel. -/
@@ -642,15 +644,15 @@ def runKernel (state : KernelState) (fuel : Nat) : KernelState × KernelResult :
       if codeCapId >= state.codeCaps.size then (state, .panic)
       else
         let codeCap := state.codeCaps[codeCapId]!
-        -- Run one PVM segment (uses flat memory — simplified model)
-        let flatMem : PVM.Memory := { pages := Dict.empty, access := #[] } -- TODO: build from mapped DATA caps
-        let result := PVM.run codeCap.program vm.pc vm.registers flatMem
+        -- Run one PVM segment using shared memory
+        let result := PVM.run codeCap.program vm.pc vm.registers state.memory
           (Int64.ofUInt64 (UInt64.ofNat vm.gas))
-        -- Sync VM state
+        -- Sync VM state + memory back
         let state := state.updateVm state.activeVm fun v =>
           { v with registers := result.registers
                    gas := result.gas.toUInt64.toNat
                    pc := result.nextPC }
+        let state := { state with memory := result.memory }
         match result.exitReason with
         | .hostCall imm =>
           let (state', dr) := dispatchEcalli state (UInt32.ofNat imm.toNat)
@@ -737,6 +739,7 @@ def initKernel (prog : PVM.ProgramBlob) (regs : PVM.Registers) (mem : PVM.Memory
     activeVm := 0
     untyped := { offset := 0, total := memoryPages }
     backing := backing
+    memory := mem
     memCycles := 25 }
 
 /-- Get remaining gas from the active VM. -/
