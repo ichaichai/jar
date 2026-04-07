@@ -1585,6 +1585,31 @@ impl Interpreter {
     /// Gas is charged per-instruction (1 gas each, matching the stepping path exactly).
     /// Returns (exit_reason, gas_used).
     pub fn run(&mut self) -> (ExitReason, Gas) {
+        // Macros for repetitive load/store dispatch arms. Each macro
+        // expands to the same code as the hand-written variants, so there is
+        // zero runtime overhead.
+        macro_rules! do_store {
+            ($self:expr, $exit:ident, $addr:expr, $write_fn:ident, $val:expr) => {{
+                let a = $addr;
+                if !$self.$write_fn(a, $val) {
+                    $exit = Some(ExitReason::PageFault(a & !0xFFF));
+                }
+            }};
+        }
+        macro_rules! do_load {
+            ($self:expr, $exit:ident, $dst:expr, $addr:expr, $read_fn:ident, |$v:ident| $conv:expr) => {{
+                let a = $addr;
+                match $self.$read_fn(a) {
+                    Some($v) => {
+                        $self.registers[$dst] = $conv;
+                    }
+                    None => {
+                        $exit = Some(ExitReason::PageFault(a & !0xFFF));
+                    }
+                }
+            }};
+        }
+
         let initial_gas = self.gas;
 
         // If tracing is enabled, fall back to the slow step-by-step path
@@ -2015,109 +2040,92 @@ impl Interpreter {
                 }
 
                 // === Indirect loads (two reg + imm) ===
-                Opcode::LoadIndU8 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u8(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndI8 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u8(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i8 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndU16 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u16_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndI16 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u16_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i16 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndU32 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u32_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndI32 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u32_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i32 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadIndU64 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    match self.read_u64_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
+                Opcode::LoadIndU8 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u8,
+                    |v| v as u64
+                ),
+                Opcode::LoadIndI8 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u8,
+                    |v| v as i8 as i64 as u64
+                ),
+                Opcode::LoadIndU16 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u16_le,
+                    |v| v as u64
+                ),
+                Opcode::LoadIndI16 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u16_le,
+                    |v| v as i16 as i64 as u64
+                ),
+                Opcode::LoadIndU32 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u32_le,
+                    |v| v as u64
+                ),
+                Opcode::LoadIndI32 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u32_le,
+                    |v| v as i32 as i64 as u64
+                ),
+                Opcode::LoadIndU64 => do_load!(
+                    self,
+                    exit,
+                    ra,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    read_u64_le,
+                    |v| v
+                ),
 
                 // === Indirect stores (two reg + imm) ===
-                Opcode::StoreIndU8 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    if !self.write_u8(addr, self.registers[ra] as u8) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreIndU16 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    if !self.write_u16_le(addr, self.registers[ra] as u16) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreIndU32 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    if !self.write_u32_le(addr, self.registers[ra] as u32) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreIndU64 => {
-                    let addr = self.registers[rb].wrapping_add(imm1) as u32;
-                    if !self.write_u64_le(addr, self.registers[ra]) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
+                Opcode::StoreIndU8 => do_store!(
+                    self,
+                    exit,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    write_u8,
+                    self.registers[ra] as u8
+                ),
+                Opcode::StoreIndU16 => do_store!(
+                    self,
+                    exit,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    write_u16_le,
+                    self.registers[ra] as u16
+                ),
+                Opcode::StoreIndU32 => do_store!(
+                    self,
+                    exit,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    write_u32_le,
+                    self.registers[ra] as u32
+                ),
+                Opcode::StoreIndU64 => do_store!(
+                    self,
+                    exit,
+                    self.registers[rb].wrapping_add(imm1) as u32,
+                    write_u64_le,
+                    self.registers[ra]
+                ),
 
                 // === Div/Rem (three reg, common in crypto) ===
                 Opcode::DivU32 => {
@@ -2213,161 +2221,82 @@ impl Interpreter {
                 }
 
                 // === Two immediates (store_imm: addr = imm1, value = imm2) ===
-                Opcode::StoreImmU8 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u8(addr, inst.imm2 as u8) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
+                Opcode::StoreImmU8 => do_store!(self, exit, imm1 as u32, write_u8, inst.imm2 as u8),
                 Opcode::StoreImmU16 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u16_le(addr, inst.imm2 as u16) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
+                    do_store!(self, exit, imm1 as u32, write_u16_le, inst.imm2 as u16)
                 }
                 Opcode::StoreImmU32 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u32_le(addr, inst.imm2 as u32) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
+                    do_store!(self, exit, imm1 as u32, write_u32_le, inst.imm2 as u32)
                 }
-                Opcode::StoreImmU64 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u64_le(addr, inst.imm2) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
+                Opcode::StoreImmU64 => do_store!(self, exit, imm1 as u32, write_u64_le, inst.imm2),
 
                 // === Absolute address loads (addr = imm1) ===
-                Opcode::LoadU8 => {
-                    let addr = imm1 as u32;
-                    match self.read_u8(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
+                Opcode::LoadU8 => do_load!(self, exit, ra, imm1 as u32, read_u8, |v| v as u64),
                 Opcode::LoadI8 => {
-                    let addr = imm1 as u32;
-                    match self.read_u8(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i8 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
+                    do_load!(self, exit, ra, imm1 as u32, read_u8, |v| v as i8 as i64
+                        as u64)
                 }
-                Opcode::LoadU16 => {
-                    let addr = imm1 as u32;
-                    match self.read_u16_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadI16 => {
-                    let addr = imm1 as u32;
-                    match self.read_u16_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i16 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadU32 => {
-                    let addr = imm1 as u32;
-                    match self.read_u32_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadI32 => {
-                    let addr = imm1 as u32;
-                    match self.read_u32_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v as i32 as i64 as u64;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
-                Opcode::LoadU64 => {
-                    let addr = imm1 as u32;
-                    match self.read_u64_le(addr) {
-                        Some(v) => {
-                            self.registers[ra] = v;
-                        }
-                        None => {
-                            exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                        }
-                    }
-                }
+                Opcode::LoadU16 => do_load!(self, exit, ra, imm1 as u32, read_u16_le, |v| v as u64),
+                Opcode::LoadI16 => do_load!(self, exit, ra, imm1 as u32, read_u16_le, |v| v as i16
+                    as i64
+                    as u64),
+                Opcode::LoadU32 => do_load!(self, exit, ra, imm1 as u32, read_u32_le, |v| v as u64),
+                Opcode::LoadI32 => do_load!(self, exit, ra, imm1 as u32, read_u32_le, |v| v as i32
+                    as i64
+                    as u64),
+                Opcode::LoadU64 => do_load!(self, exit, ra, imm1 as u32, read_u64_le, |v| v),
 
                 // === Absolute address stores (addr = imm1, value = reg[ra]) ===
                 Opcode::StoreU8 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u8(addr, self.registers[ra] as u8) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
+                    do_store!(self, exit, imm1 as u32, write_u8, self.registers[ra] as u8)
                 }
-                Opcode::StoreU16 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u16_le(addr, self.registers[ra] as u16) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreU32 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u32_le(addr, self.registers[ra] as u32) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
+                Opcode::StoreU16 => do_store!(
+                    self,
+                    exit,
+                    imm1 as u32,
+                    write_u16_le,
+                    self.registers[ra] as u16
+                ),
+                Opcode::StoreU32 => do_store!(
+                    self,
+                    exit,
+                    imm1 as u32,
+                    write_u32_le,
+                    self.registers[ra] as u32
+                ),
                 Opcode::StoreU64 => {
-                    let addr = imm1 as u32;
-                    if !self.write_u64_le(addr, self.registers[ra]) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
+                    do_store!(self, exit, imm1 as u32, write_u64_le, self.registers[ra])
                 }
 
                 // === Store imm indirect (addr = reg[ra] + imm1, value = imm2) ===
-                Opcode::StoreImmIndU8 => {
-                    let addr = self.registers[ra].wrapping_add(imm1) as u32;
-                    if !self.write_u8(addr, inst.imm2 as u8) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreImmIndU16 => {
-                    let addr = self.registers[ra].wrapping_add(imm1) as u32;
-                    if !self.write_u16_le(addr, inst.imm2 as u16) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreImmIndU32 => {
-                    let addr = self.registers[ra].wrapping_add(imm1) as u32;
-                    if !self.write_u32_le(addr, inst.imm2 as u32) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
-                Opcode::StoreImmIndU64 => {
-                    let addr = self.registers[ra].wrapping_add(imm1) as u32;
-                    if !self.write_u64_le(addr, inst.imm2) {
-                        exit = Some(ExitReason::PageFault(addr & !0xFFF));
-                    }
-                }
+                Opcode::StoreImmIndU8 => do_store!(
+                    self,
+                    exit,
+                    self.registers[ra].wrapping_add(imm1) as u32,
+                    write_u8,
+                    inst.imm2 as u8
+                ),
+                Opcode::StoreImmIndU16 => do_store!(
+                    self,
+                    exit,
+                    self.registers[ra].wrapping_add(imm1) as u32,
+                    write_u16_le,
+                    inst.imm2 as u16
+                ),
+                Opcode::StoreImmIndU32 => do_store!(
+                    self,
+                    exit,
+                    self.registers[ra].wrapping_add(imm1) as u32,
+                    write_u32_le,
+                    inst.imm2 as u32
+                ),
+                Opcode::StoreImmIndU64 => do_store!(
+                    self,
+                    exit,
+                    self.registers[ra].wrapping_add(imm1) as u32,
+                    write_u64_le,
+                    inst.imm2
+                ),
 
                 // === LoadImmJump (reg[ra] = imm1, branch to target) ===
                 Opcode::LoadImmJump => {
