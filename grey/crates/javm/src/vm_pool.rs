@@ -341,7 +341,7 @@ impl WindowPool {
     pub fn new(n: usize) -> Option<Self> {
         let mut windows = Vec::with_capacity(n);
         for _ in 0..n {
-            windows.push(crate::backing::CodeWindow::new()?);
+            windows.push(crate::backing::CodeWindow::new(0)?);
         }
         Some(Self {
             windows,
