@@ -275,6 +275,31 @@ impl VmArena {
         Some(vm)
     }
 
+    /// Direct access by arena index (no generation check). Panics if slot is empty.
+    /// Use for VMs known to be live (active VM, caller on call stack).
+    pub fn vm(&self, idx: u16) -> &VmInstance {
+        self.entries[idx as usize]
+            .vm
+            .as_ref()
+            .expect("VM slot empty")
+    }
+
+    /// Mutable direct access by arena index (no generation check). Panics if slot is empty.
+    pub fn vm_mut(&mut self, idx: u16) -> &mut VmInstance {
+        self.entries[idx as usize]
+            .vm
+            .as_mut()
+            .expect("VM slot empty")
+    }
+
+    /// Get the current generation for a slot. Used for window pool call_count tracking.
+    pub fn generation_of(&self, idx: u16) -> u16 {
+        self.entries
+            .get(idx as usize)
+            .map(|e| e.generation)
+            .unwrap_or(0)
+    }
+
     /// Number of live VMs.
     pub fn len(&self) -> usize {
         self.live_count as usize

@@ -242,8 +242,8 @@ impl core::fmt::Debug for CodeCap {
 /// VM owner handle. Unique per VM, not copyable. Provides CALL + management ops.
 #[derive(Debug)]
 pub struct HandleCap {
-    /// VM index in the kernel's VM pool.
-    pub vm_id: u16,
+    /// VM ID in the kernel's arena (index + generation for stale detection).
+    pub vm_id: crate::vm_pool::VmId,
     /// Per-CALL gas ceiling (inherited by DOWNGRADEd CALLABLEs).
     pub max_gas: Option<u64>,
 }
@@ -251,8 +251,8 @@ pub struct HandleCap {
 /// VM entry point. Copyable. Provides CALL only (no management ops).
 #[derive(Debug, Clone)]
 pub struct CallableCap {
-    /// VM index in the kernel's VM pool.
-    pub vm_id: u16,
+    /// VM ID in the kernel's arena (index + generation for stale detection).
+    pub vm_id: crate::vm_pool::VmId,
     /// Per-CALL gas ceiling.
     pub max_gas: Option<u64>,
 }
@@ -604,14 +604,14 @@ mod tests {
         }
 
         let handle = Cap::Handle(HandleCap {
-            vm_id: 0,
+            vm_id: crate::vm_pool::VmId::new(0, 0),
             max_gas: None,
         });
         assert!(!handle.is_copyable());
         assert!(handle.try_copy().is_none());
 
         let callable = Cap::Callable(CallableCap {
-            vm_id: 0,
+            vm_id: crate::vm_pool::VmId::new(0, 0),
             max_gas: None,
         });
         assert!(callable.is_copyable());
@@ -643,7 +643,7 @@ mod tests {
         table.set(
             10,
             Cap::Callable(CallableCap {
-                vm_id: 1,
+                vm_id: crate::vm_pool::VmId::new(1, 0),
                 max_gas: Some(5000),
             }),
         );
@@ -663,7 +663,7 @@ mod tests {
         table.set(
             10,
             Cap::Callable(CallableCap {
-                vm_id: 1,
+                vm_id: crate::vm_pool::VmId::new(1, 0),
                 max_gas: None,
             }),
         );
