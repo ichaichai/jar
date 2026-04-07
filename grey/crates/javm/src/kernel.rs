@@ -18,9 +18,9 @@ use crate::cap::{
     Access, CallableCap, Cap, CapTable, CodeCap, DataCap, HandleCap, IPC_SLOT, UntypedCap,
 };
 use crate::program::{self, CapEntryType, CapManifestEntry, ParsedBlob};
-use crate::vm_pool::{CallFrame, MAX_CODE_CAPS, VmArena, VmId, VmInstance, VmState};
 #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
 use crate::vm_pool::WindowPool;
+use crate::vm_pool::{CallFrame, MAX_CODE_CAPS, VmArena, VmId, VmInstance, VmState};
 
 /// ecalli immediate ranges.
 const CALL_RANGE_END: u32 = 0x100;
@@ -459,7 +459,8 @@ impl InvocationKernel {
             return DispatchResult::Continue;
         }
 
-        self.vm_arena.vm_mut(dst_vm as u16)
+        self.vm_arena
+            .vm_mut(dst_vm as u16)
             .cap_table
             .set(dst_slot, Cap::Data(data_cap));
         self.set_active_reg(7, dst_slot as u64);
@@ -521,7 +522,8 @@ impl InvocationKernel {
             self.set_active_reg(7, RESULT_WHAT);
             return DispatchResult::Continue;
         }
-        self.vm_arena.vm_mut(dst_vm as u16)
+        self.vm_arena
+            .vm_mut(dst_vm as u16)
             .cap_table
             .set(dst_slot, Cap::Handle(handle));
         self.set_active_reg(7, dst_slot as u64);
@@ -562,18 +564,17 @@ impl InvocationKernel {
 
         // Save caller state
         let caller_id = self.active_vm;
-        let _ = self.vm_arena.vm_mut(caller_id).transition(VmState::WaitingForReply);
+        let _ = self
+            .vm_arena
+            .vm_mut(caller_id)
+            .transition(VmState::WaitingForReply);
 
         // Handle IPC cap (φ[12]). 0 = no cap to pass (slot 0 is IPC itself).
         let ipc_cap_slot = self.active_reg(12) as u8;
         let mut ipc_cap_idx = None;
         let mut ipc_was_mapped = None;
 
-        if ipc_cap_slot != 0
-            && !self.vm_arena.vm(caller_id)
-                .cap_table
-                .is_empty(ipc_cap_slot)
-        {
+        if ipc_cap_slot != 0 && !self.vm_arena.vm(caller_id).cap_table.is_empty(ipc_cap_slot) {
             // Take cap from caller, auto-unmap if DATA
             if let Some(mut cap) = self.vm_arena.vm_mut(caller_id).cap_table.take(ipc_cap_slot) {
                 if let Cap::Data(ref mut d) = cap {
@@ -581,7 +582,10 @@ impl InvocationKernel {
                 }
                 ipc_cap_idx = Some(ipc_cap_slot);
                 // Place in callee's IPC slot [0]
-                self.vm_arena.vm_mut(target_vm_id).cap_table.set(IPC_SLOT, cap);
+                self.vm_arena
+                    .vm_mut(target_vm_id)
+                    .cap_table
+                    .set(IPC_SLOT, cap);
             }
         }
 
@@ -643,7 +647,10 @@ impl InvocationKernel {
             {
                 d.map(base_page, access);
             }
-            self.vm_arena.vm_mut(caller_id).cap_table.set(caller_slot, cap);
+            self.vm_arena
+                .vm_mut(caller_id)
+                .cap_table
+                .set(caller_slot, cap);
         }
 
         // Pass φ[7] only + set φ[8]=0 (status = REPLY success)
@@ -681,8 +688,7 @@ impl InvocationKernel {
                 Some(Cap::Handle(h)) => {
                     // Validate VmId (generation check for stale handles)
                     let target = self.vm_arena.get(h.vm_id)?;
-                    if target.state == VmState::Running
-                        || target.state == VmState::WaitingForReply
+                    if target.state == VmState::Running || target.state == VmState::WaitingForReply
                     {
                         return None; // target must be non-RUNNING
                     }
@@ -734,10 +740,15 @@ impl InvocationKernel {
                     self.handle_call(slot)
                 } else {
                     // Remote cap — look up the cap in the remote VM
-                    let cap_type = self.vm_arena.vm(vm_idx as u16).cap_table.get(slot).map(|c| match c {
-                        Cap::Protocol(p) => Some(p.id),
-                        _ => None,
-                    });
+                    let cap_type = self
+                        .vm_arena
+                        .vm(vm_idx as u16)
+                        .cap_table
+                        .get(slot)
+                        .map(|c| match c {
+                            Cap::Protocol(p) => Some(p.id),
+                            _ => None,
+                        });
                     match cap_type {
                         Some(Some(id)) => DispatchResult::ProtocolCall { slot: id },
                         _ => {
@@ -906,7 +917,8 @@ impl InvocationKernel {
                 }
                 // Map new location
                 unsafe {
-                    self.backing.map_pages(wb, base_page, d.backing_offset, d.page_count, access);
+                    self.backing
+                        .map_pages(wb, base_page, d.backing_offset, d.page_count, access);
                 }
             }
             _ => {
@@ -976,7 +988,10 @@ impl InvocationKernel {
         // DROP HANDLE → reclaim VM via arena.remove()
         if let Some(Cap::Handle(h)) = self.vm_arena.vm(self.active_vm).cap_table.get(cap_idx) {
             let vm_id = h.vm_id;
-            self.vm_arena.vm_mut(self.active_vm).cap_table.drop_cap(cap_idx);
+            self.vm_arena
+                .vm_mut(self.active_vm)
+                .cap_table
+                .drop_cap(cap_idx);
             // Reclaim the VM — release window and remove from arena
             #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
             self.window_pool.release(vm_id.index());
@@ -1101,7 +1116,10 @@ impl InvocationKernel {
 
         // Save caller state
         let caller_id = self.active_vm;
-        let _ = self.vm_arena.vm_mut(caller_id).transition(VmState::WaitingForReply);
+        let _ = self
+            .vm_arena
+            .vm_mut(caller_id)
+            .transition(VmState::WaitingForReply);
 
         // Push call frame (no IPC cap for RESUME)
         self.call_stack.push(CallFrame {
@@ -1180,7 +1198,9 @@ impl InvocationKernel {
             Some(Cap::Data(d)) => {
                 if let Some(base_offset) = d.base_offset {
                     if let Some(wb) = window_base {
-                        for p in page_offset..page_offset.saturating_add(page_count).min(d.page_count) {
+                        for p in
+                            page_offset..page_offset.saturating_add(page_count).min(d.page_count)
+                        {
                             if d.is_page_mapped(p) {
                                 unsafe {
                                     BackingStore::unmap_pages(wb, base_offset + p, 1);
@@ -1218,8 +1238,14 @@ impl InvocationKernel {
             _ => unreachable!(),
         };
         let (lo, hi) = cap.split(page_off).unwrap();
-        self.vm_arena.vm_mut(s_vm as u16).cap_table.set(s_slot, Cap::Data(lo));
-        self.vm_arena.vm_mut(o_vm as u16).cap_table.set(o_slot, Cap::Data(hi));
+        self.vm_arena
+            .vm_mut(s_vm as u16)
+            .cap_table
+            .set(s_slot, Cap::Data(lo));
+        self.vm_arena
+            .vm_mut(o_vm as u16)
+            .cap_table
+            .set(o_slot, Cap::Data(hi));
         DispatchResult::Continue
     }
 
@@ -1304,7 +1330,10 @@ impl InvocationKernel {
                 return DispatchResult::Continue;
             }
         };
-        self.vm_arena.vm_mut(o_vm as u16).cap_table.set(o_slot, copy);
+        self.vm_arena
+            .vm_mut(o_vm as u16)
+            .cap_table
+            .set(o_slot, copy);
         DispatchResult::Continue
     }
 
@@ -1327,7 +1356,8 @@ impl InvocationKernel {
             self.set_active_reg(7, RESULT_WHAT);
             return DispatchResult::Continue;
         }
-        self.vm_arena.vm_mut(o_vm as u16)
+        self.vm_arena
+            .vm_mut(o_vm as u16)
             .cap_table
             .set(o_slot, Cap::Callable(CallableCap { vm_id, max_gas }));
         DispatchResult::Continue
@@ -1477,13 +1507,8 @@ impl InvocationKernel {
             {
                 let access = d.access.unwrap_or(Access::RO);
                 unsafe {
-                    self.backing.map_pages(
-                        wb,
-                        base_offset,
-                        d.backing_offset,
-                        d.page_count,
-                        access,
-                    );
+                    self.backing
+                        .map_pages(wb, base_offset, d.backing_offset, d.page_count, access);
                 }
             }
         }
@@ -1994,7 +2019,10 @@ impl InvocationKernel {
                     {
                         d.map(bp, acc);
                     }
-                    self.vm_arena.vm_mut(caller_id).cap_table.set(caller_slot, cap);
+                    self.vm_arena
+                        .vm_mut(caller_id)
+                        .cap_table
+                        .set(caller_slot, cap);
                 }
 
                 // Return result
@@ -2351,7 +2379,9 @@ mod tests {
         let _ = kernel.vm_arena.vm_mut(0).transition(VmState::Running);
 
         // Set a protocol cap at slot 1 (GAS)
-        kernel.vm_arena.vm_mut(0)
+        kernel
+            .vm_arena
+            .vm_mut(0)
             .cap_table
             .set(1, Cap::Protocol(ProtocolCap { id: 1 }));
 

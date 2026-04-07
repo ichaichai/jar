@@ -65,7 +65,10 @@ impl PvmInstance {
     }
 
     pub fn set_gas(&mut self, gas: Gas) {
-        self.kernel.vm_arena.vm_mut(self.kernel.active_vm).set_gas(gas);
+        self.kernel
+            .vm_arena
+            .vm_mut(self.kernel.active_vm)
+            .set_gas(gas);
     }
 
     /// Read a register. Routes through live_ctx when the recompiler is active,

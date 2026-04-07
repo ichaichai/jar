@@ -552,7 +552,9 @@ mod tests {
     fn test_arena_remove_reuse() {
         let mut arena = VmArena::new();
 
-        let id1 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 100)).unwrap();
+        let id1 = arena
+            .insert(VmInstance::new(0, 0, CapTable::new(), 100))
+            .unwrap();
         assert_eq!(id1.index(), 0);
         assert_eq!(id1.generation(), 0);
 
@@ -565,7 +567,9 @@ mod tests {
         assert!(arena.get(id1).is_none());
 
         // Reuse slot — same index, new generation
-        let id2 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 200)).unwrap();
+        let id2 = arena
+            .insert(VmInstance::new(0, 0, CapTable::new(), 200))
+            .unwrap();
         assert_eq!(id2.index(), 0); // same slot
         assert_eq!(id2.generation(), 1); // incremented
 
@@ -579,11 +583,15 @@ mod tests {
     fn test_arena_stale_handle() {
         let mut arena = VmArena::new();
 
-        let id = arena.insert(VmInstance::new(0, 0, CapTable::new(), 100)).unwrap();
+        let id = arena
+            .insert(VmInstance::new(0, 0, CapTable::new(), 100))
+            .unwrap();
         arena.remove(id).unwrap();
 
         // Insert new VM in same slot
-        let _id2 = arena.insert(VmInstance::new(0, 0, CapTable::new(), 200)).unwrap();
+        let _id2 = arena
+            .insert(VmInstance::new(0, 0, CapTable::new(), 200))
+            .unwrap();
 
         // Old id has wrong generation → None
         assert!(arena.get(id).is_none());
@@ -597,7 +605,9 @@ mod tests {
         let mut ids = Vec::new();
 
         for i in 0..10 {
-            let id = arena.insert(VmInstance::new(0, 0, CapTable::new(), i as u64)).unwrap();
+            let id = arena
+                .insert(VmInstance::new(0, 0, CapTable::new(), i as u64))
+                .unwrap();
             ids.push(id);
         }
         assert_eq!(arena.len(), 10);
@@ -610,7 +620,9 @@ mod tests {
 
         // Reuse should fill freed slots
         for _ in 0..5 {
-            arena.insert(VmInstance::new(0, 0, CapTable::new(), 999)).unwrap();
+            arena
+                .insert(VmInstance::new(0, 0, CapTable::new(), 999))
+                .unwrap();
         }
         assert_eq!(arena.len(), 10);
     }
