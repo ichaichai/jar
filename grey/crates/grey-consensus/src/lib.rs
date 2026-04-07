@@ -76,4 +76,35 @@ mod tests {
         assert_eq!(chain_ticket_score(&[false, false, false]), 0);
         assert_eq!(chain_ticket_score(&[]), 0);
     }
+
+    #[test]
+    fn test_rotation_index() {
+        // R=10 (ROTATION_PERIOD)
+        assert_eq!(rotation_index(0), 0);
+        assert_eq!(rotation_index(9), 0);
+        assert_eq!(rotation_index(10), 1);
+        assert_eq!(rotation_index(25), 2);
+    }
+
+    #[test]
+    fn test_ticket_submission_across_epochs() {
+        // Submission window resets each epoch (E=600, Y=500)
+        assert!(is_ticket_submission_open(0)); // epoch 0, slot 0
+        assert!(is_ticket_submission_open(499)); // epoch 0, slot 499
+        assert!(!is_ticket_submission_open(500)); // epoch 0, slot 500 (closed)
+        assert!(is_ticket_submission_open(600)); // epoch 1, slot 0 (reopened)
+        assert!(is_ticket_submission_open(1099)); // epoch 1, slot 499
+        assert!(!is_ticket_submission_open(1100)); // epoch 1, slot 500 (closed)
+    }
+
+    #[test]
+    fn test_epoch_boundary_consistency() {
+        // Last slot of epoch N and first slot of epoch N+1
+        let last_slot_e0 = 599;
+        let first_slot_e1 = 600;
+        assert_eq!(epoch_index(last_slot_e0), 0);
+        assert_eq!(epoch_index(first_slot_e1), 1);
+        assert_eq!(slot_in_epoch(last_slot_e0), 599);
+        assert_eq!(slot_in_epoch(first_slot_e1), 0);
+    }
 }
