@@ -255,7 +255,8 @@ def zeta (code : ByteArray) (i : Nat) : Nat :=
 -- ============================================================================
 
 /-- A.5.2: OneImm — one immediate (ecalli).
-    lX = min(4, ℓ), νX = X_lX(E_lX⁻¹(ζ[ı+1..+lX])). -/
+    lX = min(4, ℓ), νX = X_lX(E_lX⁻¹(ζ[ı+1..+lX])). Sign-extended per GP.
+    Valid range for jar1: 0-127. Values ≥128 fault the VM. -/
 def extractOneImm (code : ByteArray) (pc : Nat) (skip : Nat) : UInt64 :=
   let lx := min 4 skip
   readSignedAt code (pc + 1) lx

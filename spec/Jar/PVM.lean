@@ -99,7 +99,9 @@ end Memory
 inductive ExitReason where
   /-- Regular termination (halt instruction). -/
   | halt : ExitReason
-  /-- Irregular termination (exceptional circumstance). -/
+  /-- Deliberate termination (trap instruction, opcode 0). -/
+  | trap : ExitReason
+  /-- Runtime error (bad djump, invalid opcode, etc.). -/
   | panic : ExitReason
   /-- Gas exhaustion. -/
   | outOfGas : ExitReason
@@ -107,6 +109,8 @@ inductive ExitReason where
   | pageFault (address : Reg) : ExitReason
   /-- Host-call request: ecalli instruction with identifier. -/
   | hostCall (id : Reg) : ExitReason
+  /-- Management op / dynamic CALL: ecall instruction (opcode 3). -/
+  | ecall : ExitReason
 
 /-- Complete PVM machine state. -/
 structure MachineState where

@@ -106,6 +106,15 @@ def Cap.isCopyable : Cap → Bool
   | .data _ => false
   | .handle _ => false
 
+/-- Create a copy of this cap (only for copyable types). -/
+def Cap.tryCopy : Cap → Option Cap
+  | .untyped u => some (.untyped u)
+  | .code c => some (.code c)
+  | .callable c => some (.callable c)
+  | .protocol p => some (.protocol p)
+  | .data _ => none
+  | .handle _ => none
+
 -- ============================================================================
 -- Cap Table (CNode)
 -- ============================================================================
@@ -137,6 +146,14 @@ def set (t : CapTable) (idx : Nat) (c : Cap) : CapTable :=
   if idx < t.slots.size then
     { slots := t.slots.set! idx (some c)
       originalBitmap := if idx < 29 then t.originalBitmap.set! idx false
+                        else t.originalBitmap }
+  else t
+
+/-- Set a cap and mark it as original (for kernel init of protocol caps). -/
+def setOriginal (t : CapTable) (idx : Nat) (c : Cap) : CapTable :=
+  if idx < t.slots.size then
+    { slots := t.slots.set! idx (some c)
+      originalBitmap := if idx < t.originalBitmap.size then t.originalBitmap.set! idx true
                         else t.originalBitmap }
   else t
 

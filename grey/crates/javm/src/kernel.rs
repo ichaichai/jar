@@ -36,6 +36,8 @@ const MGMT_DIRTY: u32 = 0xC;
 
 /// WHAT error code (2^64 - 2).
 const RESULT_WHAT: u64 = u64::MAX - 1;
+const RESULT_LOW: u64 = u64::MAX - 7; // gas limit too low
+const RESULT_HUH: u64 = u64::MAX - 8; // invalid operation
 
 /// Result from running the kernel until it needs host interaction.
 #[derive(Debug)]
@@ -289,6 +291,11 @@ impl InvocationKernel {
     /// Returns a `DispatchResult` indicating what the kernel should do next.
     #[inline(always)]
     pub fn dispatch_ecalli(&mut self, imm: u32) -> DispatchResult {
+        // Range check: ecalli only valid for 0-127. ≥128 faults the VM.
+        if imm > 127 {
+            self.set_active_reg(7, imm as u64);
+            return DispatchResult::Fault(FaultType::Panic); // status 5 when implemented
+        }
         // Charge ecalli gas cost (10) — matches GP host call gas charge
         let ecalli_gas: u64 = 10;
         let current_gas = self.active_gas();
@@ -611,10 +618,10 @@ impl InvocationKernel {
             self.vms[caller_id as usize].cap_table.set(caller_slot, cap);
         }
 
-        // Pass results: callee's φ[7], φ[8] → caller's φ[7], φ[8]
-        let callee_regs = *self.vms[callee_id as usize].regs();
-        self.vms[caller_id as usize].set_reg(7, callee_regs[7]);
-        self.vms[caller_id as usize].set_reg(8, callee_regs[8]);
+        // Pass φ[7] only + set φ[8]=0 (status = REPLY success)
+        let callee_r7 = self.vms[callee_id as usize].reg(7);
+        self.vms[caller_id as usize].set_reg(7, callee_r7);
+        self.vms[caller_id as usize].set_reg(8, 0);
 
         // Caller → Running
         let _ = self.vms[caller_id as usize].transition(VmState::Running);
@@ -686,8 +693,8 @@ impl InvocationKernel {
         self.vms[self.active_vm as usize].set_gas(g - ecall_gas);
 
         let phi12 = self.active_reg(12);
-        let subject_ref = (phi12 & 0xFFFFFFFF) as u32;
-        let object_ref = (phi12 >> 32) as u32;
+        let object_ref = (phi12 & 0xFFFFFFFF) as u32; // low u32
+        let subject_ref = (phi12 >> 32) as u32; // high u32
 
         match op {
             0x00 => {
@@ -1610,6 +1617,7 @@ impl InvocationKernel {
 
         match exit {
             crate::ExitReason::Halt => (0, 0),
+            crate::ExitReason::Trap => (7, 0), // deliberate trap
             crate::ExitReason::Panic => (1, 0),
             crate::ExitReason::OutOfGas => (2, 0),
             crate::ExitReason::PageFault(addr) => (3, addr),
@@ -1711,8 +1719,16 @@ impl InvocationKernel {
                         _ => return KernelResult::Panic,
                     }
                 }
+                7 => {
+                    // Trap (deliberate, opcode 0)
+                    match self.handle_vm_fault(FaultType::Trap) {
+                        DispatchResult::RootPanic => return KernelResult::Panic,
+                        DispatchResult::Continue => continue,
+                        _ => return KernelResult::Panic,
+                    }
+                }
                 1 => {
-                    // Panic
+                    // Panic (runtime error)
                     match self.handle_vm_fault(FaultType::Panic) {
                         DispatchResult::RootPanic => return KernelResult::Panic,
                         DispatchResult::Continue => continue,
@@ -1883,8 +1899,19 @@ impl InvocationKernel {
         }
     }
 
-    /// Handle a callee fault (panic/OOG/page fault).
+    /// Handle a callee fault with status code and aux value.
     pub fn handle_vm_fault(&mut self, fault: FaultType) -> DispatchResult {
+        // Determine status code and aux value based on fault type
+        let (status, aux_value) = match fault {
+            FaultType::Trap => {
+                // Status 1: trap. Preserve child's φ[7] as trap code.
+                (1u64, self.vms[self.active_vm as usize].reg(7))
+            }
+            FaultType::Panic => (2, RESULT_HUH), // Status 2: runtime panic
+            FaultType::OutOfGas => (3, RESULT_LOW), // Status 3: OOG
+            FaultType::PageFault(addr) => (4, addr as u64), // Status 4: page fault
+        };
+
         let callee_id = self.active_vm;
         let _ = self.vms[callee_id as usize].transition(VmState::Faulted);
 
@@ -1897,9 +1924,9 @@ impl InvocationKernel {
                 let cg = self.vms[caller_id as usize].gas();
                 self.vms[caller_id as usize].set_gas(cg + unused_gas);
 
-                // IPC cap is lost (callee faulted)
-                // Set error status in caller registers
-                self.vms[caller_id as usize].set_reg(7, RESULT_WHAT);
+                // Set φ[7]=aux_value, φ[8]=status
+                self.vms[caller_id as usize].set_reg(7, aux_value);
+                self.vms[caller_id as usize].set_reg(8, status);
 
                 let _ = self.vms[caller_id as usize].transition(VmState::Running);
                 self.active_vm = caller_id;
@@ -1908,7 +1935,7 @@ impl InvocationKernel {
             None => {
                 // Root VM faulted
                 match fault {
-                    FaultType::Panic => DispatchResult::RootPanic,
+                    FaultType::Trap | FaultType::Panic => DispatchResult::RootPanic,
                     FaultType::OutOfGas => DispatchResult::RootOutOfGas,
                     FaultType::PageFault(addr) => DispatchResult::RootPageFault(addr),
                 }
@@ -1939,6 +1966,7 @@ pub enum DispatchResult {
 /// Fault types.
 #[derive(Debug, Clone, Copy)]
 pub enum FaultType {
+    Trap,
     Panic,
     OutOfGas,
     PageFault(u32),
@@ -2046,12 +2074,14 @@ mod tests {
             Some(Cap::Untyped(_))
         ));
 
-        // Set φ[7]=4 pages, φ[12]=dst_slot (66, because 65=stack DATA from blob)
+        // Use ecall (UNTYPED slot 254 > 127, can't use ecalli)
+        // φ[7]=4 pages, φ[11]=0 (CALL), φ[12]=dst_slot(low) | untyped_slot(high)
         kernel.set_active_reg(7, 4);
-        kernel.set_active_reg(12, 66);
-
-        // Dispatch CALL on UNTYPED slot
-        let result = kernel.dispatch_ecalli(untyped_slot as u32);
+        kernel.set_active_reg(11, 0); // op = CALL
+        kernel.set_active_reg(12, 66 | ((untyped_slot as u64) << 32));
+        #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
+        kernel.flush_live_ctx();
+        let result = kernel.dispatch_ecall(0);
         assert!(matches!(result, DispatchResult::Continue));
 
         // φ[7] should be the dst_slot
@@ -2132,9 +2162,9 @@ mod tests {
         assert_eq!(kernel.vms[0].state, VmState::Running);
         assert_eq!(kernel.vms[1].state, VmState::Idle);
 
-        // Caller received results
+        // Caller received results: φ[7]=child's return, φ[8]=0 (status=REPLY)
         assert_eq!(kernel.active_reg(7), 100);
-        assert_eq!(kernel.active_reg(8), 200);
+        assert_eq!(kernel.active_reg(8), 0);
     }
 
     #[test]
@@ -2181,9 +2211,13 @@ mod tests {
         kernel.dispatch_ecalli(64);
         let handle_idx = kernel.active_reg(7) as u8;
 
-        // SET_MAX_GAS on handle: limit to 5000 gas
+        // SET_MAX_GAS on handle via ecall: φ[7]=5000, φ[11]=0x0B, φ[12]=handle(high)
         kernel.set_active_reg(7, 5000);
-        kernel.dispatch_ecalli((MGMT_SET_MAX_GAS << 8) | handle_idx as u32);
+        kernel.set_active_reg(11, 0x0B); // SET_MAX_GAS
+        kernel.set_active_reg(12, (handle_idx as u64) << 32); // subject=handle, object=0
+        #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
+        kernel.flush_live_ctx();
+        kernel.dispatch_ecall(0x0B);
 
         // CALL child — gas should be capped at 5000
         let parent_gas_before = kernel.vms[0].gas();
@@ -2246,9 +2280,15 @@ mod tests {
         kernel.dispatch_ecalli(64);
         let handle_idx = kernel.active_reg(7) as u8;
 
-        // DOWNGRADE handle → callable
-        kernel.dispatch_ecalli((MGMT_DOWNGRADE << 8) | handle_idx as u32);
-        let callable_idx = kernel.active_reg(7) as u8;
+        // DOWNGRADE handle → callable via ecall
+        // φ[11]=0x0A, φ[12]=dst_slot(low) | handle(high)
+        kernel.set_active_reg(11, 0x0A); // DOWNGRADE
+        // dst slot: pick slot 67 for the callable
+        kernel.set_active_reg(12, 67 | ((handle_idx as u64) << 32));
+        #[cfg(all(feature = "std", target_os = "linux", target_arch = "x86_64"))]
+        kernel.flush_live_ctx();
+        kernel.dispatch_ecall(0x0A);
+        let callable_idx = 67u8;
 
         // Handle still exists
         assert!(matches!(

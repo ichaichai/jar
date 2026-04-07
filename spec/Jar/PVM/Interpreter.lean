@@ -51,6 +51,13 @@ def run (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
             registers := regs
             memory := mem
             lastPC := pc }
+        | .trap =>
+          { exitReason := .trap
+            exitValue := if 7 < regs.size then regs[7]! else 0
+            gas := gas'
+            registers := regs
+            memory := mem
+            lastPC := pc }
         | .panic =>
           { exitReason := .panic
             exitValue := if 7 < regs.size then regs[7]! else 0
@@ -67,6 +74,14 @@ def run (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory)
             lastPC := pc }
         | .hostCall id regs' mem' npc =>
           { exitReason := .hostCall id
+            exitValue := if 7 < regs'.size then regs'[7]! else 0
+            gas := gas'
+            registers := regs'
+            memory := mem'
+            nextPC := npc
+            lastPC := pc }
+        | .ecall regs' mem' npc =>
+          { exitReason := .ecall
             exitValue := if 7 < regs'.size then regs'[7]! else 0
             gas := gas'
             registers := regs'
@@ -116,6 +131,9 @@ def runBlockGasWith (costFn : ByteArray → ByteArray → Nat → Nat)
         | .halt =>
           { exitReason := .halt, exitValue := if 7 < regs.size then regs[7]! else 0
             gas := gas', registers := regs, memory := mem, lastPC := pc }
+        | .trap =>
+          { exitReason := .trap, exitValue := if 7 < regs.size then regs[7]! else 0
+            gas := gas', registers := regs, memory := mem, lastPC := pc }
         | .panic =>
           { exitReason := .panic, exitValue := if 7 < regs.size then regs[7]! else 0
             gas := gas', registers := regs, memory := mem, lastPC := pc }
@@ -124,6 +142,9 @@ def runBlockGasWith (costFn : ByteArray → ByteArray → Nat → Nat)
             gas := gas', registers := regs, memory := mem, lastPC := pc }
         | .hostCall id regs' mem' npc =>
           { exitReason := .hostCall id, exitValue := if 7 < regs'.size then regs'[7]! else 0
+            gas := gas', registers := regs', memory := mem', nextPC := npc, lastPC := pc }
+        | .ecall regs' mem' npc =>
+          { exitReason := .ecall, exitValue := if 7 < regs'.size then regs'[7]! else 0
             gas := gas', registers := regs', memory := mem', nextPC := npc, lastPC := pc }
         | .continue pc' regs' mem' =>
           -- Reset gasCharged when entering a new basic block
@@ -313,8 +334,8 @@ def initCap (blob : ByteArray) (args : ByteArray)
         if dataOff + cap.dataLen <= blob.size then
           let capData := blob.extract dataOff (dataOff + cap.dataLen)
           mem := copyToMem { mem with access } startAddr capData
-      -- Track args cap base address (cap_index=255 = IPC slot = args)
-      if cap.capIndex == 255 then
+      -- Track args cap base address (cap_index=0 = IPC slot = args)
+      if cap.capIndex == 0 then
         argsBase := startAddr
 
   -- Update memory access after all caps processed
@@ -383,6 +404,15 @@ def runWithHostCalls (ctx : Type) [Inhabited ctx]
           -- Host handler returned continue: resume execution at next PC
           go resumePC result'.registers result'.memory result'.gas context' fuel'
         | _ => (result', context')
+      | .ecall =>
+        -- ecall (management ops): treat same as hostCall with a sentinel ID
+        -- The handler can distinguish ecall by the sentinel value
+        let resumePC := result.nextPC
+        let ecallSentinel : UInt64 := UInt64.ofNat (2^64 - 3)
+        let (result', context') := handler ecallSentinel result.gas.toUInt64 result.registers result.memory context
+        match result'.exitReason with
+        | .hostCall _ => go resumePC result'.registers result'.memory result'.gas context' fuel'
+        | _ => (result', context')
       | _ => (result, context)
   go pc regs mem gas context (gas.toUInt64.toNat + 1)
 
@@ -427,9 +457,11 @@ def runTracePCs (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : Memory
         let gas' := gas - 1
         match executeStep prog pc regs mem with
         | .halt => (pcs', .halt)
+        | .trap => (pcs', .trap)
         | .panic => (pcs', .panic)
         | .fault addr => (pcs', .pageFault addr)
         | .hostCall id _ _ _ => (pcs', .hostCall id)
+        | .ecall _ _ _ => (pcs', .ecall)
         | .continue pc' regs' mem' => go pc' regs' mem' gas' pcs' fuel'
   go pc regs mem gas #[] (maxSteps + 1)
 
@@ -488,6 +520,10 @@ def runWithInstrTrace (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : 
           ({ exitReason := .halt
              exitValue := if 7 < regs.size then regs[7]! else 0
              gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
+        | .trap =>
+          ({ exitReason := .trap
+             exitValue := if 7 < regs.size then regs[7]! else 0
+             gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
         | .panic =>
           ({ exitReason := .panic
              exitValue := if 7 < regs.size then regs[7]! else 0
@@ -498,6 +534,11 @@ def runWithInstrTrace (prog : ProgramBlob) (pc : Nat) (regs : Registers) (mem : 
              gas := gas', registers := regs, memory := mem, lastPC := pc }, trace')
         | .hostCall id regs' mem' npc =>
           ({ exitReason := .hostCall id
+             exitValue := if 7 < regs'.size then regs'[7]! else 0
+             gas := gas', registers := regs', memory := mem',
+             nextPC := npc, lastPC := pc }, trace')
+        | .ecall regs' mem' npc =>
+          ({ exitReason := .ecall
              exitValue := if 7 < regs'.size then regs'[7]! else 0
              gas := gas', registers := regs', memory := mem',
              nextPC := npc, lastPC := pc }, trace')

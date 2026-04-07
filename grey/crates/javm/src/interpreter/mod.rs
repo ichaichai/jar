@@ -425,7 +425,7 @@ impl Interpreter {
         // Execute instruction inline
         match opcode {
             // === A.5.1: No arguments ===
-            Opcode::Trap => return Some(ExitReason::Panic),
+            Opcode::Trap => return Some(ExitReason::Trap),
             Opcode::Fallthrough | Opcode::Unlikely => {
                 self.pc = next_pc;
             }
@@ -1632,7 +1632,7 @@ impl Interpreter {
             match inst.opcode {
                 // === No arguments ===
                 Opcode::Trap => {
-                    exit = Some(ExitReason::Panic);
+                    exit = Some(ExitReason::Trap);
                 }
                 Opcode::Fallthrough | Opcode::Unlikely => {}
                 Opcode::Ecall => {
@@ -3043,7 +3043,7 @@ mod tests {
     fn test_trap_instruction() {
         let mut vm = simple_vm(vec![0], 100); // trap = opcode 0
         let (exit, _) = vm.run();
-        assert_eq!(exit, ExitReason::Panic);
+        assert_eq!(exit, ExitReason::Trap);
     }
 
     #[test]
@@ -3051,7 +3051,7 @@ mod tests {
         // fallthrough (1) then trap (0)
         let mut vm = simple_vm(vec![1, 0], 100);
         let (exit, gas_used) = vm.run();
-        assert_eq!(exit, ExitReason::Panic);
+        assert_eq!(exit, ExitReason::Trap);
         assert_eq!(gas_used, 2); // 1 for fallthrough + 1 for trap
     }
 

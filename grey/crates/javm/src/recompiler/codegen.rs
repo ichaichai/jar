@@ -110,6 +110,7 @@ pub const EXIT_OOG: u32 = 2;
 pub const EXIT_PAGE_FAULT: u32 = 3;
 pub const EXIT_HOST_CALL: u32 = 4;
 pub const EXIT_ECALL: u32 = 6;
+pub const EXIT_TRAP: u32 = 7;
 
 /// Result of compilation.
 pub struct CompileResult {
@@ -1214,7 +1215,7 @@ impl Compiler {
             // === A.5.1: No arguments ===
             Opcode::Trap => {
                 self.asm.mov_store32_imm(CTX, CTX_PC, pc as i32);
-                self.emit_exit(EXIT_PANIC, 0);
+                self.emit_exit(EXIT_TRAP, 0);
             }
             Opcode::Fallthrough | Opcode::Unlikely => {
                 // Just fall through to next instruction.

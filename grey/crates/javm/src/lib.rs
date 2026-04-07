@@ -36,7 +36,9 @@ pub use interpreter::Interpreter;
 pub enum ExitReason {
     /// ∎: Normal halt.
     Halt,
-    /// ☇: Panic / unexpected termination.
+    /// Deliberate trap (opcode 0). Program-initiated termination.
+    Trap,
+    /// ☇: Panic / runtime error (bad djump, invalid opcode).
     Panic,
     /// ∞: Out of gas.
     OutOfGas,
