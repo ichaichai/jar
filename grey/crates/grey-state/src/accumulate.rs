@@ -162,6 +162,24 @@ struct ServiceAccResult {
     pending_validators: Option<Vec<Vec<u8>>>,
 }
 
+impl ServiceAccResult {
+    /// Build a no-op result for early exits (no account, zero gas, no code).
+    fn skipped(
+        accounts: BTreeMap<ServiceId, AccServiceAccount>,
+        privileges: AccPrivileges,
+    ) -> Self {
+        Self {
+            accounts,
+            transfers: vec![],
+            output: None,
+            gas_used: 0,
+            privileges,
+            auth_queues: None,
+            pending_validators: None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Queue Management (eq 12.1-12.12)
 // ---------------------------------------------------------------------------
@@ -322,15 +340,7 @@ fn accumulate_single_service(
     let _account = match accounts.get(&service_id) {
         Some(a) => a,
         None => {
-            return ServiceAccResult {
-                accounts: accounts.clone(),
-                transfers: vec![],
-                output: None,
-                gas_used: 0,
-                privileges: privileges.clone(),
-                auth_queues: None,
-                pending_validators: None,
-            };
+            return ServiceAccResult::skipped(accounts.clone(), privileges.clone());
         }
     };
 
@@ -360,15 +370,7 @@ fn accumulate_single_service(
         .saturating_add(operand_gas);
 
     if total_gas == 0 && transfers.iter().all(|t| t.destination != service_id) {
-        return ServiceAccResult {
-            accounts: accounts.clone(),
-            transfers: vec![],
-            output: None,
-            gas_used: 0,
-            privileges: privileges.clone(),
-            auth_queues: None,
-            pending_validators: None,
-        };
+        return ServiceAccResult::skipped(accounts.clone(), privileges.clone());
     }
 
     // Initialize accumulation context (regular dimension x)
@@ -442,15 +444,7 @@ fn accumulate_single_service(
             service_id,
             "accumulate: no code blob found for service, skipping PVM execution"
         );
-        return ServiceAccResult {
-            accounts: initial_accounts,
-            transfers: vec![],
-            output: None,
-            gas_used: 0,
-            privileges: privileges.clone(),
-            auth_queues: None,
-            pending_validators: None,
-        };
+        return ServiceAccResult::skipped(initial_accounts, privileges.clone());
     }
     let code_blob = code_blob.unwrap();
 
