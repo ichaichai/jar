@@ -872,6 +872,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                 let Some(event) = event else { break };
                 match event {
                     NetworkEvent::BlockReceived { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_blocks_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         match decode_block_message(&data, protocol) {
                             Some((block, _hash)) => {
                                 let block_hash = grey_crypto::blake2b_256(&scale::Encode::encode(&block.header));
@@ -1060,6 +1063,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         }
                     }
                     NetworkEvent::FinalityVote { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_finality_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if let Some(vote_msg) = finality::decode_vote_message(&data) {
                             if finality::verify_vote(&vote_msg.vote, vote_msg.vote_type, &state) {
                                 // Persist vote to store for crash recovery
@@ -1159,6 +1165,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         }
                     }
                     NetworkEvent::AnnouncementReceived { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_announcements_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if let Some(ann) = audit::decode_announcement(&data) {
                             if audit::verify_announcement(&ann, &state) {
                                 tracing::info!(
@@ -1191,6 +1200,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         }
                     }
                     NetworkEvent::GuaranteeReceived { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_guarantees_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         // Extract work report hash (first 32 bytes) for dedup
                         if data.len() >= 32 {
                             let mut rh = [0u8; 32];
@@ -1224,6 +1236,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         );
                     }
                     NetworkEvent::AssuranceReceived { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_assurances_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         tracing::debug!(
                             "Validator {} received assurance from {}",
                             config.validator_index,
@@ -1248,6 +1263,9 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                         let _ = response_tx.send(block_data);
                     }
                     NetworkEvent::TicketReceived { data, source } => {
+                        if let Some(ref rpc_st) = rpc_state {
+                            rpc_st.gossip_tickets_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if let Some(proof) = tickets::decode_ticket_proof(&data)
                             && ticket_state.add_ticket(proof, protocol, &state) {
                                 tracing::debug!(
