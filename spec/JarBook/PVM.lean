@@ -4,6 +4,7 @@ import Jar.PVM.Memory
 import Jar.PVM.Decode
 import Jar.PVM.Instructions
 import Jar.PVM.Interpreter
+import Jar.PVM.GasCostSinglePass
 
 open Verso.Genre Manual
 
@@ -14,6 +15,26 @@ set_option verso.docstring.allowMissing true
 The PVM is a RISC-V rv64em-based virtual machine for executing service code
 (GP Appendix A). It has 13 general-purpose 64-bit registers, pageable
 32-bit-addressable RAM, and approximately 141 opcodes.
+
+# jar1 PVM Configuration
+
+In jar1, the PVM is configured differently from the base Gray Paper specification:
+
+- *Capability-based memory*: the flat 4GB address space is managed through DATA
+  capabilities. Each DATA cap owns a set of physical pages with exclusive mapping
+  and per-page access control. See the *JAVM Capability System* chapter for details.
+- *Single-pass gas metering*: basic block gas costs are computed by a single-pass
+  O(n) pipeline simulation rather than full pipeline tracking. This models decode
+  throughput as the bottleneck, omitting EU contention (which is subsumed by decode
+  for the rv64em instruction set).
+- *Fixed u32 LE deblob*: program blob headers use u32 little-endian encoding for
+  counts and offsets, not the JAM codec's variable-length natural encoding.
+- *Capability extensions*: two additional exit reasons (`ecall` for management ops,
+  `trap` for deliberate termination) beyond the base PVM's halt/panic/OOG/pageFault/hostCall.
+  See the *JAVM Capability System* and *Capability Kernel* chapters for the multi-VM
+  execution model.
+
+{docstring Jar.PVM.gasCostForBlockSinglePass}
 
 # Machine Model
 

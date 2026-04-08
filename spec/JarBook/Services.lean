@@ -10,6 +10,12 @@ set_option verso.docstring.allowMissing true
 
 Service entry points that the protocol invokes via the PVM (GP §11, Appendix B).
 
+In jar1, service code runs inside the capability kernel. Protocol capabilities
+(GAS, FETCH, STORAGE\_R, etc.) replace direct host-call numbers — the kernel
+dispatches `ecalli` to the appropriate protocol cap, which exits to the host.
+REPLY returns results to the calling VM rather than writing to a halt address.
+See the *Capability Kernel* chapter for the execution model.
+
 # Storage Affordability
 
 {docstring Jar.Services.canAffordStorage}

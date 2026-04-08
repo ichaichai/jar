@@ -41,23 +41,16 @@ The block-level state transition function `Υ(σ, B) = σ'` (GP eq 4.1).
 
 # Validator Management (§6)
 
-{docstring Jar.filterOffenders}
-
 {docstring Jar.updateActiveValidators}
 
 {docstring Jar.updatePreviousValidators}
 
-# Judgments (§10)
+# Work-Report Pipeline and Disputes
 
-{docstring Jar.updateJudgments}
-
-# Reports (§11)
-
-{docstring Jar.reportsPostJudgment}
-
-{docstring Jar.reportsPostAssurance}
-
-{docstring Jar.reportsPostGuarantees}
+Judgment processing, report availability, and guarantee integration are covered
+in the *Work-Report Pipeline* chapter. The key functions — `updateJudgments`,
+`reportsPostJudgment`, `reportsPostAssurance`, `reportsPostGuarantees`, and
+`filterOffenders` — are documented there.
 
 # Authorization Pool
 

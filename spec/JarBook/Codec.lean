@@ -1,5 +1,6 @@
 import VersoManual
 import Jar.Codec
+import Jar.Codec.Jar1
 
 open Verso.Genre Manual
 open Jar.Codec
@@ -10,6 +11,10 @@ set_option verso.docstring.allowMissing true
 
 Binary encoding of protocol types for hashing and network transmission (GP Appendix C).
 All encodings are little-endian.
+
+jar1 uses a distinct codec (`Codec.Jar1`) that replaces JAM's variable-length natural
+encoding with fixed u32 little-endian count prefixes throughout. This simplifies parsing
+and produces deterministic-length encodings for all collection types.
 
 # Primitive Encoders
 
@@ -62,3 +67,17 @@ All encodings are little-endian.
 {docstring Jar.Codec.encodeExtrinsic}
 
 {docstring Jar.Codec.encodeBlock}
+
+# jar1 Codec
+
+The jar1 variant uses `Codec.Jar1` — all collection counts and byte lengths
+are encoded as u32 LE (4 bytes), replacing JAM's variable-length natural encoding.
+Numeric fields (service IDs, gas values, etc.) use fixed-width LE encoding throughout.
+
+{docstring Jar.Codec.Jar1.encodeCountPrefixed}
+
+{docstring Jar.Codec.Jar1.encodeLengthPrefixed}
+
+{docstring Jar.Codec.Jar1.encodeWorkReport}
+
+{docstring Jar.Codec.Jar1.encodeBlock}

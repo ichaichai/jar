@@ -13,6 +13,13 @@ The accumulation pipeline integrates refined work results into on-chain state
 `accpar` parallelizes across services, and `accone` handles a single service
 via PVM execution with 27 host calls.
 
+In jar1, accumulation runs through the capability kernel. The kernel's
+`runKernel` function executes service code until a protocol cap is invoked,
+at which point control returns to the host. The host handles the protocol
+operation (storage read/write, transfer, etc.) and calls `resumeProtocolCall`
+to continue execution. Host-call numbering in jar1 is 1-28 (protocol cap slots),
+not 0-27 as in gp072. See the *Capability Kernel* chapter for the execution model.
+
 # Data Types
 
 {docstring Jar.Accumulation.OperandTuple}
