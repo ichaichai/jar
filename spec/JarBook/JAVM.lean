@@ -4,6 +4,7 @@ import Jar.JAVM.Memory
 import Jar.JAVM.Decode
 import Jar.JAVM.Instructions
 import Jar.JAVM.Interpreter
+import Jar.JAVM.GasCost
 import Jar.JAVM.GasCostSinglePass
 
 open Verso.Genre Manual
@@ -107,6 +108,30 @@ In jar1, the JAVM is configured differently from the base Gray Paper PVM specifi
 {docstring Jar.JAVM.runWithHostCalls}
 
 {docstring Jar.JAVM.invokeStd}
+
+# Gas Cost Model
+
+Per-basic-block gas metering simulates a pipelined processor with 4-wide decode,
+out-of-order execution, and 5 execution units (4 ALU, 4 LOAD, 4 STORE, 1 MUL,
+1 DIV). Each instruction has a cycle latency, decode slot cost, and execution
+unit requirements.
+
+{docstring Jar.JAVM.ExecUnits}
+
+{docstring Jar.JAVM.InstrCost}
+
+{docstring Jar.JAVM.branchCost}
+
+{docstring Jar.JAVM.instructionCost}
+
+In jar1, gas costs are computed by the single-pass model — an O(n) pipeline
+simulation that tracks per-register readiness cycles. This omits execution unit
+contention (subsumed by decode throughput for the rv64em ISA) and dispatch width
+limits, yielding equivalent results with significantly less computation.
+
+{docstring Jar.JAVM.GasSimStateSP}
+
+{docstring Jar.JAVM.gasCostForBlockSinglePass}
 
 # Capability System
 
