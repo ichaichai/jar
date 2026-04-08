@@ -32,6 +32,7 @@ toml = { workspace = true }
 hex = { workspace = true }
 bip39 = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 libp2p = { workspace = true }
 futures = { workspace = true }
 

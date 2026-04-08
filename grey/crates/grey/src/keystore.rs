@@ -5,10 +5,14 @@
 //!
 //! Current version stores keys unencrypted. Future PRs will add
 //! password-based encryption (Argon2 + AES-GCM).
+//!
+//! All seed material is zeroized on drop to prevent secrets from lingering
+//! in memory after use.
 
 use std::path::{Path, PathBuf};
 
 use bip39::{Language, Mnemonic};
+use zeroize::{Zeroize, Zeroizing};
 
 const ED25519_MNEMONIC_DOMAIN: &[u8] = b"grey-keystore-ed25519-v1";
 const BANDERSNATCH_MNEMONIC_DOMAIN: &[u8] = b"grey-keystore-bandersnatch-v1";
@@ -21,7 +25,10 @@ pub struct Keystore {
 }
 
 /// Serialized key file format (JSON).
-#[derive(serde::Serialize, serde::Deserialize)]
+///
+/// Implements `Zeroize` + `Drop` to clear seed material from memory.
+#[derive(serde::Serialize, serde::Deserialize, Zeroize)]
+#[zeroize(drop)]
 struct KeyFile {
     /// Version of the key file format.
     version: u32,
@@ -51,7 +58,9 @@ fn derive_domain_separated_seed(
     validator_index: u16,
     domain: &[u8],
 ) -> [u8; 32] {
-    let mut input = Vec::with_capacity(domain.len() + std::mem::size_of::<u16>() + 64);
+    let mut input = Zeroizing::new(Vec::with_capacity(
+        domain.len() + std::mem::size_of::<u16>() + 64,
+    ));
     input.extend_from_slice(domain);
     input.extend_from_slice(&validator_index.to_be_bytes());
     input.extend_from_slice(master_seed);
@@ -66,12 +75,13 @@ fn derive_validator_seeds_from_mnemonic(
 ) -> Result<([u8; 32], [u8; 32], [u8; 32]), KeystoreError> {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic.trim())
         .map_err(|e| KeystoreError::Mnemonic(e.to_string()))?;
-    let master_seed = mnemonic.to_seed(passphrase.unwrap_or(""));
+    let mut master_seed = mnemonic.to_seed(passphrase.unwrap_or(""));
     let ed25519_seed =
         derive_domain_separated_seed(&master_seed, validator_index, ED25519_MNEMONIC_DOMAIN);
     let bandersnatch_seed =
         derive_domain_separated_seed(&master_seed, validator_index, BANDERSNATCH_MNEMONIC_DOMAIN);
     let bls_seed = derive_domain_separated_seed(&master_seed, validator_index, BLS_MNEMONIC_DOMAIN);
+    master_seed.zeroize();
     Ok((ed25519_seed, bandersnatch_seed, bls_seed))
 }
 
@@ -103,9 +113,11 @@ impl Keystore {
 
         let filename = format!("validator-{}.json", validator_index);
         let filepath = self.path.join(&filename);
-        let json = serde_json::to_string_pretty(&key_file)
-            .map_err(|e| KeystoreError::Io(e.to_string()))?;
-        std::fs::write(&filepath, json).map_err(|e| KeystoreError::Io(e.to_string()))?;
+        let json = Zeroizing::new(
+            serde_json::to_string_pretty(&key_file)
+                .map_err(|e| KeystoreError::Io(e.to_string()))?,
+        );
+        std::fs::write(&filepath, json.as_bytes()).map_err(|e| KeystoreError::Io(e.to_string()))?;
 
         tracing::info!(
             "Saved keys for validator {} to {}",
@@ -125,8 +137,10 @@ impl Keystore {
     ) -> Result<([u8; 32], [u8; 32], [u8; 32]), KeystoreError> {
         let filename = format!("validator-{}.json", validator_index);
         let filepath = self.path.join(filename);
-        let json = std::fs::read_to_string(&filepath)
-            .map_err(|_| KeystoreError::NotFound(validator_index))?;
+        let json = Zeroizing::new(
+            std::fs::read_to_string(&filepath)
+                .map_err(|_| KeystoreError::NotFound(validator_index))?,
+        );
         let key_file: KeyFile =
             serde_json::from_str(&json).map_err(|e| KeystoreError::Io(e.to_string()))?;
 
