@@ -1737,3 +1737,274 @@ pub fn run_accumulation(
         remaining_opaque,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grey_types::work::{AvailabilitySpec, RefinementContext, WorkReport};
+
+    fn make_hash(byte: u8) -> Hash {
+        Hash([byte; 32])
+    }
+
+    fn make_report(pkg_hash_byte: u8) -> WorkReport {
+        WorkReport {
+            package_spec: AvailabilitySpec {
+                package_hash: make_hash(pkg_hash_byte),
+                bundle_length: 0,
+                exports_root: Hash([0; 32]),
+                exports_count: 0,
+                erasure_root: Hash([0; 32]),
+                erasure_shards: 0,
+            },
+            context: RefinementContext {
+                anchor: Hash([0; 32]),
+                state_root: Hash([0; 32]),
+                beefy_root: Hash([0; 32]),
+                lookup_anchor: Hash([0; 32]),
+                lookup_anchor_timeslot: 0,
+                prerequisites: vec![],
+            },
+            core_index: 0,
+            authorizer_hash: Hash([0; 32]),
+            auth_gas_used: 0,
+            auth_output: vec![],
+            segment_root_lookup: BTreeMap::new(),
+            results: vec![],
+        }
+    }
+
+    // --- decode_preimage_info_timeslots ---
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_empty() {
+        assert_eq!(decode_preimage_info_timeslots(&[]), vec![]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_truncated_header() {
+        assert_eq!(decode_preimage_info_timeslots(&[1, 2, 3]), vec![]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_zero_count() {
+        let data = 0u32.to_le_bytes();
+        assert_eq!(decode_preimage_info_timeslots(&data), vec![]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_single() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_le_bytes()); // count = 1
+        data.extend_from_slice(&42u32.to_le_bytes()); // timeslot = 42
+        assert_eq!(decode_preimage_info_timeslots(&data), vec![42]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_multiple() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&10u32.to_le_bytes());
+        data.extend_from_slice(&20u32.to_le_bytes());
+        data.extend_from_slice(&30u32.to_le_bytes());
+        assert_eq!(decode_preimage_info_timeslots(&data), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_truncated_elements() {
+        // count = 2 but only 1 timeslot present
+        let mut data = Vec::new();
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(&42u32.to_le_bytes());
+        // Gracefully returns what it can parse
+        assert_eq!(decode_preimage_info_timeslots(&data), vec![42]);
+    }
+
+    // --- compute_dependencies ---
+
+    #[test]
+    fn test_compute_dependencies_empty() {
+        let report = make_report(1);
+        assert!(compute_dependencies(&report).is_empty());
+    }
+
+    #[test]
+    fn test_compute_dependencies_with_prerequisites() {
+        let mut report = make_report(1);
+        report.context.prerequisites = vec![make_hash(10), make_hash(20)];
+        let deps = compute_dependencies(&report);
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&make_hash(10)));
+        assert!(deps.contains(&make_hash(20)));
+    }
+
+    #[test]
+    fn test_compute_dependencies_with_segment_lookup() {
+        let mut report = make_report(1);
+        report
+            .segment_root_lookup
+            .insert(make_hash(30), Hash([0; 32]));
+        let deps = compute_dependencies(&report);
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&make_hash(30)));
+    }
+
+    #[test]
+    fn test_compute_dependencies_deduplicates() {
+        let mut report = make_report(1);
+        let shared = make_hash(42);
+        report.context.prerequisites = vec![shared];
+        report.segment_root_lookup.insert(shared, Hash([0; 32]));
+        // Same hash in both — should appear once
+        let deps = compute_dependencies(&report);
+        assert_eq!(deps.len(), 1);
+    }
+
+    // --- partition_reports ---
+
+    #[test]
+    fn test_partition_reports_all_immediate() {
+        let reports = vec![make_report(1), make_report(2)];
+        let (immediate, queued) = partition_reports(&reports);
+        assert_eq!(immediate.len(), 2);
+        assert_eq!(queued.len(), 0);
+    }
+
+    #[test]
+    fn test_partition_reports_mixed() {
+        let r1 = make_report(1); // no deps → immediate
+        let mut r2 = make_report(2);
+        r2.context.prerequisites = vec![make_hash(99)]; // has dep → queued
+        let (immediate, queued) = partition_reports(&[r1, r2]);
+        assert_eq!(immediate.len(), 1);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].dependencies.len(), 1);
+    }
+
+    // --- edit_queue ---
+
+    #[test]
+    fn test_edit_queue_removes_accumulated() {
+        let rr = ReadyRecord {
+            report: make_report(1),
+            dependencies: vec![make_hash(99)],
+        };
+        let accumulated: BTreeSet<Hash> = [make_hash(1)].into_iter().collect();
+        let result = edit_queue(&[rr], &accumulated);
+        // Report's package hash (1) is in accumulated set → removed
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_edit_queue_removes_fulfilled_deps() {
+        let rr = ReadyRecord {
+            report: make_report(1),
+            dependencies: vec![make_hash(10), make_hash(20)],
+        };
+        let accumulated: BTreeSet<Hash> = [make_hash(10)].into_iter().collect();
+        let result = edit_queue(&[rr], &accumulated);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].dependencies, vec![make_hash(20)]);
+    }
+
+    // --- resolve_queue ---
+
+    #[test]
+    fn test_resolve_queue_empty() {
+        assert!(resolve_queue(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_resolve_queue_all_ready() {
+        let records = vec![
+            ReadyRecord {
+                report: make_report(1),
+                dependencies: vec![],
+            },
+            ReadyRecord {
+                report: make_report(2),
+                dependencies: vec![],
+            },
+        ];
+        let resolved = resolve_queue(&records);
+        assert_eq!(resolved.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_queue_none_ready() {
+        let records = vec![ReadyRecord {
+            report: make_report(1),
+            dependencies: vec![make_hash(99)],
+        }];
+        assert!(resolve_queue(&records).is_empty());
+    }
+
+    // --- encode_accumulate_args ---
+
+    #[test]
+    fn test_encode_accumulate_args() {
+        let result = encode_accumulate_args(100, 42, 3);
+        assert_eq!(result.len(), 12); // 4 + 4 + 4
+        assert_eq!(u32::from_le_bytes(result[0..4].try_into().unwrap()), 100);
+        assert_eq!(u32::from_le_bytes(result[4..8].try_into().unwrap()), 42);
+        assert_eq!(u32::from_le_bytes(result[8..12].try_into().unwrap()), 3);
+    }
+
+    // --- keccak_merkle_node ---
+
+    #[test]
+    fn test_keccak_merkle_node_empty() {
+        let result = keccak_merkle_node(&[]);
+        assert_eq!(result, vec![0u8; 32]);
+    }
+
+    #[test]
+    fn test_keccak_merkle_node_single() {
+        let leaf = vec![1, 2, 3];
+        let result = keccak_merkle_node(&[leaf.clone()]);
+        // Single leaf is returned as-is (not hashed)
+        assert_eq!(result, leaf);
+    }
+
+    #[test]
+    fn test_keccak_merkle_node_two_leaves() {
+        let leaves = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let result = keccak_merkle_node(&leaves);
+        // Should be keccak("node" ⌢ leaf0 ⌢ leaf1)
+        let mut expected_input = Vec::new();
+        expected_input.extend_from_slice(b"node");
+        expected_input.extend_from_slice(&[1, 2, 3]);
+        expected_input.extend_from_slice(&[4, 5, 6]);
+        let expected = grey_crypto::keccak_256(&expected_input);
+        assert_eq!(result, expected.0.to_vec());
+    }
+
+    // --- compute_output_hash ---
+
+    #[test]
+    fn test_compute_output_hash_empty() {
+        assert_eq!(compute_output_hash(&[]), Hash([0u8; 32]));
+    }
+
+    #[test]
+    fn test_compute_output_hash_single() {
+        let outputs = vec![(42u32, make_hash(1))];
+        let result = compute_output_hash(&outputs);
+        // Single leaf: keccak(E4(42) ⌢ hash)
+        let mut leaf = Vec::with_capacity(36);
+        leaf.extend_from_slice(&42u32.to_le_bytes());
+        leaf.extend_from_slice(&make_hash(1).0);
+        assert_eq!(result, grey_crypto::keccak_256(&leaf));
+    }
+
+    #[test]
+    fn test_compute_output_hash_sorts_by_service_id() {
+        // Provide out-of-order, verify same result as sorted
+        let outputs_unordered = vec![(100u32, make_hash(2)), (50u32, make_hash(1))];
+        let outputs_ordered = vec![(50u32, make_hash(1)), (100u32, make_hash(2))];
+        assert_eq!(
+            compute_output_hash(&outputs_unordered),
+            compute_output_hash(&outputs_ordered)
+        );
+    }
+}
