@@ -585,3 +585,108 @@ fn deserialize_service_account(data: &[u8]) -> Result<ServiceAccount, String> {
         preimage_count,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_service_id_roundtrip() {
+        // The key interleaves service_id bytes at positions 0, 2, 4, 6
+        for service_id in [0u32, 1, 42, 255, 0xDEADBEEF, u32::MAX] {
+            let key = compute_storage_state_key(service_id, b"test");
+            let extracted = extract_service_id_from_data_key(&key);
+            assert_eq!(
+                extracted, service_id,
+                "service_id {service_id} should survive key roundtrip"
+            );
+        }
+    }
+
+    #[test]
+    fn test_storage_key_deterministic() {
+        let k1 = compute_storage_state_key(42, b"hello");
+        let k2 = compute_storage_state_key(42, b"hello");
+        assert_eq!(k1, k2, "same inputs should produce same key");
+    }
+
+    #[test]
+    fn test_storage_key_differs_by_service() {
+        let k1 = compute_storage_state_key(1, b"key");
+        let k2 = compute_storage_state_key(2, b"key");
+        assert_ne!(k1, k2, "different services should produce different keys");
+    }
+
+    #[test]
+    fn test_storage_key_differs_by_data() {
+        let k1 = compute_storage_state_key(1, b"key1");
+        let k2 = compute_storage_state_key(1, b"key2");
+        assert_ne!(
+            k1, k2,
+            "different storage keys should produce different state keys"
+        );
+    }
+
+    #[test]
+    fn test_preimage_lookup_key_deterministic() {
+        let hash = grey_crypto::blake2b_256(b"test");
+        let k1 = compute_preimage_lookup_state_key(42, &hash);
+        let k2 = compute_preimage_lookup_state_key(42, &hash);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn test_preimage_info_key_differs_by_length() {
+        let hash = grey_crypto::blake2b_256(b"test");
+        let k1 = compute_preimage_info_state_key(42, &hash, 100);
+        let k2 = compute_preimage_info_state_key(42, &hash, 200);
+        assert_ne!(k1, k2, "different lengths should produce different keys");
+    }
+
+    #[test]
+    fn test_storage_vs_preimage_keys_differ() {
+        // Storage and preimage keys for the same service should not collide
+        let hash = grey_crypto::blake2b_256(b"test");
+        let storage_key = compute_storage_state_key(42, b"test");
+        let preimage_key = compute_preimage_lookup_state_key(42, &hash);
+        assert_ne!(storage_key, preimage_key);
+    }
+
+    #[test]
+    fn test_key_interleaving_structure() {
+        // Verify the interleaving pattern: service_id LE bytes at 0,2,4,6
+        let key = compute_storage_state_key(0x04030201, b"x");
+        assert_eq!(key[0], 0x01); // service_id byte 0
+        assert_eq!(key[2], 0x02); // service_id byte 1
+        assert_eq!(key[4], 0x03); // service_id byte 2
+        assert_eq!(key[6], 0x04); // service_id byte 3
+        // Bytes 1,3,5,7 are from the hash
+        // Bytes 8-30 are from the hash remainder
+    }
+
+    #[test]
+    fn test_serialize_single_service_nonempty() {
+        // Verify serialize_single_service produces non-empty bytes
+        let account = grey_types::state::ServiceAccount {
+            code_hash: Hash([0xAB; 32]),
+            quota_items: 100,
+            min_accumulate_gas: 5000,
+            min_on_transfer_gas: 1000,
+            storage: std::collections::BTreeMap::new(),
+            preimage_lookup: std::collections::BTreeMap::new(),
+            preimage_info: std::collections::BTreeMap::new(),
+            quota_bytes: 10000,
+            total_footprint: 42,
+            accumulation_counter: 7,
+            last_accumulation: 999,
+            last_activity: 888,
+            preimage_count: 3,
+        };
+        let encoded = serialize_single_service(&account);
+        assert!(!encoded.is_empty());
+        // First byte is version (0)
+        assert_eq!(encoded[0], 0);
+        // Code hash should be at bytes 1..33
+        assert_eq!(&encoded[1..33], &[0xAB; 32]);
+    }
+}
