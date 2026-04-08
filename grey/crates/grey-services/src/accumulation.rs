@@ -576,6 +576,118 @@ mod tests {
         assert!(!is_preimage_solicited(&account, data));
     }
 
+    // === Edge case tests ===
+
+    #[test]
+    fn test_integrate_preimages_info_cap() {
+        // preimage_info should not grow beyond 3 entries (line 374)
+        let mut services = BTreeMap::new();
+        let mut account = make_service();
+        let data = b"test data";
+        let hash = grey_crypto::blake2b_256(data);
+        let len = data.len() as u32;
+
+        // Pre-fill info with 3 timeslots (at capacity)
+        account.preimage_info.insert((hash, len), vec![1, 2, 3]);
+        // Don't put in lookup so it's still "solicited"
+        services.insert(1, account);
+
+        integrate_preimages(&mut services, &[(1, data.to_vec())], 10);
+
+        // Data should still be stored in lookup
+        assert!(services[&1].preimage_lookup.contains_key(&hash));
+        // But info should NOT grow beyond 3
+        assert_eq!(services[&1].preimage_info[&(hash, len)].len(), 3);
+    }
+
+    #[test]
+    fn test_integrate_preimages_unsolicited() {
+        // Providing a preimage that wasn't solicited should be a no-op
+        let mut services = BTreeMap::new();
+        services.insert(1, make_service());
+
+        let data = b"unsolicited data";
+        integrate_preimages(&mut services, &[(1, data.to_vec())], 10);
+
+        // Nothing should be stored
+        assert!(services[&1].preimage_lookup.is_empty());
+    }
+
+    #[test]
+    fn test_integrate_preimages_nonexistent_service() {
+        let mut services = BTreeMap::new();
+        services.insert(1, make_service());
+
+        let data = b"test";
+        // Service 99 doesn't exist — should not panic
+        integrate_preimages(&mut services, &[(99, data.to_vec())], 10);
+        assert_eq!(services.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_operands_multiple_digests() {
+        // Report with multiple digests for the same service
+        let mut report = make_work_report(42, 1000);
+        report.results.push(WorkDigest {
+            service_id: 42,
+            code_hash: Hash::ZERO,
+            payload_hash: Hash([2u8; 32]),
+            accumulate_gas: 500,
+            result: WorkResult::Ok(vec![]),
+            gas_used: 250,
+            imports_count: 0,
+            extrinsics_count: 0,
+            extrinsics_size: 0,
+            exports_count: 0,
+        });
+
+        let (operands, gas) = collect_operands_for_service(&[report], 42);
+        assert_eq!(operands.len(), 2);
+        assert_eq!(gas, 1500); // 1000 + 500
+    }
+
+    #[test]
+    fn test_collect_operands_empty_reports() {
+        let (operands, gas) = collect_operands_for_service(&[], 42);
+        assert_eq!(operands.len(), 0);
+        assert_eq!(gas, 0);
+    }
+
+    #[test]
+    fn test_accumulated_package_hashes_count_zero() {
+        let r = make_work_report(1, 100);
+        let hashes = accumulated_package_hashes(&[r], 0);
+        assert!(hashes.is_empty());
+    }
+
+    #[test]
+    fn test_accumulated_package_hashes_count_exceeds_reports() {
+        let r = make_work_report(1, 100);
+        let hashes = accumulated_package_hashes(&[r], 100);
+        assert_eq!(hashes.len(), 1); // Only 1 report, count doesn't cause panic
+    }
+
+    #[test]
+    fn test_accumulate_service_updates_metadata() {
+        let mut services = BTreeMap::new();
+        let mut account = make_service();
+        account.accumulation_counter = 5;
+        account.last_accumulation = 100;
+        services.insert(1, account);
+
+        let result = accumulate_service(&services, 1, &[], &[], 0, 200);
+        assert_eq!(result.services[&1].accumulation_counter, 6);
+        assert_eq!(result.services[&1].last_accumulation, 200);
+    }
+
+    #[test]
+    fn test_accumulate_service_nonexistent() {
+        let services = BTreeMap::new();
+        // Accumulating a service that doesn't exist should not panic
+        let result = accumulate_service(&services, 99, &[], &[], 0, 10);
+        assert!(result.services.is_empty());
+    }
+
     #[test]
     fn test_accumulated_package_hashes() {
         let r1 = make_work_report(1, 100);
