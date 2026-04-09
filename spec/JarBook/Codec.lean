@@ -30,6 +30,14 @@ and produces deterministic-length encodings for all collection types.
 
 {docstring Jar.Codec.encodeBits}
 
+{docstring Jar.Codec.concatBytes}
+
+{docstring Jar.Codec.encodeArray}
+
+{docstring Jar.Codec.encodeLengthPrefixedArray}
+
+{docstring Jar.Codec.encodeCountPrefixedArray}
+
 # Work Types
 
 {docstring Jar.Codec.encodeWorkResult}
@@ -49,6 +57,14 @@ and produces deterministic-length encodings for all collection types.
 {docstring Jar.Codec.encodeTicketProof}
 
 {docstring Jar.Codec.encodeAssurance}
+
+{docstring Jar.Codec.encodeJudgment}
+
+{docstring Jar.Codec.encodeVerdict}
+
+{docstring Jar.Codec.encodeCulprit}
+
+{docstring Jar.Codec.encodeFault}
 
 {docstring Jar.Codec.encodeGuarantee}
 
@@ -84,6 +100,16 @@ from a `DecodeState` and returns `Option (α × DecodeState)`.
 
 {docstring Jar.Codec.Decoder.readBytes}
 
+{docstring Jar.Codec.Decoder.pure}
+
+{docstring Jar.Codec.Decoder.guard}
+
+{docstring Jar.Codec.Decoder.readByte}
+
+{docstring Jar.Codec.Decoder.remaining}
+
+{docstring Jar.Codec.Decoder.replicateD}
+
 # Primitive Decoders
 
 {docstring Jar.Codec.decodeArrayD}
@@ -98,6 +124,58 @@ from a `DecodeState` and returns `Option (α × DecodeState)`.
 
 {docstring Jar.Codec.decodeBitsD}
 
+{docstring Jar.Codec.decodeCountPrefixedArrayD}
+
+{docstring Jar.Codec.decodeWorkResultD}
+
+{docstring Jar.Codec.decodeOctetSeqD}
+
+{docstring Jar.Codec.decodeHashD}
+
+# Type-Specific Decoders
+
+{docstring Jar.Codec.decodeTicketD}
+
+{docstring Jar.Codec.decodeTicketProofD}
+
+{docstring Jar.Codec.decodeAssuranceD}
+
+{docstring Jar.Codec.decodeJudgmentD}
+
+{docstring Jar.Codec.decodeVerdictD}
+
+{docstring Jar.Codec.decodeCulpritD}
+
+{docstring Jar.Codec.decodeFaultD}
+
+{docstring Jar.Codec.decodeDisputesD}
+
+{docstring Jar.Codec.decodePreimagesD}
+
+{docstring Jar.Codec.decodeAvailSpecD}
+
+{docstring Jar.Codec.decodeRefinementContextD}
+
+{docstring Jar.Codec.decodeWorkDigestD}
+
+{docstring Jar.Codec.decodeWorkReportD}
+
+{docstring Jar.Codec.decodeGuaranteeD}
+
+{docstring Jar.Codec.decodeEpochMarkerD}
+
+{docstring Jar.Codec.decodeUnsignedHeaderD}
+
+{docstring Jar.Codec.decodeHeaderD}
+
+{docstring Jar.Codec.decodeExtrinsicD}
+
+{docstring Jar.Codec.decodeBlockD}
+
+{docstring Jar.Codec.decodeWorkItemD}
+
+{docstring Jar.Codec.decodeWorkPackageD}
+
 # Block Decoding
 
 {docstring Jar.Codec.decodeBlock}
@@ -105,6 +183,10 @@ from a `DecodeState` and returns `Option (α × DecodeState)`.
 {docstring Jar.Codec.decodeHeader}
 
 {docstring Jar.Codec.decodeExtrinsic}
+
+{docstring Jar.Codec.decodeWorkReport}
+
+{docstring Jar.Codec.decodeWorkPackage}
 
 # jar1 Codec
 
