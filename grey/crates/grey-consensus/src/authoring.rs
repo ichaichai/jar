@@ -18,6 +18,17 @@ fn encode_header_unsigned(header: &Header) -> Vec<u8> {
 
 use grey_types::signing_contexts;
 
+/// Find a validator's index by their bandersnatch public key bytes.
+fn find_validator_index(
+    validators: &[grey_types::validator::ValidatorKey],
+    pk: &[u8; 32],
+) -> Option<u16> {
+    validators
+        .iter()
+        .position(|v| &v.bandersnatch.0 == pk)
+        .map(|i| i as u16)
+}
+
 /// Check if a validator is the block author for a given timeslot.
 ///
 /// Returns the author's index in the validator set if they should author,
@@ -53,12 +64,7 @@ pub fn is_slot_author_with_keypair(
             if (slot_in_epoch as usize) < keys.len() {
                 let seal_key = &keys[slot_in_epoch as usize];
                 if seal_key == bandersnatch_pubkey {
-                    // Find the validator index
-                    for (i, v) in state.current_validators.iter().enumerate() {
-                        if &v.bandersnatch == bandersnatch_pubkey {
-                            return Some(i as u16);
-                        }
-                    }
+                    return find_validator_index(&state.current_validators, &bandersnatch_pubkey.0);
                 }
             }
             None
@@ -82,12 +88,7 @@ pub fn is_slot_author_with_keypair(
                     && ticket_id == ticket.id.0
                 {
                     // We own this ticket — find our validator index
-                    let pk_bytes = kp.public_key_bytes();
-                    for (i, v) in state.current_validators.iter().enumerate() {
-                        if v.bandersnatch.0 == pk_bytes {
-                            return Some(i as u16);
-                        }
-                    }
+                    return find_validator_index(&state.current_validators, &kp.public_key_bytes());
                 }
             }
             None
