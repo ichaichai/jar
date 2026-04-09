@@ -393,7 +393,7 @@ mod tests {
     use super::*;
     use grey_types::work::*;
 
-    fn make_service() -> ServiceAccount {
+    pub(super) fn make_service() -> ServiceAccount {
         ServiceAccount {
             code_hash: Hash::ZERO,
             quota_items: 100,
@@ -411,7 +411,7 @@ mod tests {
         }
     }
 
-    fn make_work_report(service_id: ServiceId, gas: Gas) -> WorkReport {
+    pub(super) fn make_work_report(service_id: ServiceId, gas: Gas) -> WorkReport {
         WorkReport {
             package_spec: AvailabilitySpec {
                 package_hash: Hash([1u8; 32]),
@@ -701,65 +701,9 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
+    use super::tests::{make_service, make_work_report};
     use super::*;
-    use grey_types::work::*;
     use proptest::prelude::*;
-
-    fn make_service() -> ServiceAccount {
-        ServiceAccount {
-            code_hash: Hash::ZERO,
-            quota_items: 100,
-            min_accumulate_gas: 0,
-            min_on_transfer_gas: 0,
-            storage: BTreeMap::new(),
-            preimage_lookup: BTreeMap::new(),
-            preimage_info: BTreeMap::new(),
-            quota_bytes: 10000,
-            total_footprint: 0,
-            accumulation_counter: 0,
-            last_accumulation: 0,
-            last_activity: 0,
-            preimage_count: 0,
-        }
-    }
-
-    fn make_work_report(service_id: ServiceId, gas: Gas) -> WorkReport {
-        WorkReport {
-            package_spec: AvailabilitySpec {
-                package_hash: Hash([1u8; 32]),
-                bundle_length: 0,
-                erasure_root: Hash::ZERO,
-                exports_root: Hash::ZERO,
-                exports_count: 0,
-                erasure_shards: 6,
-            },
-            context: RefinementContext {
-                anchor: Hash::ZERO,
-                state_root: Hash::ZERO,
-                beefy_root: Hash::ZERO,
-                lookup_anchor: Hash::ZERO,
-                lookup_anchor_timeslot: 0,
-                prerequisites: vec![],
-            },
-            core_index: 0,
-            authorizer_hash: Hash::ZERO,
-            auth_gas_used: 0,
-            auth_output: vec![],
-            segment_root_lookup: BTreeMap::new(),
-            results: vec![WorkDigest {
-                service_id,
-                code_hash: Hash::ZERO,
-                payload_hash: Hash::ZERO,
-                accumulate_gas: gas,
-                result: WorkResult::Ok(vec![]),
-                gas_used: gas / 2,
-                imports_count: 0,
-                extrinsics_count: 0,
-                extrinsics_size: 0,
-                exports_count: 0,
-            }],
-        }
-    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
