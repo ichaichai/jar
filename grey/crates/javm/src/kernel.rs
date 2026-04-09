@@ -339,12 +339,10 @@ impl InvocationKernel {
 
                 // Check compile cache first.
                 let cache_key = CodeCache::hash_blob(code_data);
-                if let Some(cache) = &code_cache {
-                    if let Some(cached) = cache.entries.get(&cache_key) {
-                        let code_cap = Arc::clone(cached);
-                        self.code_caps.push(Arc::clone(&code_cap));
-                        return Ok(Cap::Code(code_cap));
-                    }
+                if let Some(cached) = code_cache.as_ref().and_then(|c| c.entries.get(&cache_key)) {
+                    let code_cap = Arc::clone(cached);
+                    self.code_caps.push(Arc::clone(&code_cap));
+                    return Ok(Cap::Code(code_cap));
                 }
 
                 // Parse the code sub-blob (jump_table + code + bitmask)
