@@ -37,6 +37,20 @@ In jar1, the JAVM is configured differently from the base Gray Paper PVM specifi
 
 {docstring Jar.JAVM.gasCostForBlockSinglePass}
 
+# Constants
+
+{docstring Jar.JAVM.numRegisters}
+
+{docstring Jar.JAVM.pageSize}
+
+{docstring Jar.JAVM.memorySize}
+
+{docstring Jar.JAVM.numPages}
+
+{docstring Jar.JAVM.initZoneStart}
+
+{docstring Jar.JAVM.maxInitInput}
+
 # Machine Model
 
 {docstring Jar.JAVM.Reg}
@@ -47,11 +61,21 @@ In jar1, the JAVM is configured differently from the base Gray Paper PVM specifi
 
 {docstring Jar.JAVM.Memory}
 
+{docstring Jar.JAVM.getByte}
+
+{docstring Jar.JAVM.setByte}
+
+{docstring Jar.JAVM.Memory.isReadable}
+
+{docstring Jar.JAVM.Memory.isWritable}
+
 {docstring Jar.JAVM.MachineState}
 
 {docstring Jar.JAVM.ExitReason}
 
 {docstring Jar.JAVM.InvocationResult}
+
+{docstring Jar.JAVM.HostCallHandler}
 
 {docstring Jar.JAVM.InstructionCategory}
 
