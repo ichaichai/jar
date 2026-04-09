@@ -162,7 +162,13 @@ impl InvocationKernel {
         gas: u64,
         cache: &mut CodeCache,
     ) -> Result<Self, KernelError> {
-        Self::new_inner(blob, args, gas, crate::backend::PvmBackend::Default, Some(cache))
+        Self::new_inner(
+            blob,
+            args,
+            gas,
+            crate::backend::PvmBackend::Default,
+            Some(cache),
+        )
     }
 
     /// Create a new kernel with a specific backend selection.
