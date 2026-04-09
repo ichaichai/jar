@@ -176,9 +176,27 @@ and sub-blobs for CODE caps.
 
 {docstring Jar.JAVM.run}
 
+{docstring Jar.JAVM.runBlockGasWith}
+
+{docstring Jar.JAVM.runBlockGas}
+
+{docstring Jar.JAVM.runBlockGasSinglePass}
+
+{docstring Jar.JAVM.skipMetadata}
+
 {docstring Jar.JAVM.initStandard}
 
+{docstring Jar.JAVM.initCap}
+
+{docstring Jar.JAVM.initProgram}
+
+{docstring Jar.JAVM.runProgram}
+
 {docstring Jar.JAVM.runWithHostCalls}
+
+{docstring Jar.JAVM.InstrTraceEntry}
+
+{docstring Jar.JAVM.InstrTraceConfig}
 
 {docstring Jar.JAVM.invokeStd}
 
