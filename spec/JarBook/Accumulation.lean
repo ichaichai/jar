@@ -25,7 +25,11 @@ not 0-27 as in gp072. See the *Capability Kernel* chapter for the execution mode
 
 {docstring Jar.Accumulation.OperandTuple}
 
+{docstring Jar.Accumulation.AccInput}
+
 {docstring Jar.Accumulation.PartialState}
+
+{docstring Jar.Accumulation.PartialState.fromState}
 
 {docstring Jar.Accumulation.AccOneOutput}
 
@@ -37,6 +41,8 @@ All 29 host-call handlers (REPLY at slot 0, protocol caps at slots 1–28) are
 dispatched by `handleHostCall`. Each protocol cap costs a base gas of 10.
 Operations include reading/writing service storage, transferring balance,
 managing preimages, and creating or upgrading services.
+
+{docstring Jar.Accumulation.hostCallGas}
 
 {docstring Jar.Accumulation.handleHostCall}
 
