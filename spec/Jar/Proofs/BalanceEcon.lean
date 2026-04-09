@@ -71,6 +71,25 @@ theorem balanceEcon_absorbEjected_balance (e ejected : BalanceEcon) :
   rfl
 
 -- ============================================================================
+-- newServiceEcon lifecycle (canAffordStorage after creation)
+-- ============================================================================
+
+/-- A newly created BalanceEcon service can afford its initial storage footprint.
+    `newServiceEcon` sets balance = threshold (the minimum viable balance for the
+    given storage parameters and gratis), so `canAffordStorage` returns true
+    provided the threshold fits in UInt64 (< 2^64). -/
+theorem balanceEcon_newServiceEcon_canAfford
+    (items bytes bI bL bS : Nat) (gratis : UInt64)
+    (hFit : bS + bI * items + bL * bytes - min gratis.toNat (bS + bI * items + bL * bytes) < UInt64.size) :
+    @EconModel.canAffordStorage BalanceEcon BalanceTransfer _
+      (@EconModel.newServiceEcon BalanceEcon BalanceTransfer _ items bytes gratis bI bL bS)
+      items bytes bI bL bS = true := by
+  show (let minBal := bS + bI * items + bL * bytes
+        let threshold := minBal - min gratis.toNat minBal
+        decide (threshold ≤ (UInt64.ofNat threshold).toNat)) = true
+  simp only [UInt64.toNat_ofNat', Nat.mod_eq_of_lt hFit, Nat.le_refl, decide_true]
+
+-- ============================================================================
 -- Serialization roundtrip (deserializeEcon ∘ serializeEcon = id)
 -- ============================================================================
 
