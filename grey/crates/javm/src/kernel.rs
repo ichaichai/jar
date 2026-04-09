@@ -1539,6 +1539,8 @@ impl InvocationKernel {
             vm.set_regs(ctx.regs);
             vm.set_gas(ctx.gas.max(0) as u64);
             vm.pc = ctx.pc;
+            vm.set_heap_base(ctx.heap_base);
+            vm.set_heap_top(ctx.heap_top);
             self.live_ctx = None;
             crate::recompiler::signal::SIGNAL_STATE.with(|cell| cell.set(std::ptr::null_mut()));
         }
@@ -1572,8 +1574,8 @@ impl InvocationKernel {
                 gas: vm.gas() as i64,
                 exit_reason: 0,
                 exit_arg: 0,
-                heap_base: 0,
-                heap_top: 0,
+                heap_base: vm.heap_base(),
+                heap_top: vm.heap_top(),
                 jt_ptr: code_cap.jump_table.as_ptr(),
                 jt_len: code_cap.jump_table.len() as u32,
                 _pad0: 0,
@@ -1741,6 +1743,8 @@ impl InvocationKernel {
             prog.mem_cycles,
         );
         interp.pc = vm.pc;
+        interp.heap_base = vm.heap_base();
+        interp.heap_top = vm.heap_top();
 
         let (exit, _gas_used) = interp.run();
 
@@ -1808,6 +1812,8 @@ impl InvocationKernel {
         vm.set_regs(interp.registers);
         vm.set_gas(interp.gas);
         vm.pc = interp.pc;
+        vm.set_heap_base(interp.heap_base);
+        vm.set_heap_top(interp.heap_top);
 
         match exit {
             crate::ExitReason::Halt => (0, 0),
