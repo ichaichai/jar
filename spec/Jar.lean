@@ -24,6 +24,7 @@ import Jar.Proofs.BalanceEcon
 import Jar.Proofs.Hostcalls
 import Jar.Proofs.Variant
 import Jar.Proofs.Memory
+import Jar.Proofs.Merkle
 
 /-!
 # JAR — JAM Axiomatic Reference
