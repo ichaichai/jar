@@ -371,6 +371,49 @@ pub fn parse_work_report(json: &serde_json::Value) -> WorkReport {
     }
 }
 
+/// Parse an Extrinsic from a JSON value.
+pub fn parse_extrinsic(v: &serde_json::Value) -> Extrinsic {
+    Extrinsic {
+        tickets: v["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| TicketProof {
+                attempt: t["attempt"].as_u64().unwrap() as u8,
+                proof: decode_hex(t["signature"].as_str().unwrap()),
+            })
+            .collect(),
+        preimages: v["preimages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["requester"].as_u64().unwrap() as u32,
+                    decode_hex(p["blob"].as_str().unwrap()),
+                )
+            })
+            .collect(),
+        guarantees: v["guarantees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| Guarantee {
+                report: parse_work_report(&g["report"]),
+                timeslot: g["slot"].as_u64().unwrap() as u32,
+                credentials: parse_credentials(&g["signatures"]),
+            })
+            .collect(),
+        assurances: v["assurances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(parse_assurance)
+            .collect(),
+        disputes: parse_disputes_extrinsic(&v["disputes"]),
+    }
+}
+
 /// Load a JAR split-format test vector pair into a merged JSON value.
 /// JAR vectors are split into `{stem}.input.gp072_tiny.json` (containing `{input, pre_state}`)
 /// and `{stem}.output.gp072_tiny.json` (containing `{output, post_state}`).

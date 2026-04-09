@@ -2,56 +2,10 @@
 
 mod common;
 
-use common::{
-    decode_hex, parse_assurance, parse_credentials, parse_disputes_extrinsic, parse_work_report,
-};
+use common::parse_extrinsic;
 use grey_state::statistics;
-use grey_types::header::*;
 use grey_types::state::{ValidatorRecord, ValidatorStatistics};
 use std::collections::BTreeMap;
-
-/// Parse an Extrinsic from JSON (for statistics tests, we just need the structure).
-fn extrinsic_from_json(json: &serde_json::Value) -> Extrinsic {
-    Extrinsic {
-        tickets: json["tickets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| TicketProof {
-                attempt: t["attempt"].as_u64().unwrap() as u8,
-                proof: decode_hex(t["signature"].as_str().unwrap()),
-            })
-            .collect(),
-        preimages: json["preimages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| {
-                (
-                    p["requester"].as_u64().unwrap() as u32,
-                    decode_hex(p["blob"].as_str().unwrap()),
-                )
-            })
-            .collect(),
-        guarantees: json["guarantees"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|g| Guarantee {
-                report: parse_work_report(&g["report"]),
-                timeslot: g["slot"].as_u64().unwrap() as u32,
-                credentials: parse_credentials(&g["signatures"]),
-            })
-            .collect(),
-        assurances: json["assurances"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(parse_assurance)
-            .collect(),
-        disputes: parse_disputes_extrinsic(&json["disputes"]),
-    }
-}
 
 /// Parse ValidatorRecord from JSON.
 fn validator_record_from_json(json: &serde_json::Value) -> ValidatorRecord {
@@ -70,7 +24,7 @@ fn run_statistics_test(dir: &str, stem: &str) {
     // Parse input
     let new_slot = input["slot"].as_u64().unwrap() as u32;
     let author_index = input["author_index"].as_u64().unwrap() as u16;
-    let extrinsic = extrinsic_from_json(&input["extrinsic"]);
+    let extrinsic = parse_extrinsic(&input["extrinsic"]);
 
     // Parse pre-state
     let prior_slot = pre["slot"].as_u64().unwrap() as u32;

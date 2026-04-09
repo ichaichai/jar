@@ -9,7 +9,7 @@ mod common;
 
 use common::{
     bandersnatch_from_hex, bandersnatch_sig_from_hex, decode_hex, ed25519_from_hex, hash_from_hex,
-    parse_assurance, parse_credentials, parse_disputes_extrinsic, parse_work_report,
+    parse_extrinsic,
 };
 use grey_merkle::state_serial;
 use grey_types::config::Config;
@@ -80,62 +80,6 @@ fn parse_header(v: &serde_json::Value) -> Header {
             offenders_marker,
         },
         seal: bandersnatch_sig_from_hex(v["seal"].as_str().unwrap()),
-    }
-}
-
-fn parse_extrinsic(v: &serde_json::Value) -> Extrinsic {
-    let tickets: Vec<TicketProof> = v["tickets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| TicketProof {
-            attempt: t["attempt"].as_u64().unwrap() as u8,
-            proof: decode_hex(t["signature"].as_str().unwrap()),
-        })
-        .collect();
-
-    let preimages: Vec<(u32, Vec<u8>)> = v["preimages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| {
-            let sid = p["requester"].as_u64().unwrap() as u32;
-            let data = decode_hex(p["blob"].as_str().unwrap());
-            (sid, data)
-        })
-        .collect();
-
-    let guarantees: Vec<Guarantee> = v["guarantees"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|g| {
-            let report = parse_work_report(&g["report"]);
-            let timeslot = g["slot"].as_u64().unwrap() as u32;
-            let credentials = parse_credentials(&g["signatures"]);
-            Guarantee {
-                report,
-                timeslot,
-                credentials,
-            }
-        })
-        .collect();
-
-    let assurances: Vec<Assurance> = v["assurances"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(parse_assurance)
-        .collect();
-
-    let disputes = parse_disputes_extrinsic(&v["disputes"]);
-
-    Extrinsic {
-        tickets,
-        preimages,
-        guarantees,
-        assurances,
-        disputes,
     }
 }
 
