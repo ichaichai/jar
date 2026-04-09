@@ -25,6 +25,7 @@ import Jar.Proofs.Hostcalls
 import Jar.Proofs.Variant
 import Jar.Proofs.Memory
 import Jar.Proofs.Merkle
+import Jar.Proofs.Consensus
 
 /-!
 # JAR — JAM Axiomatic Reference
