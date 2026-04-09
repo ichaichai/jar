@@ -82,12 +82,6 @@ in the *Work-Report Pipeline* chapter. The key functions — `updateJudgments`,
 
 {docstring Jar.AccumulationResult}
 
-{docstring Jar.computeDependencies}
-
-{docstring Jar.editQueue}
-
-{docstring Jar.resolveQueue}
-
 {docstring Jar.performAccumulation}
 
 # Preimages (§12.7)
