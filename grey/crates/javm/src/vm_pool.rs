@@ -41,6 +41,10 @@ pub struct VmInstance {
     pub entry_index: u32,
     /// Gas remaining for this VM. Use gas()/set_gas() for access.
     gas: u64,
+    /// Guest heap base address (tracked for continuation snapshots).
+    heap_base: u32,
+    /// Guest heap top address (tracked for continuation snapshots).
+    heap_top: u32,
 }
 
 impl VmInstance {
@@ -56,6 +60,8 @@ impl VmInstance {
             caller: None,
             entry_index,
             gas,
+            heap_base: 0,
+            heap_top: 0,
         }
     }
 
@@ -87,6 +93,26 @@ impl VmInstance {
     /// Set gas (cold path).
     pub fn set_gas(&mut self, gas: u64) {
         self.gas = gas;
+    }
+
+    /// Get heap base (for continuation snapshots).
+    pub fn heap_base(&self) -> u32 {
+        self.heap_base
+    }
+
+    /// Set heap base (for warm restart).
+    pub fn set_heap_base(&mut self, val: u32) {
+        self.heap_base = val;
+    }
+
+    /// Get heap top (for continuation snapshots).
+    pub fn heap_top(&self) -> u32 {
+        self.heap_top
+    }
+
+    /// Set heap top (for warm restart).
+    pub fn set_heap_top(&mut self, val: u32) {
+        self.heap_top = val;
     }
 
     /// Transition to a new state. Returns error if the transition is invalid.
