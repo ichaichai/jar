@@ -30,6 +30,14 @@ to Lean 4 (GP §4, §6–§12).
 
 {docstring Jar.DeferredTransfer}
 
+{docstring Jar.BalanceEcon}
+
+{docstring Jar.BalanceTransfer}
+
+{docstring Jar.QuotaEcon}
+
+{docstring Jar.QuotaTransfer}
+
 # Work Types (§11)
 
 {docstring Jar.WorkError}
@@ -50,6 +58,8 @@ to Lean 4 (GP §4, §6–§12).
 
 {docstring Jar.WorkPackage}
 
+{docstring Jar.Segment}
+
 # Block Header Types (§5)
 
 {docstring Jar.EpochMarker}
@@ -57,6 +67,14 @@ to Lean 4 (GP §4, §6–§12).
 {docstring Jar.Header}
 
 # Extrinsic Types (§7–§10)
+
+{docstring Jar.TicketsExtrinsic}
+
+{docstring Jar.PreimagesExtrinsic}
+
+{docstring Jar.AssurancesExtrinsic}
+
+{docstring Jar.GuaranteesExtrinsic}
 
 {docstring Jar.Judgment}
 
@@ -94,4 +112,30 @@ to Lean 4 (GP §4, §6–§12).
 
 {docstring Jar.ActivityStatistics}
 
+{docstring Jar.AccumulationOutputs}
+
 {docstring Jar.State}
+
+# Protocol Configuration
+
+{docstring Jar.Params}
+
+{docstring Jar.Params.Valid}
+
+{docstring Jar.Params.isValidValCount}
+
+{docstring Jar.MemoryModel}
+
+{docstring Jar.GasModel}
+
+{docstring Jar.CapabilityModel}
+
+{docstring Jar.EconModel}
+
+{docstring Jar.JarConfig}
+
+{docstring Jar.Params.full}
+
+{docstring Jar.Params.tiny}
+
+{docstring Jar.cfg}

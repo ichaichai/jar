@@ -30,3 +30,7 @@ Domain-specific numeric types used throughout the protocol (GP §3.4).
 {docstring Jar.CoreIndex}
 
 {docstring Jar.ValidatorIndex}
+
+{docstring Jar.EpochIndex}
+
+{docstring Jar.TicketEntryIndex}

@@ -121,3 +121,7 @@ validator count determines which protocol constants scale dynamically.
 # Tickets
 
 {docstring Jar.K_MAX_TICKETS}
+
+{docstring Jar.dynamicTicketsPerValidator}
+
+{docstring Jar.activeCoreCount}
