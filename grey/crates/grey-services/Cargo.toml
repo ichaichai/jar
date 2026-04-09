@@ -11,3 +11,6 @@ grey-crypto = { workspace = true }
 javm = { workspace = true }
 grey-state = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

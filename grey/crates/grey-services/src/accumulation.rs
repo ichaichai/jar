@@ -698,3 +698,235 @@ mod tests {
         assert_eq!(hashes.len(), 2);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use grey_types::work::*;
+    use proptest::prelude::*;
+
+    fn make_service() -> ServiceAccount {
+        ServiceAccount {
+            code_hash: Hash::ZERO,
+            quota_items: 100,
+            min_accumulate_gas: 0,
+            min_on_transfer_gas: 0,
+            storage: BTreeMap::new(),
+            preimage_lookup: BTreeMap::new(),
+            preimage_info: BTreeMap::new(),
+            quota_bytes: 10000,
+            total_footprint: 0,
+            accumulation_counter: 0,
+            last_accumulation: 0,
+            last_activity: 0,
+            preimage_count: 0,
+        }
+    }
+
+    fn make_work_report(service_id: ServiceId, gas: Gas) -> WorkReport {
+        WorkReport {
+            package_spec: AvailabilitySpec {
+                package_hash: Hash([1u8; 32]),
+                bundle_length: 0,
+                erasure_root: Hash::ZERO,
+                exports_root: Hash::ZERO,
+                exports_count: 0,
+                erasure_shards: 6,
+            },
+            context: RefinementContext {
+                anchor: Hash::ZERO,
+                state_root: Hash::ZERO,
+                beefy_root: Hash::ZERO,
+                lookup_anchor: Hash::ZERO,
+                lookup_anchor_timeslot: 0,
+                prerequisites: vec![],
+            },
+            core_index: 0,
+            authorizer_hash: Hash::ZERO,
+            auth_gas_used: 0,
+            auth_output: vec![],
+            segment_root_lookup: BTreeMap::new(),
+            results: vec![WorkDigest {
+                service_id,
+                code_hash: Hash::ZERO,
+                payload_hash: Hash::ZERO,
+                accumulate_gas: gas,
+                result: WorkResult::Ok(vec![]),
+                gas_used: gas / 2,
+                imports_count: 0,
+                extrinsics_count: 0,
+                extrinsics_size: 0,
+                exports_count: 0,
+            }],
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Gas budget is always at least GAS_TOTAL_ACCUMULATION.
+        #[test]
+        fn gas_budget_at_least_minimum(
+            n_services in 0usize..5,
+            gas_per_service in prop::collection::vec(0u64..1_000_000_000, 0..5),
+        ) {
+            let mut always = BTreeMap::new();
+            for (i, &g) in gas_per_service.iter().take(n_services).enumerate() {
+                always.insert(i as ServiceId, g);
+            }
+            let budget = total_gas_budget(&always);
+            prop_assert!(budget >= GAS_TOTAL_ACCUMULATION);
+        }
+
+        /// Gas budget is monotonically non-decreasing as we add always-accumulate services.
+        #[test]
+        fn gas_budget_monotonic(
+            gas_a in 0u64..1_000_000_000,
+            gas_b in 0u64..1_000_000_000,
+        ) {
+            let mut small = BTreeMap::new();
+            small.insert(0 as ServiceId, gas_a);
+            let budget_small = total_gas_budget(&small);
+
+            let mut large = small.clone();
+            large.insert(1, gas_b);
+            let budget_large = total_gas_budget(&large);
+
+            prop_assert!(budget_large >= budget_small);
+        }
+
+        /// collect_operands_for_service only returns operands for the requested service.
+        #[test]
+        fn operands_only_for_requested_service(
+            target_id in 0u32..100,
+            other_id in 100u32..200,
+            gas in 100u64..10_000,
+        ) {
+            let r1 = make_work_report(target_id, gas);
+            let r2 = make_work_report(other_id, gas);
+
+            let (operands, total_gas) = collect_operands_for_service(&[r1, r2], target_id);
+            prop_assert_eq!(operands.len(), 1);
+            prop_assert_eq!(total_gas, gas);
+
+            // Other service gets none of target's operands
+            let (other_ops, _) = collect_operands_for_service(&[make_work_report(target_id, gas)], other_id);
+            prop_assert_eq!(other_ops.len(), 0);
+        }
+
+        /// accumulate_service increments counter exactly once.
+        #[test]
+        fn accumulate_increments_counter(
+            initial_counter in 0u32..1000,
+            timeslot in 1u32..10_000,
+        ) {
+            let mut services = BTreeMap::new();
+            let mut account = make_service();
+            account.accumulation_counter = initial_counter;
+            services.insert(1, account);
+
+            let result = accumulate_service(&services, 1, &[], &[], 0, timeslot);
+            prop_assert_eq!(
+                result.services[&1].accumulation_counter,
+                initial_counter.saturating_add(1)
+            );
+            prop_assert_eq!(result.services[&1].last_accumulation, timeslot);
+        }
+
+        /// accumulate_all processes reports within gas budget; gas used never exceeds budget.
+        #[test]
+        fn accumulate_all_respects_gas_budget(
+            n_reports in 1usize..5,
+            gas_per_report in 100u64..1_000_000,
+        ) {
+            let mut services = BTreeMap::new();
+            for i in 0..n_reports {
+                services.insert(i as ServiceId, make_service());
+            }
+
+            let state = State {
+                services,
+                privileged_services: PrivilegedServices::default(),
+                auth_pool: vec![],
+                recent_blocks: grey_types::state::RecentBlocks {
+                    headers: vec![],
+                    accumulation_log: vec![],
+                },
+                accumulation_outputs: vec![],
+                safrole: grey_types::state::SafroleState {
+                    pending_keys: vec![],
+                    ring_root: grey_types::BandersnatchRingRoot::default(),
+                    seal_key_series: grey_types::state::SealKeySeries::Fallback(vec![]),
+                    ticket_accumulator: vec![],
+                },
+                entropy: [Hash::ZERO; 4],
+                pending_validators: vec![],
+                current_validators: vec![],
+                previous_validators: vec![],
+                pending_reports: vec![],
+                timeslot: 0,
+                auth_queue: vec![],
+                judgments: grey_types::state::Judgments::default(),
+                statistics: grey_types::state::ValidatorStatistics::default(),
+                accumulation_queue: vec![],
+                accumulation_history: vec![],
+            };
+
+            let reports: Vec<_> = (0..n_reports)
+                .map(|i| make_work_report(i as ServiceId, gas_per_report))
+                .collect();
+            let output = accumulate_all(&state, &reports, 1);
+
+            let budget = total_gas_budget(&state.privileged_services.always_accumulate);
+            let total_used: Gas = output.gas_usage.iter().map(|(_, g)| *g).sum();
+            prop_assert!(total_used <= budget);
+            prop_assert!(output.reports_accumulated <= n_reports);
+        }
+
+        /// Preimage integration: solicited preimage becomes available after integration.
+        #[test]
+        fn preimage_roundtrip(data in prop::collection::vec(any::<u8>(), 1..64)) {
+            let hash = grey_crypto::blake2b_256(&data);
+            let len = data.len() as u32;
+
+            let mut account = make_service();
+            account.preimage_info.insert((hash, len), vec![0]);
+
+            prop_assert!(is_preimage_solicited(&account, &data));
+
+            let mut services = BTreeMap::new();
+            services.insert(1, account);
+            integrate_preimages(&mut services, &[(1, data.clone())], 10);
+
+            // After integration, preimage is available and no longer solicited
+            prop_assert!(services[&1].preimage_lookup.contains_key(&hash));
+            prop_assert_eq!(&services[&1].preimage_lookup[&hash], &data);
+            prop_assert!(!is_preimage_solicited(&services[&1], &data));
+        }
+
+        /// Unsolicited preimage integration is a no-op.
+        #[test]
+        fn unsolicited_preimage_noop(data in prop::collection::vec(any::<u8>(), 1..64)) {
+            let mut services = BTreeMap::new();
+            services.insert(1, make_service());
+
+            integrate_preimages(&mut services, &[(1, data.clone())], 10);
+            prop_assert!(services[&1].preimage_lookup.is_empty());
+        }
+
+        /// accumulated_package_hashes never exceeds the count parameter.
+        #[test]
+        fn package_hashes_bounded_by_count(
+            n_reports in 1usize..10,
+            count in 0usize..15,
+        ) {
+            let reports: Vec<_> = (0..n_reports).map(|i| {
+                let mut r = make_work_report(i as ServiceId, 100);
+                r.package_spec.package_hash = Hash([i as u8; 32]);
+                r
+            }).collect();
+            let hashes = accumulated_package_hashes(&reports, count);
+            prop_assert!(hashes.len() <= count.min(n_reports));
+        }
+    }
+}
