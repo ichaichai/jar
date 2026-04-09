@@ -149,7 +149,7 @@ unmodified. The compiler uses this for fast-path inlining of protocol calls.
 
 {docstring Jar.JAVM.Cap.CapTable.isEmpty}
 
-{docstring Jar.JAVM.Cap.setOriginal}
+{docstring Jar.JAVM.Cap.CapTable.setOriginal}
 
 {docstring Jar.JAVM.Cap.maxIndirectionDepth}
 
