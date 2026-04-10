@@ -1024,14 +1024,40 @@ fn chunk_key(report_hash: &Hash, chunk_index: u16) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_helpers {
     use super::*;
 
-    fn temp_store() -> (Store, tempfile::TempDir) {
+    pub fn temp_store() -> (Store, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("test.redb")).unwrap();
         (store, dir)
     }
+
+    pub fn make_block(slot: u32) -> grey_types::header::Block {
+        grey_types::header::Block {
+            header: grey_types::header::Header {
+                data: grey_types::header::UnsignedHeader {
+                    parent_hash: Hash([10u8; 32]),
+                    state_root: Hash([20u8; 32]),
+                    extrinsic_hash: Hash([30u8; 32]),
+                    timeslot: slot,
+                    epoch_marker: None,
+                    tickets_marker: None,
+                    author_index: 0,
+                    vrf_signature: grey_types::BandersnatchSignature([50u8; 96]),
+                    offenders_marker: vec![],
+                },
+                seal: grey_types::BandersnatchSignature([60u8; 96]),
+            },
+            extrinsic: grey_types::header::Extrinsic::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::test_helpers::{temp_store, make_block};
 
     #[test]
     fn test_metadata_round_trip() {
@@ -1484,27 +1510,6 @@ mod tests {
         assert!(!store.verify_state_integrity(&block_hash).unwrap());
     }
 
-    fn make_block(slot: u32) -> Block {
-        use grey_types::*;
-        Block {
-            header: header::Header {
-                data: header::UnsignedHeader {
-                    parent_hash: Hash([10u8; 32]),
-                    state_root: Hash([20u8; 32]),
-                    extrinsic_hash: Hash([30u8; 32]),
-                    timeslot: slot,
-                    epoch_marker: None,
-                    tickets_marker: None,
-                    author_index: 0,
-                    vrf_signature: BandersnatchSignature([50u8; 96]),
-                    offenders_marker: vec![],
-                },
-                seal: BandersnatchSignature([60u8; 96]),
-            },
-            extrinsic: header::Extrinsic::default(),
-        }
-    }
-
     #[test]
     fn test_prune_before_slot() {
         let (store, _dir) = temp_store();
@@ -1942,34 +1947,8 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use grey_types::BandersnatchSignature;
+    use super::test_helpers::{temp_store, make_block};
     use proptest::prelude::*;
-
-    fn temp_store() -> (Store, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("test.redb")).unwrap();
-        (store, dir)
-    }
-
-    fn make_block(slot: u32) -> grey_types::header::Block {
-        grey_types::header::Block {
-            header: grey_types::header::Header {
-                data: grey_types::header::UnsignedHeader {
-                    parent_hash: Hash([10u8; 32]),
-                    state_root: Hash([20u8; 32]),
-                    extrinsic_hash: Hash([30u8; 32]),
-                    timeslot: slot,
-                    epoch_marker: None,
-                    tickets_marker: None,
-                    author_index: 0,
-                    vrf_signature: BandersnatchSignature([50u8; 96]),
-                    offenders_marker: vec![],
-                },
-                seal: BandersnatchSignature([60u8; 96]),
-            },
-            extrinsic: grey_types::header::Extrinsic::default(),
-        }
-    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
