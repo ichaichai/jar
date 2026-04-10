@@ -2954,3 +2954,103 @@ mod tests {
         assert!(cost >= 1, "cost should be >= 1, got {}", cost);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// gas_cost_for_block always returns at least 1 (the minimum gas cost).
+        #[test]
+        fn gas_cost_always_at_least_one(
+            code in proptest::collection::vec(any::<u8>(), 1..64),
+        ) {
+            // Build a bitmask: first byte is always an instruction start.
+            let mut bitmask = vec![0u8; code.len()];
+            bitmask[0] = 1;
+            let cost = gas_cost_for_block(&code, &bitmask, 0);
+            prop_assert!(cost >= 1);
+        }
+
+        /// skip_distance never exceeds 24.
+        #[test]
+        fn skip_distance_bounded(
+            bitmask in proptest::collection::vec(0u8..=1, 1..64),
+            pc in 0usize..63,
+        ) {
+            let dist = skip_distance(&bitmask, pc);
+            prop_assert!(dist <= 24);
+        }
+
+        /// ExecUnits::RESET can always satisfy any of the unit-type constants.
+        #[test]
+        fn reset_satisfies_all_unit_types(choice in 0u8..6) {
+            let req = match choice {
+                0 => ExecUnits::NONE,
+                1 => ExecUnits::ALU,
+                2 => ExecUnits::LOAD,
+                3 => ExecUnits::STORE,
+                4 => ExecUnits::MUL,
+                5 => ExecUnits::DIV,
+                _ => unreachable!(),
+            };
+            prop_assert!(ExecUnits::RESET.can_satisfy(req));
+        }
+
+        /// ExecUnits::sub followed by can_satisfy: subtracting a satisfiable
+        /// request from RESET yields units that can satisfy NONE.
+        #[test]
+        fn sub_preserves_non_negative(choice in 0u8..6) {
+            let req = match choice {
+                0 => ExecUnits::NONE,
+                1 => ExecUnits::ALU,
+                2 => ExecUnits::LOAD,
+                3 => ExecUnits::STORE,
+                4 => ExecUnits::MUL,
+                5 => ExecUnits::DIV,
+                _ => unreachable!(),
+            };
+            let remaining = ExecUnits::RESET.sub(req);
+            prop_assert!(remaining.can_satisfy(ExecUnits::NONE));
+        }
+
+        /// gas_cost_for_block is deterministic: same inputs produce same output.
+        #[test]
+        fn gas_cost_deterministic(
+            code in proptest::collection::vec(any::<u8>(), 1..32),
+        ) {
+            let mut bitmask = vec![0u8; code.len()];
+            bitmask[0] = 1;
+            let cost1 = gas_cost_for_block(&code, &bitmask, 0);
+            let cost2 = gas_cost_for_block(&code, &bitmask, 0);
+            prop_assert_eq!(cost1, cost2);
+        }
+
+        /// reg_bit always returns a power of two (single bit set).
+        #[test]
+        fn reg_bit_is_power_of_two(r in 0u8..16) {
+            let bit = reg_bit(r);
+            prop_assert!(bit.is_power_of_two());
+        }
+
+        /// reg_bit clamps register indices >= 13 to register 12.
+        #[test]
+        fn reg_bit_clamps_high_registers(r in 13u8..=15) {
+            prop_assert_eq!(reg_bit(r), reg_bit(12));
+        }
+
+        /// RegSet::contains is consistent with RegSet::one and RegSet::two.
+        #[test]
+        fn regset_contains_matches_construction(a in 0u8..13, b in 0u8..13) {
+            prop_assume!(a != b);
+            let set = RegSet::two(a, b);
+            prop_assert!(set.contains(a));
+            prop_assert!(set.contains(b));
+
+            let single = RegSet::one(a);
+            prop_assert!(single.contains(a));
+            prop_assert!(!single.contains(b) || a == b);
+        }
+    }
+}
