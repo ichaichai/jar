@@ -37,35 +37,24 @@ impl ErasureParams {
 }
 
 /// Errors from erasure coding operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ErasureError {
     /// Not enough chunks to recover (need at least data_shards).
+    #[error("insufficient chunks: have {have}, need {need}")]
     InsufficientChunks { have: usize, need: usize },
     /// Invalid chunk index (>= total_shards).
+    #[error("invalid chunk index: {0}")]
     InvalidIndex(usize),
     /// Chunk size mismatch.
+    #[error("chunk size mismatch")]
     SizeMismatch,
     /// RS encoding failed.
+    #[error("encoding failed: {0}")]
     EncodingFailed(String),
     /// RS recovery failed.
+    #[error("recovery failed: {0}")]
     RecoveryFailed(String),
 }
-
-impl std::fmt::Display for ErasureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InsufficientChunks { have, need } => {
-                write!(f, "insufficient chunks: have {have}, need {need}")
-            }
-            Self::InvalidIndex(idx) => write!(f, "invalid chunk index: {idx}"),
-            Self::SizeMismatch => write!(f, "chunk size mismatch"),
-            Self::EncodingFailed(e) => write!(f, "encoding failed: {e}"),
-            Self::RecoveryFailed(e) => write!(f, "recovery failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ErasureError {}
 
 /// Encode a data blob into `total_shards` coded chunks (eq H.4).
 ///
