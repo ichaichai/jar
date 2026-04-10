@@ -512,3 +512,158 @@ mod tests {
         assert_eq!(DisputeError::AlreadyJudged.as_str(), "already_judged");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::test_helpers::{make_hash, make_validators};
+    use grey_types::config::Config;
+    use grey_types::header::{DisputesExtrinsic, Verdict};
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Empty disputes always succeed regardless of timeslot.
+        #[test]
+        fn empty_disputes_always_ok(timeslot in 0u32..10000) {
+            let config = Config::tiny();
+            let validators = make_validators(6);
+            let mut judgments = Judgments::default();
+            let mut pending = vec![None; config.core_count as usize];
+            let disputes = DisputesExtrinsic {
+                verdicts: vec![],
+                culprits: vec![],
+                faults: vec![],
+            };
+            let result = process_disputes(
+                &config, &mut judgments, &mut pending, timeslot,
+                &disputes, &validators, &validators,
+            );
+            prop_assert!(result.is_ok());
+            prop_assert!(result.unwrap().offenders_mark.is_empty());
+        }
+
+        /// Verdicts with unsorted report hashes are rejected.
+        #[test]
+        fn unsorted_verdicts_rejected(
+            h1 in 1u8..255,
+            h2 in 0u8..254,
+            timeslot in 12u32..10000,
+        ) {
+            prop_assume!(h1 > h2);
+            let config = Config::tiny();
+            let validators = make_validators(6);
+            let mut judgments = Judgments::default();
+            let mut pending = vec![None; config.core_count as usize];
+            let epoch = config.epoch_of(timeslot);
+
+            let disputes = DisputesExtrinsic {
+                verdicts: vec![
+                    Verdict { report_hash: make_hash(h1), age: epoch, judgments: vec![] },
+                    Verdict { report_hash: make_hash(h2), age: epoch, judgments: vec![] },
+                ],
+                culprits: vec![],
+                faults: vec![],
+            };
+            let result = process_disputes(
+                &config, &mut judgments, &mut pending, timeslot,
+                &disputes, &validators, &validators,
+            );
+            prop_assert_eq!(result, Err(DisputeError::VerdictsNotSortedUnique));
+        }
+
+        /// A verdict for an already-judged report is rejected.
+        #[test]
+        fn already_judged_rejected(
+            hash_byte in 0u8..255,
+            timeslot in 12u32..10000,
+            judgment_set in 0u8..3, // 0=good, 1=bad, 2=wonky
+        ) {
+            let config = Config::tiny();
+            let validators = make_validators(6);
+            let mut judgments = Judgments::default();
+            let mut pending = vec![None; config.core_count as usize];
+            let epoch = config.epoch_of(timeslot);
+            let report_hash = make_hash(hash_byte);
+
+            match judgment_set {
+                0 => { judgments.good.insert(report_hash); }
+                1 => { judgments.bad.insert(report_hash); }
+                _ => { judgments.wonky.insert(report_hash); }
+            }
+
+            let disputes = DisputesExtrinsic {
+                verdicts: vec![Verdict {
+                    report_hash,
+                    age: epoch,
+                    judgments: vec![],
+                }],
+                culprits: vec![],
+                faults: vec![],
+            };
+            let result = process_disputes(
+                &config, &mut judgments, &mut pending, timeslot,
+                &disputes, &validators, &validators,
+            );
+            prop_assert_eq!(result, Err(DisputeError::AlreadyJudged));
+        }
+
+        /// Verdicts with age outside [current_epoch, current_epoch-1] are rejected.
+        #[test]
+        fn bad_age_rejected(
+            timeslot in 24u32..10000, // at least epoch 2
+            age_offset in 2u32..50,
+        ) {
+            let config = Config::tiny();
+            let validators = make_validators(6);
+            let mut judgments = Judgments::default();
+            let mut pending = vec![None; config.core_count as usize];
+            let epoch = config.epoch_of(timeslot);
+            let bad_age = epoch.wrapping_sub(age_offset);
+
+            let disputes = DisputesExtrinsic {
+                verdicts: vec![Verdict {
+                    report_hash: make_hash(1),
+                    age: bad_age,
+                    judgments: vec![],
+                }],
+                culprits: vec![],
+                faults: vec![],
+            };
+            let result = process_disputes(
+                &config, &mut judgments, &mut pending, timeslot,
+                &disputes, &validators, &validators,
+            );
+            prop_assert_eq!(result, Err(DisputeError::BadJudgementAge));
+        }
+
+        /// Valid age (current epoch or previous epoch) passes the age check.
+        #[test]
+        fn valid_age_passes(
+            timeslot in 12u32..10000,
+            use_previous in any::<bool>(),
+        ) {
+            let config = Config::tiny();
+            let validators = make_validators(6);
+            let mut judgments = Judgments::default();
+            let mut pending = vec![None; config.core_count as usize];
+            let epoch = config.epoch_of(timeslot);
+            let age = if use_previous { epoch.wrapping_sub(1) } else { epoch };
+
+            let disputes = DisputesExtrinsic {
+                verdicts: vec![Verdict {
+                    report_hash: make_hash(1),
+                    age,
+                    judgments: vec![],
+                }],
+                culprits: vec![],
+                faults: vec![],
+            };
+            let result = process_disputes(
+                &config, &mut judgments, &mut pending, timeslot,
+                &disputes, &validators, &validators,
+            );
+            // Should pass age check (may fail later at signature or vote split, but not age)
+            prop_assert!(result != Err(DisputeError::BadJudgementAge));
+        }
+    }
+}
