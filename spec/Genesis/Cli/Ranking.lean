@@ -33,12 +33,12 @@ def rankingMainWith (forceVariant : Option String := none) : IO UInt32 := runJso
   let forcedV := forceVariant.bind resolveVariantName
   -- Build per-commit contexts (variant + weight function)
   let (contexts, _) := signedCommits.zip indices |>.foldl
-    (fun (ctxs, pastIndices) (commit, idx) =>
-      let state := reconstructState pastIndices
+    (fun (ctxs, state) (commit, idx) =>
       let v := forcedV.getD (activeVariant commit.prCreatedAt)
       let ctx : RankingCommitCtx := { variant := v, getWeight := state.reviewerWeight }
-      (ctxs ++ [ctx], pastIndices ++ [idx])
-    ) (([] : List RankingCommitCtx), ([] : List CommitIndex))
+      let nextState := @stepState (activeVariant idx.epoch) state idx
+      (ctxs ++ [ctx], nextState)
+    ) (([] : List RankingCommitCtx), initEvalState)
   -- Check if BT is active (v3+) — if so, output scores with μ and σ²
   let useBT := contexts.getLast?.map (·.variant.useBradleyTerry) |>.getD false
   if useBT then
