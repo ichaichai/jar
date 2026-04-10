@@ -565,3 +565,126 @@ mod tests {
         assert_ne!(a0, a4, "different rotation periods should differ");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use grey_types::Hash;
+    use grey_types::config::Config;
+    use grey_types::work::WorkReport;
+    use proptest::prelude::*;
+
+    fn arb_hash() -> impl Strategy<Value = Hash> {
+        prop::array::uniform32(any::<u8>()).prop_map(Hash)
+    }
+
+    fn make_reports_state(config: &Config) -> ReportsState {
+        let v = config.validators_count as usize;
+        let c = config.core_count as usize;
+        let validators: Vec<ValidatorKey> = (0..v).map(|_| ValidatorKey::default()).collect();
+        ReportsState {
+            avail_assignments: vec![None; c],
+            curr_validators: validators.clone(),
+            prev_validators: validators,
+            entropy: [Hash::ZERO; 4],
+            offenders: BTreeSet::new(),
+            recent_blocks: vec![],
+            auth_pools: vec![vec![]; c],
+            accounts: BTreeMap::new(),
+            cores_statistics: vec![CoreStats::default(); c],
+            services_statistics: BTreeMap::new(),
+        }
+    }
+
+    proptest! {
+        /// All core assignments are within [0, core_count).
+        #[test]
+        fn assignments_in_bounds(
+            entropy in arb_hash(),
+            timeslot in 0u32..10000,
+        ) {
+            let config = Config::tiny(); // V=6, C=2
+            let v = config.validators_count as usize;
+            let c = config.core_count as usize;
+            let assignments = compute_core_assignments(&config, &entropy, timeslot, v);
+            prop_assert_eq!(assignments.len(), v);
+            for (i, &core) in assignments.iter().enumerate() {
+                prop_assert!(core < c, "validator {i}: core {core} >= C {c}");
+            }
+        }
+
+        /// Core assignments are deterministic: same inputs → same outputs.
+        #[test]
+        fn assignments_deterministic(
+            entropy in arb_hash(),
+            timeslot in 0u32..10000,
+        ) {
+            let config = Config::tiny();
+            let v = config.validators_count as usize;
+            let a1 = compute_core_assignments(&config, &entropy, timeslot, v);
+            let a2 = compute_core_assignments(&config, &entropy, timeslot, v);
+            prop_assert_eq!(a1, a2);
+        }
+
+        /// Empty guarantees always succeed.
+        #[test]
+        fn empty_guarantees_always_ok(timeslot in 0u32..10000) {
+            let config = Config::tiny();
+            let mut state = make_reports_state(&config);
+            let known = BTreeSet::new();
+            let result = process_reports(&config, &mut state, &[], timeslot, &known);
+            prop_assert!(result.is_ok());
+            let output = result.unwrap();
+            prop_assert!(output.reported.is_empty());
+            prop_assert!(output.reporters.is_empty());
+        }
+
+        /// Guarantees with unsorted core indices are rejected.
+        #[test]
+        fn unsorted_cores_rejected(
+            timeslot in 0u32..10000,
+        ) {
+            let config = Config::tiny(); // C=2
+            let mut state = make_reports_state(&config);
+            let known = BTreeSet::new();
+
+            // Two guarantees: core 1 before core 0 → unsorted
+            let report0 = WorkReport { core_index: 1, ..WorkReport::default() };
+            let report1 = WorkReport { core_index: 0, ..WorkReport::default() };
+            let guarantees = vec![
+                GuaranteeInput {
+                    report: report0,
+                    slot: timeslot,
+                    signatures: vec![],
+                },
+                GuaranteeInput {
+                    report: report1,
+                    slot: timeslot,
+                    signatures: vec![],
+                },
+            ];
+            let result = process_reports(&config, &mut state, &guarantees, timeslot, &known);
+            prop_assert!(matches!(result, Err(ReportError::OutOfOrderGuarantee)));
+        }
+
+        /// Guarantees with core_index >= core_count are rejected.
+        #[test]
+        fn bad_core_index_rejected(
+            bad_core in 2u16..100, // C=2 for tiny
+            timeslot in 0u32..10000,
+        ) {
+            let config = Config::tiny();
+            let mut state = make_reports_state(&config);
+            let known = BTreeSet::new();
+
+            let report = WorkReport { core_index: bad_core, ..WorkReport::default() };
+            let guarantees = vec![GuaranteeInput {
+                report,
+                slot: timeslot,
+                signatures: vec![],
+            }];
+            let result = process_reports(&config, &mut state, &guarantees, timeslot, &known);
+            prop_assert!(matches!(result, Err(ReportError::BadCoreIndex)));
+        }
+    }
+}
