@@ -59,6 +59,40 @@ fn post_register_block(
     }
 }
 
+/// Process a work package guarantee result: co-sign, broadcast, and log.
+///
+/// On success, co-signs the guarantee with a second validator, broadcasts it,
+/// and logs the result. Returns the report hash on success, `None` on failure.
+fn handle_guarantee_result(
+    result: Result<Hash, String>,
+    guarantor_state: &mut GuarantorState,
+    validator_index: u16,
+    all_secrets: &[grey_consensus::genesis::ValidatorSecrets],
+    net_commands: &tokio::sync::mpsc::Sender<NetworkCommand>,
+    context: &str,
+) -> Option<Hash> {
+    match result {
+        Ok(report_hash) => {
+            crate::guarantor::cosign_last_guarantee(
+                guarantor_state,
+                &report_hash,
+                validator_index,
+                all_secrets,
+            );
+            broadcast_last_guarantee(guarantor_state, net_commands);
+            tracing::info!(
+                "{context}, report_hash=0x{}",
+                hex::encode(&report_hash.0[..8])
+            );
+            Some(report_hash)
+        }
+        Err(e) => {
+            tracing::warn!("{context} failed: {e}");
+            None
+        }
+    }
+}
+
 /// Broadcast the most recent pending guarantee to the network.
 fn broadcast_last_guarantee(
     guarantor_state: &GuarantorState,
@@ -532,7 +566,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 &payload,
                                 current_slot,
                             );
-                            match guarantor::process_work_package(
+                            let result = guarantor::process_work_package(
                                 protocol,
                                 &pkg,
                                 &state,
@@ -541,31 +575,22 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 my_secrets,
                                 current_slot,
                                 &mut guarantor_state,
-                            ) {
-                                Ok(report_hash) => {
-                                    // Add a second guarantor co-signature (minimum 2 required)
-                                    crate::guarantor::cosign_last_guarantee(
-                                        &mut guarantor_state,
-                                        &report_hash,
-                                        config.validator_index,
-                                        &all_secrets,
-                                    );
-
-                                    tracing::info!(
-                                        "Validator {} created WP guarantee (2 signers), report_hash=0x{}",
-                                        config.validator_index,
-                                        hex::encode(&report_hash.0[..8])
-                                    );
-                                    broadcast_last_guarantee(&guarantor_state, &net_commands);
-                                    last_wp_slot = current_slot;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Validator {} WP processing failed: {}",
-                                        config.validator_index,
-                                        e
-                                    );
-                                }
+                            );
+                            let context = format!(
+                                "Validator {} created WP guarantee (2 signers)",
+                                config.validator_index
+                            );
+                            if handle_guarantee_result(
+                                result,
+                                &mut guarantor_state,
+                                config.validator_index,
+                                &all_secrets,
+                                &net_commands,
+                                &context,
+                            )
+                            .is_some()
+                            {
+                                last_wp_slot = current_slot;
                             }
                         }
                     }
@@ -1351,7 +1376,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         wp.auth_code_host
                                     );
                                     let rpc_slot = state.timeslot + 1;
-                                    match guarantor::process_work_package(
+                                    let result = guarantor::process_work_package(
                                         &config.protocol_config,
                                         &wp,
                                         &state,
@@ -1360,25 +1385,15 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         my_secrets,
                                         rpc_slot,
                                         &mut guarantor_state,
-                                    ) {
-                                        Ok(report_hash) => {
-                                            // Co-sign with a second validator (testnet only)
-                                            crate::guarantor::cosign_last_guarantee(
-                                                &mut guarantor_state,
-                                                &report_hash,
-                                                config.validator_index,
-                                                &all_secrets,
-                                            );
-                                            broadcast_last_guarantee(&guarantor_state, &net_commands);
-                                            tracing::info!(
-                                                "RPC work package processed (2 signers), report_hash=0x{}",
-                                                hex::encode(&report_hash.0[..8])
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("RPC work package processing failed: {}", e);
-                                        }
-                                    }
+                                    );
+                                    handle_guarantee_result(
+                                        result,
+                                        &mut guarantor_state,
+                                        config.validator_index,
+                                        &all_secrets,
+                                        &net_commands,
+                                        "RPC work package processed (2 signers)",
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::warn!(
