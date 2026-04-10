@@ -756,6 +756,51 @@ mod tests {
                     },
                 });
             }
+
+            #[test]
+            fn equivocation_evidence_roundtrip(
+                slot in 0u32..100_000,
+                block_a in proptest::array::uniform32(0u8..),
+                block_b in proptest::array::uniform32(0u8..),
+            ) {
+                // Ensure block_a < block_b for canonical ordering.
+                let (a, b) = if block_a <= block_b {
+                    (block_a, block_b)
+                } else {
+                    (block_b, block_a)
+                };
+                assert_codec_roundtrip(&EquivocationEvidence {
+                    slot,
+                    block_a: Hash(a),
+                    block_b: Hash(b),
+                });
+            }
+
+            #[test]
+            fn equivocation_countersig_roundtrip(
+                slot in 0u32..100_000,
+                block_a in proptest::array::uniform32(0u8..),
+                block_b in proptest::array::uniform32(0u8..),
+                validator_index in 0u16..1023,
+                sig in proptest::collection::vec(0u8.., 64..=64),
+            ) {
+                let (a, b) = if block_a <= block_b {
+                    (block_a, block_b)
+                } else {
+                    (block_b, block_a)
+                };
+                let mut sig_arr = [0u8; 64];
+                sig_arr.copy_from_slice(&sig);
+                assert_codec_roundtrip(&EquivocationCountersig {
+                    evidence: EquivocationEvidence {
+                        slot,
+                        block_a: Hash(a),
+                        block_b: Hash(b),
+                    },
+                    validator_index,
+                    signature: Ed25519Signature(sig_arr),
+                });
+            }
         }
     }
 
