@@ -449,6 +449,36 @@ mod tests {
         }
     }
 
+    pub(super) fn make_test_state(services: BTreeMap<ServiceId, ServiceAccount>) -> State {
+        State {
+            services,
+            privileged_services: PrivilegedServices::default(),
+            auth_pool: vec![],
+            recent_blocks: grey_types::state::RecentBlocks {
+                headers: vec![],
+                accumulation_log: vec![],
+            },
+            accumulation_outputs: vec![],
+            safrole: grey_types::state::SafroleState {
+                pending_keys: vec![],
+                ring_root: grey_types::BandersnatchRingRoot::default(),
+                seal_key_series: grey_types::state::SealKeySeries::Fallback(vec![]),
+                ticket_accumulator: vec![],
+            },
+            entropy: [Hash::ZERO; 4],
+            pending_validators: vec![],
+            current_validators: vec![],
+            previous_validators: vec![],
+            pending_reports: vec![],
+            timeslot: 0,
+            auth_queue: vec![],
+            judgments: grey_types::state::Judgments::default(),
+            statistics: grey_types::state::ValidatorStatistics::default(),
+            accumulation_queue: vec![],
+            accumulation_history: vec![],
+        }
+    }
+
     #[test]
     fn test_total_gas_budget() {
         let empty: BTreeMap<ServiceId, Gas> = BTreeMap::new();
@@ -502,33 +532,7 @@ mod tests {
         let mut services = BTreeMap::new();
         services.insert(42, make_service());
 
-        let state = State {
-            services,
-            privileged_services: PrivilegedServices::default(),
-            auth_pool: vec![],
-            recent_blocks: grey_types::state::RecentBlocks {
-                headers: vec![],
-                accumulation_log: vec![],
-            },
-            accumulation_outputs: vec![],
-            safrole: grey_types::state::SafroleState {
-                pending_keys: vec![],
-                ring_root: grey_types::BandersnatchRingRoot::default(),
-                seal_key_series: grey_types::state::SealKeySeries::Fallback(vec![]),
-                ticket_accumulator: vec![],
-            },
-            entropy: [Hash::ZERO; 4],
-            pending_validators: vec![],
-            current_validators: vec![],
-            previous_validators: vec![],
-            pending_reports: vec![],
-            timeslot: 0,
-            auth_queue: vec![],
-            judgments: grey_types::state::Judgments::default(),
-            statistics: grey_types::state::ValidatorStatistics::default(),
-            accumulation_queue: vec![],
-            accumulation_history: vec![],
-        };
+        let state = make_test_state(services);
 
         let report = make_work_report(42, 1000);
         let output = accumulate_all(&state, &[report], 1);
@@ -701,7 +705,7 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
-    use super::tests::{make_service, make_work_report};
+    use super::tests::{make_service, make_test_state, make_work_report};
     use super::*;
     use proptest::prelude::*;
 
@@ -788,33 +792,7 @@ mod proptests {
                 services.insert(i as ServiceId, make_service());
             }
 
-            let state = State {
-                services,
-                privileged_services: PrivilegedServices::default(),
-                auth_pool: vec![],
-                recent_blocks: grey_types::state::RecentBlocks {
-                    headers: vec![],
-                    accumulation_log: vec![],
-                },
-                accumulation_outputs: vec![],
-                safrole: grey_types::state::SafroleState {
-                    pending_keys: vec![],
-                    ring_root: grey_types::BandersnatchRingRoot::default(),
-                    seal_key_series: grey_types::state::SealKeySeries::Fallback(vec![]),
-                    ticket_accumulator: vec![],
-                },
-                entropy: [Hash::ZERO; 4],
-                pending_validators: vec![],
-                current_validators: vec![],
-                previous_validators: vec![],
-                pending_reports: vec![],
-                timeslot: 0,
-                auth_queue: vec![],
-                judgments: grey_types::state::Judgments::default(),
-                statistics: grey_types::state::ValidatorStatistics::default(),
-                accumulation_queue: vec![],
-                accumulation_history: vec![],
-            };
+            let state = make_test_state(services);
 
             let reports: Vec<_> = (0..n_reports)
                 .map(|i| make_work_report(i as ServiceId, gas_per_report))
