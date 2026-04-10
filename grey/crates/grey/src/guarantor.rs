@@ -272,7 +272,7 @@ pub fn decode_assurance(data: &[u8]) -> Option<Assurance> {
 ///
 /// Format: `[report_hash(32)][timeslot(4)][cred_count(2)][creds...][report_len(4)][report...]`
 /// Returns `(guarantee, claimed_report_hash)` on success.
-pub fn decode_guarantee(data: &[u8]) -> Option<(Guarantee, [u8; 32])> {
+pub fn decode_guarantee(data: &[u8]) -> Option<(Guarantee, Hash)> {
     if data.len() < 32 + 4 + 2 {
         return None;
     }
@@ -319,7 +319,7 @@ pub fn decode_guarantee(data: &[u8]) -> Option<(Guarantee, [u8; 32])> {
             timeslot,
             credentials,
         },
-        report_hash,
+        Hash(report_hash),
     ))
 }
 
@@ -340,11 +340,11 @@ pub fn handle_received_guarantee(
 
     // Verify report hash matches
     let computed_hash = grey_crypto::report_hash(&guarantee.report);
-    if computed_hash.0 != report_hash {
+    if computed_hash != report_hash {
         tracing::warn!(
             "Received guarantee: report hash mismatch (computed=0x{} vs claimed=0x{})",
             computed_hash.short_hex(),
-            hex::encode(&report_hash[..8])
+            report_hash.short_hex()
         );
         return;
     }
@@ -358,7 +358,7 @@ pub fn handle_received_guarantee(
 
     tracing::info!(
         "Received guarantee: report_hash=0x{}, timeslot={}, creds={}, core={}",
-        hex::encode(&report_hash[..8]),
+        report_hash.short_hex(),
         guarantee.timeslot,
         guarantee.credentials.len(),
         guarantee.report.core_index,
@@ -637,7 +637,7 @@ mod tests {
 
         // Verify the claimed hash matches the actual report hash
         let computed_hash = grey_crypto::report_hash(&decoded.report);
-        assert_eq!(claimed_hash, computed_hash.0);
+        assert_eq!(claimed_hash, computed_hash);
     }
 
     #[test]
