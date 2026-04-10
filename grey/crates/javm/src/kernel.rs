@@ -17,18 +17,16 @@ use crate::GAS_PER_PAGE;
 #[cfg(feature = "std")]
 use std::collections::HashMap;
 
-/// Cache for compiled CODE caps, keyed by code sub-blob content hash.
+/// Cache for compiled CODE caps, keyed by blake2b-256 hash of the code sub-blob.
 ///
 /// Avoids re-running JIT compilation when the same PVM blob is used
 /// repeatedly (e.g. child actor invocations). Callers pass `&mut CodeCache`
 /// and the cache shares compiled code via `Arc<CodeCap>`.
 ///
-/// The cache stores the original blob bytes alongside the compiled code
-/// and verifies content equality on hit, so FNV-1a hash collisions are
-/// harmless (they only cause a bucket miss, not wrong code).
+/// Blake2b-256 makes collisions negligible, so no blob equality check is needed.
 #[cfg(feature = "std")]
 pub struct CodeCache {
-    entries: HashMap<u64, (Vec<u8>, Arc<CodeCap>)>,
+    entries: HashMap<[u8; 32], Arc<CodeCap>>,
 }
 
 #[cfg(feature = "std")]
@@ -39,14 +37,9 @@ impl CodeCache {
         }
     }
 
-    /// Simple FNV-1a hash of blob bytes (no crypto needed, just dedup).
-    fn hash_blob(blob: &[u8]) -> u64 {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for &b in blob {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h
+    /// Blake2b-256 hash of blob bytes for cache dedup key.
+    fn hash_blob(blob: &[u8]) -> [u8; 32] {
+        grey_crypto::blake2b_256(blob).0
     }
 }
 
@@ -485,13 +478,9 @@ impl InvocationKernel {
                     return Err(KernelError::TooManyCodeCaps);
                 }
 
-                // Check compile cache first (verify blob equality to avoid hash collisions).
+                // Check compile cache first (blake2b-256 makes collisions negligible).
                 let cache_key = CodeCache::hash_blob(code_data);
-                if let Some((_, cached)) = code_cache
-                    .as_ref()
-                    .and_then(|c| c.entries.get(&cache_key))
-                    .filter(|(blob, _)| blob.as_slice() == code_data)
-                {
+                if let Some(cached) = code_cache.as_ref().and_then(|c| c.entries.get(&cache_key)) {
                     let code_cap = Arc::clone(cached);
                     self.code_caps.push(Arc::clone(&code_cap));
                     return Ok(Cap::Code(code_cap));
@@ -524,9 +513,7 @@ impl InvocationKernel {
 
                 // Insert into cache.
                 if let Some(cache) = &mut *code_cache {
-                    cache
-                        .entries
-                        .insert(cache_key, (code_data.to_vec(), Arc::clone(&code_cap)));
+                    cache.entries.insert(cache_key, Arc::clone(&code_cap));
                 }
 
                 Ok(Cap::Code(code_cap))
