@@ -804,23 +804,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     authored_report_hashes,
                                     Some(my_secrets.ed25519.public_key()),
                                 ) {
-                                    use scale::Encode;
-                                    tracing::warn!(slot = evidence.slot, "equivocation detected: broadcasting evidence and countersig");
-                                    // Broadcast raw evidence so peers learn about it
-                                    let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation { data: evidence.encode() });
-                                    // Sign and broadcast our own countersig
-                                    let ctx = grey_types::signing_contexts::EQUIVOCATION_EVIDENCE;
-                                    let payload = evidence.sign_bytes();
-                                    let mut msg = Vec::with_capacity(ctx.len() + payload.len());
-                                    msg.extend_from_slice(ctx);
-                                    msg.extend_from_slice(&payload);
-                                    let sig = my_secrets.ed25519.sign(&msg);
-                                    let countersig = grey_types::EquivocationCountersig {
-                                        evidence,
-                                        validator_index: config.validator_index,
-                                        signature: sig,
-                                    };
-                                    let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation { data: countersig.encode() });
+                                    broadcast_equivocation(evidence, my_secrets, config.validator_index, &net_commands);
                                 }
                                 grandpa.update_best_block(header_hash, &audit_state.completed_audits);
 
@@ -1078,23 +1062,7 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         imported_report_hashes,
                                         import_author_key,
                                     ) {
-                                        use scale::Encode;
-                                        tracing::warn!(slot = evidence.slot, "equivocation detected: broadcasting evidence and countersig");
-                                        // Broadcast raw evidence so peers learn about it
-                                        let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation { data: evidence.encode() });
-                                        // Sign and broadcast our own countersig
-                                        let ctx = grey_types::signing_contexts::EQUIVOCATION_EVIDENCE;
-                                        let payload = evidence.sign_bytes();
-                                        let mut msg = Vec::with_capacity(ctx.len() + payload.len());
-                                        msg.extend_from_slice(ctx);
-                                        msg.extend_from_slice(&payload);
-                                        let sig = my_secrets.ed25519.sign(&msg);
-                                        let countersig = grey_types::EquivocationCountersig {
-                                            evidence,
-                                            validator_index: config.validator_index,
-                                            signature: sig,
-                                        };
-                                        let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation { data: countersig.encode() });
+                                        broadcast_equivocation(evidence, my_secrets, config.validator_index, &net_commands);
                                     }
                                     grandpa.update_best_block(import_hash, &audit_state.completed_audits);
                                     if let Some(prevote_msg) = grandpa.create_prevote(
@@ -1460,6 +1428,39 @@ fn head_hash(state: &State) -> Hash {
         .last()
         .map(|h| h.header_hash)
         .unwrap_or(Hash::ZERO)
+}
+
+/// Sign equivocation evidence and broadcast both raw evidence and countersig.
+fn broadcast_equivocation(
+    evidence: grey_types::EquivocationEvidence,
+    secrets: &grey_consensus::genesis::ValidatorSecrets,
+    validator_index: grey_types::ValidatorIndex,
+    net_commands: &tokio::sync::mpsc::Sender<NetworkCommand>,
+) {
+    use scale::Encode;
+    tracing::warn!(
+        slot = evidence.slot,
+        "equivocation detected: broadcasting evidence and countersig"
+    );
+    // Broadcast raw evidence so peers learn about it
+    let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation {
+        data: evidence.encode(),
+    });
+    // Sign and broadcast our own countersig
+    let ctx = grey_types::signing_contexts::EQUIVOCATION_EVIDENCE;
+    let payload = evidence.sign_bytes();
+    let mut msg = Vec::with_capacity(ctx.len() + payload.len());
+    msg.extend_from_slice(ctx);
+    msg.extend_from_slice(&payload);
+    let sig = secrets.ed25519.sign(&msg);
+    let countersig = grey_types::EquivocationCountersig {
+        evidence,
+        validator_index,
+        signature: sig,
+    };
+    let _ = net_commands.try_send(NetworkCommand::BroadcastEquivocation {
+        data: countersig.encode(),
+    });
 }
 
 /// Build a deterministic 32-byte seed from a validator index and a key-type tag.
