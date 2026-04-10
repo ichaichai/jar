@@ -154,3 +154,207 @@ pub enum TransitionError {
 pub fn apply_block(state: &State, block: &Block) -> Result<State, TransitionError> {
     transition::apply(state, block)
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use grey_types::header::Assurance;
+    use grey_types::state::PendingReport;
+    use grey_types::work::WorkReport;
+    use grey_types::{Ed25519Signature, Hash};
+    use proptest::prelude::*;
+
+    // --- is_strictly_sorted_by_key ---
+
+    proptest! {
+        /// Sorting and deduplicating always produces a strictly sorted sequence.
+        #[test]
+        fn sorted_deduped_is_strictly_sorted(mut values in proptest::collection::vec(any::<u32>(), 0..50)) {
+            values.sort();
+            values.dedup();
+            prop_assert!(is_strictly_sorted_by_key(&values, |v| *v));
+        }
+
+        /// A sequence with adjacent duplicates is never strictly sorted (unless len ≤ 1).
+        #[test]
+        fn duplicates_are_not_strictly_sorted(
+            prefix in proptest::collection::vec(any::<u32>(), 0..10),
+            dup in any::<u32>(),
+            suffix in proptest::collection::vec(any::<u32>(), 0..10),
+        ) {
+            let mut values = prefix;
+            values.push(dup);
+            values.push(dup);
+            values.extend(suffix);
+            prop_assert!(!is_strictly_sorted_by_key(&values, |v| *v));
+        }
+
+        /// Empty and single-element slices are trivially sorted.
+        #[test]
+        fn trivial_slices_are_sorted(value in any::<u32>()) {
+            prop_assert!(is_strictly_sorted_by_key(&[] as &[u32], |v| *v));
+            prop_assert!(is_strictly_sorted_by_key(&[value], |v| *v));
+        }
+
+        // --- count_assurance_bits ---
+
+        /// Result length always equals num_cores.
+        #[test]
+        fn assurance_counts_length_matches_cores(
+            num_assurances in 0usize..10,
+            num_cores in 1usize..20,
+        ) {
+            // Build assurances with random-ish bitfields
+            let assurances: Vec<Assurance> = (0..num_assurances)
+                .map(|i| {
+                    let bytes_needed = num_cores.div_ceil(8);
+                    let bitfield = vec![0xFF; bytes_needed]; // all bits set
+                    Assurance {
+                        anchor: Hash::ZERO,
+                        bitfield,
+                        validator_index: i as u16,
+                        signature: Ed25519Signature([0u8; 64]),
+                    }
+                })
+                .collect();
+
+            let counts = count_assurance_bits(&assurances, num_cores);
+            prop_assert_eq!(counts.len(), num_cores);
+        }
+
+        /// Each count is at most the number of assurances.
+        #[test]
+        fn assurance_counts_bounded_by_assurance_count(
+            num_assurances in 0usize..10,
+            num_cores in 1usize..20,
+        ) {
+            let bytes_needed = num_cores.div_ceil(8);
+            let assurances: Vec<Assurance> = (0..num_assurances)
+                .map(|i| Assurance {
+                    anchor: Hash::ZERO,
+                    bitfield: vec![0xFF; bytes_needed],
+                    validator_index: i as u16,
+                    signature: Ed25519Signature([0u8; 64]),
+                })
+                .collect();
+
+            let counts = count_assurance_bits(&assurances, num_cores);
+            for (core, &count) in counts.iter().enumerate() {
+                prop_assert!(
+                    count <= num_assurances as u32,
+                    "core {core}: count {count} > num_assurances {num_assurances}"
+                );
+            }
+        }
+
+        /// With all-zero bitfields, every count is zero.
+        #[test]
+        fn zero_bitfield_yields_zero_counts(
+            num_assurances in 0usize..10,
+            num_cores in 1usize..20,
+        ) {
+            let bytes_needed = num_cores.div_ceil(8);
+            let assurances: Vec<Assurance> = (0..num_assurances)
+                .map(|i| Assurance {
+                    anchor: Hash::ZERO,
+                    bitfield: vec![0x00; bytes_needed],
+                    validator_index: i as u16,
+                    signature: Ed25519Signature([0u8; 64]),
+                })
+                .collect();
+
+            let counts = count_assurance_bits(&assurances, num_cores);
+            for &count in counts.iter() {
+                prop_assert_eq!(count, 0);
+            }
+        }
+
+        // --- collect_and_clear_available ---
+
+        /// Available reports are collected and their slots cleared.
+        /// Returned count never exceeds the number of occupied slots.
+        #[test]
+        fn available_count_bounded_by_occupied(
+            num_slots in 1usize..10,
+            threshold in 0u32..5,
+            current_timeslot in 0u32..1000,
+            timeout in 1u32..100,
+        ) {
+            let occupied = num_slots; // all slots occupied
+            let mut pending: Vec<Option<PendingReport>> = (0..num_slots)
+                .map(|_| {
+                    Some(PendingReport {
+                        report: WorkReport::default(),
+                        timeslot: current_timeslot,
+                    })
+                })
+                .collect();
+
+            // All counts at threshold → all available
+            let counts = vec![threshold; num_slots];
+            let available =
+                collect_and_clear_available(&mut pending, &counts, threshold, current_timeslot, timeout);
+
+            prop_assert!(
+                available.len() <= occupied,
+                "available {} > occupied {occupied}",
+                available.len()
+            );
+        }
+
+        /// After collect_and_clear_available, available slots are set to None.
+        #[test]
+        fn available_slots_cleared(
+            num_slots in 1usize..10,
+            current_timeslot in 100u32..1000,
+            timeout in 1u32..50,
+        ) {
+            let threshold = 1u32;
+            let mut pending: Vec<Option<PendingReport>> = (0..num_slots)
+                .map(|_| {
+                    Some(PendingReport {
+                        report: WorkReport::default(),
+                        timeslot: current_timeslot,
+                    })
+                })
+                .collect();
+
+            // counts all >= threshold → all available → all cleared
+            let counts = vec![threshold; num_slots];
+            let _ = collect_and_clear_available(&mut pending, &counts, threshold, current_timeslot, timeout);
+
+            for (i, slot) in pending.iter().enumerate() {
+                prop_assert!(slot.is_none(), "slot {i} should be cleared after being available");
+            }
+        }
+
+        /// Timed-out slots are cleared even if not available.
+        #[test]
+        fn timed_out_slots_cleared(
+            num_slots in 1usize..10,
+            report_timeslot in 0u32..100,
+            timeout in 1u32..50,
+        ) {
+            let threshold = 100u32; // unreachable threshold
+            let current_timeslot = report_timeslot + timeout; // exactly at timeout
+            let mut pending: Vec<Option<PendingReport>> = (0..num_slots)
+                .map(|_| {
+                    Some(PendingReport {
+                        report: WorkReport::default(),
+                        timeslot: report_timeslot,
+                    })
+                })
+                .collect();
+
+            let counts = vec![0u32; num_slots]; // no assurances → not available
+            let available =
+                collect_and_clear_available(&mut pending, &counts, threshold, current_timeslot, timeout);
+
+            // Not available (threshold not met), but timed out → cleared, not returned
+            prop_assert_eq!(available.len(), 0, "timed-out reports should not be returned as available");
+            for (i, slot) in pending.iter().enumerate() {
+                prop_assert!(slot.is_none(), "slot {i} should be cleared after timeout");
+            }
+        }
+    }
+}

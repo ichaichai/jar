@@ -21,3 +21,4 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-test = { workspace = true }
 grey-transpiler = { workspace = true }
+proptest = { workspace = true }
