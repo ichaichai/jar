@@ -23,11 +23,13 @@ pub fn decode_preimage_info_timeslots(data: &[u8]) -> Vec<Timeslot> {
     }
     let count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
+    // Bound count by remaining bytes: each Timeslot is 4 bytes, so count cannot
+    // exceed (data.len() - pos) / 4. Without this guard, a crafted count prefix
+    // (up to u32::MAX) would trigger a multi-GB Vec::with_capacity allocation.
+    let max_count = (data.len() - pos) / 4;
+    let count = count.min(max_count);
     let mut timeslots = Vec::with_capacity(count);
     for _ in 0..count {
-        if pos + 4 > data.len() {
-            break;
-        }
         let t = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
         pos += 4;
         timeslots.push(t);
@@ -1760,6 +1762,15 @@ mod tests {
         data.extend_from_slice(&42u32.to_le_bytes());
         // Gracefully returns what it can parse
         assert_eq!(decode_preimage_info_timeslots(&data), vec![42]);
+    }
+
+    #[test]
+    fn test_decode_preimage_info_timeslots_huge_count_no_oom() {
+        // Adversarial input: count prefix claims u32::MAX items but no payload.
+        // Without the bounds check, Vec::with_capacity(u32::MAX) attempts a ~16GB
+        // allocation and aborts the process.
+        let data = u32::MAX.to_le_bytes();
+        assert_eq!(decode_preimage_info_timeslots(&data), vec![]);
     }
 
     // --- compute_dependencies ---
