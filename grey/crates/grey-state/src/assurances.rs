@@ -228,3 +228,127 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use grey_types::config::Config;
+    use grey_types::validator::ValidatorKey;
+    use grey_types::{Ed25519Signature, Hash};
+    use proptest::prelude::*;
+
+    fn tiny_config_and_validators() -> (Config, Vec<ValidatorKey>) {
+        let config = Config::tiny();
+        let validators: Vec<ValidatorKey> = (0..config.validators_count)
+            .map(|_| ValidatorKey::default())
+            .collect();
+        (config, validators)
+    }
+
+    proptest! {
+        /// Empty assurances always succeed regardless of state.
+        #[test]
+        fn empty_assurances_always_ok(
+            timeslot in 0u32..1000,
+            parent_hash in prop::array::uniform32(any::<u8>()).prop_map(Hash),
+        ) {
+            let (config, validators) = tiny_config_and_validators();
+            let mut pending = vec![None; config.core_count as usize];
+            let result = process_assurances(
+                &config, &mut pending, &[], timeslot, parent_hash, &validators,
+            );
+            prop_assert!(result.is_ok());
+            prop_assert!(result.unwrap().reported.is_empty());
+        }
+
+        /// Any assurance with validator_index >= validators.len() → BadValidatorIndex.
+        #[test]
+        fn bad_validator_index_rejected(
+            bad_index in 6u16..1000, // V=6 for tiny
+            parent_hash in prop::array::uniform32(any::<u8>()).prop_map(Hash),
+        ) {
+            let (config, validators) = tiny_config_and_validators();
+            let mut pending = vec![None; config.core_count as usize];
+            let a = Assurance {
+                anchor: parent_hash,
+                bitfield: vec![0],
+                validator_index: bad_index,
+                signature: Ed25519Signature([0u8; 64]),
+            };
+            let result = process_assurances(
+                &config, &mut pending, &[a], 1, parent_hash, &validators,
+            );
+            prop_assert!(matches!(result, Err(AssuranceError::BadValidatorIndex)));
+        }
+
+        /// Unsorted validator indices → NotSortedOrUniqueAssurers.
+        #[test]
+        fn unsorted_assurances_rejected(
+            higher in 1u16..6,
+            lower in 0u16..5,
+        ) {
+            prop_assume!(higher > lower);
+            let (config, validators) = tiny_config_and_validators();
+            let mut pending = vec![None; config.core_count as usize];
+            // Place higher index first → unsorted
+            let assurances = vec![
+                Assurance {
+                    anchor: Hash::ZERO,
+                    bitfield: vec![0],
+                    validator_index: higher,
+                    signature: Ed25519Signature([0u8; 64]),
+                },
+                Assurance {
+                    anchor: Hash::ZERO,
+                    bitfield: vec![0],
+                    validator_index: lower,
+                    signature: Ed25519Signature([0u8; 64]),
+                },
+            ];
+            let result = process_assurances(
+                &config, &mut pending, &assurances, 1, Hash::ZERO, &validators,
+            );
+            prop_assert!(matches!(result, Err(AssuranceError::NotSortedOrUniqueAssurers)));
+        }
+
+        /// Duplicate validator indices → NotSortedOrUniqueAssurers.
+        #[test]
+        fn duplicate_assurances_rejected(
+            idx in 0u16..6,
+        ) {
+            let (config, validators) = tiny_config_and_validators();
+            let mut pending = vec![None; config.core_count as usize];
+            let a = Assurance {
+                anchor: Hash::ZERO,
+                bitfield: vec![0],
+                validator_index: idx,
+                signature: Ed25519Signature([0u8; 64]),
+            };
+            let result = process_assurances(
+                &config, &mut pending, &[a.clone(), a], 1, Hash::ZERO, &validators,
+            );
+            prop_assert!(matches!(result, Err(AssuranceError::NotSortedOrUniqueAssurers)));
+        }
+
+        /// Wrong anchor hash → BadAttestationParent (when sorted and valid index).
+        #[test]
+        fn wrong_parent_rejected(
+            parent_hash in prop::array::uniform32(any::<u8>()).prop_map(Hash),
+            wrong_parent in prop::array::uniform32(any::<u8>()).prop_map(Hash),
+        ) {
+            prop_assume!(parent_hash != wrong_parent);
+            let (config, validators) = tiny_config_and_validators();
+            let mut pending = vec![None; config.core_count as usize];
+            let a = Assurance {
+                anchor: wrong_parent,
+                bitfield: vec![0],
+                validator_index: 0,
+                signature: Ed25519Signature([0u8; 64]),
+            };
+            let result = process_assurances(
+                &config, &mut pending, &[a], 1, parent_hash, &validators,
+            );
+            prop_assert!(matches!(result, Err(AssuranceError::BadAttestationParent)));
+        }
+    }
+}
