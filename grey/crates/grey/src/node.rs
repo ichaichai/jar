@@ -20,7 +20,7 @@ use grey_network::service::{
 };
 use grey_store::Store;
 use grey_types::config::Config;
-use grey_types::header::{Assurance, Block};
+use grey_types::header::{Assurance, Block, Guarantee};
 use grey_types::state::State;
 use grey_types::{BandersnatchPublicKey, Hash, Timeslot};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -99,6 +99,45 @@ fn broadcast_last_guarantee(
         let data = guarantor::encode_guarantee(g);
         let _ = net_commands.try_send(NetworkCommand::BroadcastGuarantee { data });
     }
+}
+
+/// Register guarantees from a block for auditing and assurance tracking.
+fn register_block_guarantees(
+    guarantees: &[Guarantee],
+    slot: Timeslot,
+    entropy: &Hash,
+    validator_index: u16,
+    audit_state: &mut AuditState,
+    guarantor_state: &mut GuarantorState,
+) {
+    for guarantee in guarantees {
+        let report_hash = grey_crypto::report_hash(&guarantee.report);
+        let our_tranche = audit::compute_audit_tranche(
+            entropy,
+            &report_hash,
+            validator_index,
+            audit::MAX_TRANCHES,
+        );
+        audit_state.add_pending(
+            report_hash,
+            guarantee.report.clone(),
+            guarantee.report.core_index,
+            slot,
+            Some(our_tranche),
+        );
+        // Mark core as available so we generate assurances
+        guarantor_state
+            .available_cores
+            .insert(guarantee.report.core_index, report_hash);
+    }
+}
+
+/// Collect report hashes from a block's guarantees.
+fn collect_report_hashes(guarantees: &[Guarantee]) -> Vec<Hash> {
+    guarantees
+        .iter()
+        .map(|g| grey_crypto::report_hash(&g.report))
+        .collect()
 }
 
 /// Node configuration.
@@ -799,28 +838,14 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
 
                                 // Register guarantees from this block for auditing
                                 // and mark cores as available for assurance generation
-                                for guarantee in &block.extrinsic.guarantees {
-                                    let report_hash =
-                                        grey_crypto::report_hash(&guarantee.report);
-                                    let our_tranche = audit::compute_audit_tranche(
-                                        &state.entropy[0],
-                                        &report_hash,
-                                        config.validator_index,
-                                        audit::MAX_TRANCHES,
-                                    );
-                                    audit_state.add_pending(
-                                        report_hash,
-                                        guarantee.report.clone(),
-                                        guarantee.report.core_index,
-                                        current_slot,
-                                        Some(our_tranche),
-                                    );
-                                    // Mark core as available so we generate assurances
-                                    guarantor_state.available_cores.insert(
-                                        guarantee.report.core_index,
-                                        report_hash,
-                                    );
-                                }
+                                register_block_guarantees(
+                                    &block.extrinsic.guarantees,
+                                    current_slot,
+                                    &state.entropy[0],
+                                    config.validator_index,
+                                    &mut audit_state,
+                                    &mut guarantor_state,
+                                );
 
                                 // Broadcast block
                                 let block_data = encode_block_message(&block, &header_hash);
@@ -829,12 +854,8 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                 });
 
                                 // Register block in ancestry map and update best block
-                                let authored_report_hashes: Vec<grey_types::Hash> = block
-                                    .extrinsic
-                                    .guarantees
-                                    .iter()
-                                    .map(|g| grey_crypto::report_hash(&g.report))
-                                    .collect();
+                                let authored_report_hashes: Vec<Hash> =
+                                    collect_report_hashes(&block.extrinsic.guarantees);
                                 if let Some(evidence) = grandpa.register_block(
                                     header_hash,
                                     block.header.parent_hash,
@@ -1010,32 +1031,16 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                         &state, protocol, &rpc_state,
                                     );
 
-                                    // Register guarantees from imported block for auditing,
-                                    // mark cores as available for assurance generation,
-                                    // and remove matching guarantees from our pending list
-                                    // (prevents zombie guarantees that block future work).
-                                    for guarantee in &block.extrinsic.guarantees {
-                                        let report_hash =
-                                            grey_crypto::report_hash(&guarantee.report);
-                                        let our_tranche = audit::compute_audit_tranche(
-                                            &state.entropy[0],
-                                            &report_hash,
-                                            config.validator_index,
-                                            audit::MAX_TRANCHES,
-                                        );
-                                        audit_state.add_pending(
-                                            report_hash,
-                                            guarantee.report.clone(),
-                                            guarantee.report.core_index,
-                                            slot,
-                                            Some(our_tranche),
-                                        );
-                                        // Mark core as available so we generate assurances
-                                        guarantor_state.available_cores.insert(
-                                            guarantee.report.core_index,
-                                            report_hash,
-                                        );
-                                    }
+                                    // Register guarantees from imported block for auditing
+                                    // and mark cores as available for assurance generation
+                                    register_block_guarantees(
+                                        &block.extrinsic.guarantees,
+                                        slot,
+                                        &state.entropy[0],
+                                        config.validator_index,
+                                        &mut audit_state,
+                                        &mut guarantor_state,
+                                    );
 
                                     // Clean up pending guarantees that were included in the
                                     // imported block — otherwise they become zombies that
@@ -1067,12 +1072,8 @@ pub async fn run_node(config: NodeConfig) -> Result<(), Box<dyn std::error::Erro
                                     );
 
                                     // Register block in ancestry map and update best block
-                                    let imported_report_hashes: Vec<grey_types::Hash> = block
-                                        .extrinsic
-                                        .guarantees
-                                        .iter()
-                                        .map(|g| grey_crypto::report_hash(&g.report))
-                                        .collect();
+                                    let imported_report_hashes: Vec<Hash> =
+                                        collect_report_hashes(&block.extrinsic.guarantees);
                                     let import_author_key = state
                                         .current_validators
                                         .get(block.header.author_index as usize)
