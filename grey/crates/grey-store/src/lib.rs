@@ -986,6 +986,13 @@ fn decode_state_kvs(data: &[u8]) -> Option<Vec<([u8; 31], Vec<u8>)>> {
     }
     let count = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
     let mut pos = 4;
+    // Bound count by remaining bytes: each entry is at least 35 bytes
+    // (31-byte key + 4-byte length prefix + 0+ byte value). Without this
+    // guard, a corrupted count prefix (up to u32::MAX) would trigger a
+    // multi-GB Vec::with_capacity allocation and abort the process.
+    if count > (data.len() - pos) / 35 {
+        return None;
+    }
     let mut kvs = Vec::with_capacity(count);
     for _ in 0..count {
         if pos + 31 + 4 > data.len() {
@@ -1101,6 +1108,15 @@ mod tests {
         assert_eq!(decoded[0].1, vec![10, 20, 30]);
         assert_eq!(decoded[1].0, [2u8; 31]);
         assert_eq!(decoded[1].1, vec![40, 50]);
+    }
+
+    #[test]
+    fn test_decode_state_kvs_huge_count_no_oom() {
+        // Adversarial input: count prefix claims u32::MAX entries but no payload.
+        // Without the bounds check, Vec::with_capacity(u32::MAX) attempts a
+        // multi-GB allocation and aborts the process.
+        let data = u32::MAX.to_le_bytes();
+        assert!(decode_state_kvs(&data).is_none());
     }
 
     #[test]
