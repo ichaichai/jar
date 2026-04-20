@@ -224,19 +224,15 @@ pub fn audit_work_report(_config: &Config, report: &WorkReport, _ctx: &dyn Refin
 
         // Structural checks we can do without the full work package:
         match &digest.result {
-            WorkResult::Ok(output) => {
+            WorkResult::Ok(output) if output.len() > 1024 * 1024 => {
                 // Verify output size is reasonable
-                if output.len() > 1024 * 1024 {
-                    tracing::warn!("Audit: suspiciously large output ({} bytes)", output.len());
-                    return false;
-                }
+                tracing::warn!("Audit: suspiciously large output ({} bytes)", output.len());
+                return false;
             }
-            WorkResult::OutOfGas => {
+            WorkResult::OutOfGas if digest.gas_used == 0 => {
                 // Gas used should equal gas limit
-                if digest.gas_used == 0 {
-                    tracing::warn!("Audit: OutOfGas but gas_used=0");
-                    return false;
-                }
+                tracing::warn!("Audit: OutOfGas but gas_used=0");
+                return false;
             }
             _ => {}
         }

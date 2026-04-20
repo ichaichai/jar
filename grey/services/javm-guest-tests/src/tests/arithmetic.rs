@@ -51,7 +51,7 @@ pub fn div_u64(input: &[u8], output: &mut [u8]) -> usize {
     let (mut off, mut out) = (0, 0);
     let a = read_u64(input, &mut off);
     let b = read_u64(input, &mut off);
-    let result = if b == 0 { u64::MAX } else { a / b };
+    let result = a.checked_div(b).unwrap_or(u64::MAX);
     write_u64(output, &mut out, result);
     out
 }

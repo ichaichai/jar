@@ -125,17 +125,13 @@ impl Config {
     /// Rotation index for a given timeslot: floor(τ / R).
     pub fn rotation_of(&self, timeslot: u32) -> u32 {
         let r = self.rotation_period();
-        if r > 0 { timeslot / r } else { 0 }
+        timeslot.checked_div(r).unwrap_or(0)
     }
 
     /// Rotation offset within an epoch: floor((τ mod E) / R).
     pub fn rotation_in_epoch(&self, timeslot: u32) -> u32 {
         let r = self.rotation_period();
-        if r > 0 {
-            self.slot_in_epoch(timeslot) / r
-        } else {
-            0
-        }
+        self.slot_in_epoch(timeslot).checked_div(r).unwrap_or(0)
     }
 
     /// G: Number of guarantors per core = floor(V / C).

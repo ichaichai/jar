@@ -32,7 +32,7 @@ fn derive_from_scores(scores: &serde_json::Value) -> Option<Snapshot> {
             Some((s, mu))
         })
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     let ranking: Vec<serde_json::Value> = entries
         .iter()

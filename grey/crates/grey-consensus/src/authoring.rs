@@ -345,7 +345,7 @@ mod tests {
             }
         }
 
-        all_tickets.sort_by(|a, b| a.0.id.0.cmp(&b.0.id.0));
+        all_tickets.sort_by_key(|a| a.0.id.0);
         let epoch_tickets: Vec<Ticket> = all_tickets
             .iter()
             .take(config.epoch_length as usize)

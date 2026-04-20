@@ -440,7 +440,7 @@ pub fn process_reports(
     let reporters: Vec<Ed25519PublicKey> = reporter_set.into_iter().collect();
 
     // Sort reported packages by work_package_hash
-    reported.sort_by(|a, b| a.work_package_hash.0.cmp(&b.work_package_hash.0));
+    reported.sort_by_key(|a| a.work_package_hash.0);
 
     Ok(ReportsOutput {
         reported,

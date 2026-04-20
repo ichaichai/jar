@@ -343,7 +343,7 @@ pub fn merge_tickets(existing: &[Ticket], new_tickets: &[Ticket], max_size: usiz
     let mut all = Vec::with_capacity(existing.len() + new_tickets.len());
     all.extend_from_slice(existing);
     all.extend_from_slice(new_tickets);
-    all.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+    all.sort_by_key(|a| a.id.0);
     all.truncate(max_size);
     all
 }

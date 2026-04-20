@@ -192,7 +192,7 @@ pub fn serialize_state(state: &State, config: &Config) -> Vec<([u8; 31], Vec<u8>
     }
 
     // Sort by key
-    kvs.sort_by(|a, b| a.0.cmp(&b.0));
+    kvs.sort_by_key(|a| a.0);
     kvs
 }
 
@@ -212,7 +212,7 @@ pub fn serialize_state_with_opaque(
             kvs.push((*k, v.clone()));
         }
     }
-    kvs.sort_by(|a, b| a.0.cmp(&b.0));
+    kvs.sort_by_key(|a| a.0);
     kvs
 }
 

@@ -612,7 +612,7 @@ mod tests {
 
         // Sort proofs by their derived ticket IDs
         let mut proofs = vec![(id1, proof1), (id2, proof2)];
-        proofs.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+        proofs.sort_by_key(|a| a.0.0);
         let sorted_proofs: Vec<TicketProof> = proofs.into_iter().map(|(_, p)| p).collect();
 
         let output = apply_safrole(&state, 1, &[0u8; 32], &sorted_proofs).unwrap();
